@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "profiles": {
+    "example": {
+      "scopeTags": ["development"],
+      "maxHints": 20
+    }
+  },
+  "entries": [
+    {
+      "id": "swiftui",
+      "canonical": "SwiftUI",
+      "observedForms": ["스위프트 유아이"],
+      "generatedSpokenHints": ["스위프트유아이"],
+      "priority": 100,
+      "scopeTags": ["development"]
+    },
+    {
+      "id": "websocket",
+      "canonical": "WebSocket",
+      "observedForms": ["웹 소켓"],
+      "generatedSpokenHints": [],
+      "priority": 80,
+      "scopeTags": ["development"]
+    }
+  ]
+}

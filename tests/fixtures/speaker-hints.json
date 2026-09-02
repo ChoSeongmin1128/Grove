@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "speakers": [
+    {
+      "id": "speaker-one",
+      "displayName": "Speaker One",
+      "observedNameHints": ["스피커 원"],
+      "coreMeetingSpeakerCandidate": true
+    }
+  ]
+}

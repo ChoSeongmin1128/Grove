@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <mask id="seed-waveform" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="white"/>
+      <rect x="365" y="581" width="44" height="100" rx="22" fill="black"/>
+      <rect x="430" y="530" width="50" height="204" rx="25" fill="black"/>
+      <rect x="487" y="470" width="50" height="320" rx="25" fill="black"/>
+      <rect x="544" y="530" width="50" height="204" rx="25" fill="black"/>
+      <rect x="615" y="581" width="44" height="100" rx="22" fill="black"/>
+    </mask>
+  </defs>
+  <path fill="#FFF7E8" mask="url(#seed-waveform)" d="M276 444C256 455 243 478 243 504C243 682 357 820 512 902C667 820 781 682 781 504C781 478 768 455 748 444C676 408 592 397 512 397C432 397 348 408 276 444Z"/>
+</svg>

@@ -1,0 +1,14 @@
+{
+  "entries": [
+    {
+      "canonical": "SwiftUI",
+      "observedForms": ["스위프트 유아이"],
+      "priority": 100
+    },
+    {
+      "canonical": "WebSocket",
+      "observedForms": ["웹 소켓"],
+      "priority": 80
+    }
+  ]
+}

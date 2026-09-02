@@ -1,0 +1,44 @@
+# Private and licensed local data
+/test-data/
+/results/
+/config/domain-glossary.v1.json
+/config/speaker-hints.v1.json
+/config/glossary-decoys.v1.json
+/docs/general-product-redesign-plan.md
+/docs/glossary-ab-negative-control-2026-09-02.md
+/docs/glossary-extraction-2026-09-01.md
+/docs/korean-multispeaker-benchmark-2026-09-03.md
+/docs/macos-app-implementation-plan-2026-09-01.md
+/docs/ui-ux-spec-2026-09-02.md
+
+# Audio, video, transcripts, and diarization artifacts
+*.wav
+*.m4a
+*.caf
+*.mp3
+*.mp4
+*.mov
+*.rttm
+*.srt
+*.vtt
+*.jsonl
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.local.json
+
+# Generated build products
+/.build/
+/dist/
+/.swiftpm/
+**/__pycache__/
+*.pyc
+.DS_Store
+xcuserdata/
+*.xcuserstate
