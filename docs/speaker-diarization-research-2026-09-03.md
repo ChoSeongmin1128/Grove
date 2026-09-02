@@ -37,6 +37,60 @@ This is consistent with the general failure mode of segmentation + speaker-embed
 clustering systems on short turns, overlap, and similar voices. It is not enough to tune
 one global distance threshold.
 
+## How these models are normally run on a Mac
+
+### Qwen3-ASR
+
+The official Qwen3-ASR Python examples are CUDA/vLLM-oriented. They load 0.6B or 1.7B
+models with `device_map="cuda:0"`, recommend FlashAttention, and use a separate
+Qwen3-ForcedAligner when timestamps are required. Korean is an explicitly supported
+language, but the official repository does not document a first-class Apple MPS or Core
+ML deployment path.
+
+Source: <https://github.com/QwenLM/Qwen3-ASR>
+
+Mac applications therefore normally choose one of these non-upstream runtime strategies:
+
+1. **MLX/Metal** — third-party Swift or Python conversion of quantized 0.6B/1.7B weights.
+   This uses the Apple GPU and is the most flexible native long-form path.
+2. **Core ML/ANE** — converted audio encoder/decoder models. This can keep the GPU free
+   and reduce power, but export details such as attention masks and input buckets can
+   materially change accuracy.
+3. **Local sidecar** — a separate MLX/Python/CLI process exposes a localhost API while the
+   Swift app owns recording, storage, and UI. This isolates model crashes and lets the app
+   unload a large model after post-processing.
+
+Current native projects include:
+
+- <https://github.com/soniqo/speech-swift> — MLX and Core ML Qwen3-ASR plus forced aligner
+- <https://github.com/FluidInference/FluidAudio> — experimental `Qwen3AsrManager` Core ML path
+
+Qwen3-ASR is transcription, language detection, and optional alignment; it does **not**
+solve speaker diarization. A Grove Qwen path would still need a full-meeting diarizer and
+timestamp reconciliation. Third-party English speed/WER results do not establish Korean
+meeting quality, so Qwen should enter the same private A/B gate as Whisper rather than be
+selected from model-card rankings.
+
+### pyannote
+
+The upstream pyannote Community-1 model card documents CPU execution by default and CUDA
+placement for acceleration. It does not document production MPS support. Open PyTorch
+reports show pyannote MPS failures on recent Apple Silicon combinations, so Grove should
+not base its packaged app on Python MPS behavior.
+
+Source: <https://huggingface.co/pyannote/speaker-diarization-community-1>
+
+Recent MPS failure report: <https://github.com/pytorch/pytorch/issues/181650>
+
+The common Mac production route is to convert the neural segmenter and speaker embedder to
+Core ML, then keep binarization, PLDA/AHC/VBx clustering, and timeline reconstruction in
+Swift/C++. SpeakerKit and FluidAudio follow this pattern. A separate MLX conversion is
+useful for research, but voice embeddings from different backends must not be mixed in one
+identity database unless cross-backend equivalence is measured.
+
+For Grove, upstream Python pyannote should be a slow reference implementation, while a
+native Core ML or end-to-end diarizer is the deployable candidate.
+
 ## Candidate families
 
 ### SpeakerKit / pyannote Community-1 Core ML
@@ -137,9 +191,24 @@ a suitable Grove default. The Swift/MLX integrations are recent, there is no pub
 Korean four-speaker result for Grove's conditions, and a joint generative model makes it
 harder to independently revise ASR text, speaker boundaries, and overlap truth.
 
+`speech-swift` reports an M5 Pro INT5 experiment with 987 MiB of weights, 1,281 MiB peak
+RSS and 15.5× realtime diarization throughput. Its five-file English VoxConverse slice had
+28.05% pooled DER and only 40% speaker-count accuracy, although the one four-speaker file
+scored 6.95% DER. This demonstrates feasibility and high variance, not Korean quality or an
+M4 Pro guarantee.
+
+Benchmark source: <https://github.com/soniqo/speech-swift/blob/main/docs/benchmarks/moss-mlx.md>
+
 Recommendation: test MOSS MLX as an **offline second-pass challenger**, not as the live or
 default production pipeline. Compare its speaker-attributed output to Whisper + a separate
 diarizer on the same manually labeled meetings.
+
+A local build attempt of `soniqo/speech-swift` commit
+`7d8bd294e8657e87e5c76902992692d3999dfb9c` resolved a large Swift dependency graph but
+stalled while downloading its binary `SpeechCore.xcframework` artifact. It was stopped
+after more than five minutes without starting compilation. No MOSS weights were downloaded
+and no M4 Pro inference result was produced. This is integration-friction evidence only,
+not a MOSS performance result.
 
 ## Open-source application findings
 
