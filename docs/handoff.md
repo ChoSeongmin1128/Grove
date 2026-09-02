@@ -62,15 +62,27 @@ is not evidence that the meeting has three speakers. See
 `docs/speaker-diarization-research-2026-09-03.md` for the evaluation plan. Private audio,
 transcripts, RTTM files, names, and raw metrics are excluded from Git.
 
+Additional local challengers were run on the same sample. A 41-turn proxy, based on the
+user-supplied numeric labels and excluding one out-of-range label, ranked FluidAudio
+Sortformer streaming first at 95.12% turn agreement and 98.37% speech-duration agreement.
+It produced four substantive clusters. Official pyannote Community-1 CPU also produced
+four but required 93.32 seconds and about 3.2 GiB process RSS. MOSS produced five clusters
+for the four known people and required 13.21 seconds and about 2.0 GiB process RSS.
+
+These are not DER/JER results: the reference lacks exact ends and overlap labels. Raw
+results and the supplied transcript remain under ignored `results/` only.
+
 ## Proposed next implementation
 
 1. Add versioned `sourceChannel`, `speakerClusterID`, and optional `speakerProfileID`.
 2. Persist raw overlapping diarization and derive an exclusive display track.
 3. Add segment/range/cluster speaker reassignment, merge, and undo.
 4. Add transcript copy and TXT/Markdown export.
-5. A/B FluidAudio offline, FluidAudio Sortformer, pyannote Community-1, and MOSS on
-   manually labeled Korean meetings before selecting a default.
-6. Keep large experimental models behind an internal engine protocol until quality,
+5. Prototype FluidAudio Sortformer streaming behind the engine protocol, but keep it
+   disabled by default until exact DER/JER is measured on manually labeled Korean meetings.
+6. Keep the faster Sortformer fused-offline mode, pyannote Community-1 CPU, and MOSS as
+   challengers; none is interchangeable with the streaming result.
+7. Keep large experimental models behind an internal engine protocol until quality,
    memory, packaging, and license gates pass.
 
 ## Migration constraints

@@ -37,6 +37,57 @@ This is consistent with the general failure mode of segmentation + speaker-embed
 clustering systems on short turns, overlap, and similar voices. It is not enough to tune
 one global distance threshold.
 
+## Local challenger results
+
+The same 180-second sample was then tested with the known count of four. The user supplied
+rough per-turn numeric speaker labels, but one of 42 turns has label `5`, and the reference
+has no precise end times or overlap annotation. That turn was excluded. Candidate labels
+were optimally mapped to labels 1 through 4 over the remaining 41 turns. These are
+**turn-level diagnostic agreement scores, not DER/JER**. MOSS output bounds were used only
+to align the supplied turns.
+
+| Candidate | Substantive clusters | Warm wall | Process peak RSS | Turn agreement | Speech-duration agreement |
+|---|---:|---:|---:|---:|---:|
+| SpeakerKit fixed four, exclusive | 3 | about 0.58 s | about 494 MiB | 80.49% | 88.11% |
+| FluidAudio Sortformer streaming | 4 | 9.36 s | 132 MiB | **95.12%** | **98.37%** |
+| FluidAudio Sortformer fused offline | 4 | **0.64 s** | **99 MiB** | 82.93% | 76.58% |
+| pyannote Community-1 CPU, exclusive | 4 | 93.32 s | 3,283 MiB | 92.68% | 97.18% |
+| MOSS joint transcript/diarization | 5 | 13.21 s | 2,081 MiB | 92.68%* | 93.76%* |
+
+`*` MOSS's score uses a many-to-one mapping in which two predicted clusters may represent
+the same person. With one-to-one cluster mapping, its turn agreement is 87.80%. It split
+one real person into two clusters and confused the similar male pair on three early turns.
+
+Sortformer streaming was the strongest candidate on this diagnostic. Its two disagreement
+turns were 1.24 seconds and 0.68 seconds. The much faster fused-offline Sortformer did not
+produce the same partition and split a long turn from one of the similar voices, so the two
+modes must not be treated as quality-equivalent.
+
+Official Python pyannote recovered four substantive speakers, while the SpeakerKit Core ML
+path did not. That points to a conversion, implementation, or pipeline-tuning difference,
+not an inherent inability of Community-1 to separate the pair. Its CPU cost is too high for
+the default application path but it remains a useful reference implementation.
+
+The process RSS values come from sampled process trees and do not fully attribute unified
+GPU or ANE memory. They are useful for this machine and execution path, not universal model
+memory requirements. Private text, labels, RTTM, and raw resource traces remain ignored.
+
+Transcription candidates were also measured. The supplied rough text closely matches the
+MOSS output, so normalized edit rates below are draft agreement, not independent CER.
+
+| Candidate | Warm wall or measured processing | Process peak RSS | Draft edit rate |
+|---|---:|---:|---:|
+| Apple SpeechTranscriber | 0.94 s processing | 19.6 MiB | 17.42% |
+| Whisper large-v3 | 11.92 s wall | 168.8 MiB | 15.56% |
+| Qwen3-ASR 0.6B 8-bit MLX | 5.08 s wall | 1,227 MiB | 12.50% |
+| Qwen3-ASR 1.7B 8-bit MLX | 10.45 s wall | 2,590 MiB | 12.37% |
+| MOSS joint transcript/diarization | 13.21 s wall | 2,081 MiB | 2.53%* |
+
+`*` MOSS draft agreement is circular and must not be presented as model accuracy. Qwen
+1.7B used more than twice the process RSS and about twice the wall time of 0.6B for only a
+0.13 percentage-point draft difference. The current sample therefore gives no deployment
+reason to prefer Qwen 1.7B over 0.6B.
+
 ## How these models are normally run on a Mac
 
 ### Qwen3-ASR
@@ -203,6 +254,12 @@ Recommendation: test MOSS MLX as an **offline second-pass challenger**, not as t
 default production pipeline. Compare its speaker-attributed output to Whisper + a separate
 diarizer on the same manually labeled meetings.
 
+The local MLX run completed successfully after adding the `jinja2` package missing from the
+test environment. Warm processing of the 180-second clip took 13.21 seconds with a sampled
+2,081 MiB process peak. It generated five clusters for the known four speakers. The output
+was byte-identical across two warm/cached executions. This establishes Mac feasibility but
+also confirms the over-segmentation risk on the target Korean sample.
+
 A local build attempt of `soniqo/speech-swift` commit
 `7d8bd294e8657e87e5c76902992692d3999dfb9c` resolved a large Swift dependency graph but
 stalled while downloading its binary `SpeechCore.xcframework` artifact. It was stopped
@@ -252,15 +309,19 @@ anonymous clusters.
 
 Short term:
 
-1. Keep Whisper large-v3 as the quality transcript baseline and Apple Speech as the fast
-   preview path.
-2. Replace the current three-speaker interpretation with four known anonymous people in
-   the private reference annotation.
-3. Test FluidAudio Sortformer first, official pyannote Community-1 second, and MOSS MLX as
-   an offline joint-model challenger.
-4. Do not rely on a fixed cluster count alone. The current test demonstrates that an
+1. Keep Apple Speech as the fast preview baseline. Keep Whisper large-v3, Qwen3-ASR 0.6B,
+   and MOSS in the offline transcript evaluation until an independent corrected transcript
+   exists; the current rough transcript closely follows MOSS output and cannot rank MOSS
+   without circularity.
+2. Use FluidAudio Sortformer streaming as the leading native diarization candidate. Do not
+   substitute the faster fused-offline mode without a broader accuracy gate.
+3. Keep official pyannote Community-1 CPU as a slow reference and MOSS MLX as an offline
+   joint-model challenger, not the packaged default.
+4. Resolve the one out-of-range reference label and add exact ends and overlaps before
+   reporting DER, JER, or speaker-attributed CER.
+5. Do not rely on a fixed cluster count alone. The current test demonstrates that an
    artifact cluster can consume the requested fourth slot.
-5. Ship manual correction before claiming reliable automatic speaker identity.
+6. Ship manual correction before claiming reliable automatic speaker identity.
 
 Product data model:
 
