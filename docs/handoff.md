@@ -1,108 +1,89 @@
 # Grove handoff
 
-Updated: 2026-09-03
-
 AI-assisted working document. Current user instructions, live state, source and tests
-take precedence. Personal meeting data and its derived evaluation measurements are
-excluded from public documentation; retain those only under ignored `results/`.
+take precedence. This public handoff describes code, not a user's installed app,
+machine, recordings or evaluation results. Machine-local installation receipts and
+detailed validation logs remain in ignored `results/`.
 
-## Current build
+## Current source
 
-Local-beta.9, version0.3.0, build11 is installed at `/Applications/Grove.app`.
-It is a personal local beta, not a notarized release or a standalone model installer.
-The previous bundle is recoverable in Trash. There is no intermediate app in `dist`.
+The source targets version0.3.0 / local-beta.10. This is a personal local beta, not a
+notarized release or a standalone model installer. Consult `App/Info.plist` for the
+build identifier and local receipts for actual installation state.
 
-Beta.9 adds only thin horizontal transcript separators: lighter between continuous
-same-speaker turns, with no extra spacing or interaction target. First visible rows
-remain unruled. Normal light/dark, large-body and review-filter synthetic renders were
-inspected; system increased-contrast behavior is implemented but not manually toggled.
-Model routing, transcription data, speaker review and schema are unchanged.
-
-## Product behavior
-
-- General-purpose local microphone recording, pause/resume and file import. System
-  audio capture is removed; older dual-channel recordings retain read-only compatibility.
-- MOSS transcription runs after recording/import. The approved beta routing is Ultra8
-  for unknown count or1–8 people and Community-1 for9+. Sortformer4 remains selectable.
-  Ultra8/Sortformer count input is advisory; Community-1 offers exact-count processing.
+- Basic transcript and accessibility time labels show whole seconds. Stored playback
+  and split boundaries retain fractional precision. Metadata column widths are
+  unchanged; a narrower gutter was discussed but is not implemented.
+- Thin horizontal separators are lighter between continuous same-speaker turns.
+  The first visible row remains unruled; lines add no height or interaction targets.
+- General-purpose microphone recording, pause/resume and file import are supported.
+  System-output capture is removed; older dual-channel files remain read-compatible.
+- MOSS transcription runs after recording/import. Approved routing is Ultra8 for
+  unknown count or1–8 people and Community-1 for9+. Sortformer4 remains selectable.
+  Ultra8/Sortformer counts are advisory; Community-1 offers exact-count processing.
 - Per-recording options are local drafts; persistent defaults live in Settings.
 - Recording names are editable. **원본 파일…** provides path access, Finder reveal and
-  bounded, byte-preserving export with source/destination protection and cancellation.
-- Transcript rows put speaker/start–end time on the left, body on the right. Repeated
-  turns get tighter spacing without merging utterances. Pretendard and text scaling remain.
-- Folders and 미분류 share one sidebar section. 모든 녹음 is an aggregate; recent recordings
-  are shortcuts independent of location. Drag/drop uses per-store typed IDs and updates
-  only folder metadata after successful save. Menus, counts and title search remain available.
-- Speaker/text editing, split, undo/redo, history and TXT/Markdown copy/export are implemented.
-  Saved names can be manually reused within a folder; automatic voice matching is not shipped.
-- Processing completion, pending speaker issues, count mismatch and failed/cancelled work
-  are separate. Existing transcripts are retained on retry failure and labelled accordingly.
-- Speaker acknowledgement is explicit, per-utterance and content-bound. Bulk reassignment
-  never acknowledges hidden warnings. The single-edit checkbox can atomically save a
-  corrected assignment and its acknowledgement. This is not dataset approval.
+  byte-preserving export with source/destination protection and cancellation.
+- Rows place speaker/start–end time left and text right. Pretendard and body scaling
+  remain. Each utterance is independently editable; continuation never merges text.
+- Folders and 미분류 share one section. 모든 녹음 is an aggregate; recent recordings are
+  shortcuts. Drag/drop uses typed IDs and publishes changes only after successful save.
+- Speaker/text editing, split, undo/redo, history and TXT/Markdown copy/export exist.
+  Names can be manually reused within a folder; automatic voice matching is not shipped.
+- Completion, speaker issues, count mismatch and failure/cancellation are separate.
+  Failed retranscription retains and labels the prior transcript.
 
 ## Data and compatibility
 
-- Preserve original audio, raw model outputs, source-channel/cluster identity and corrections.
-- Schema5 adds optional assignment measurements and explicit speaker-confirmation history.
-  Schema3/4 documents and old split/undo history remain readable, with no startup rewrite.
-  After saving schema5 corrections, an old beta cannot safely read the new history.
-- Confirmation binds utterance text, speaker ID, time/source, model generation and rule
-  version. Relevant edits make only that evidence stale; display-name/title edits do not.
-- Machine flags are not altered. The separate UI triage policy is heuristic, not a calibrated
-  confidence score. A tiny secondary-speaker interval alone is not a review warning.
-- Full audio-hash/correction-head/snapshot identities, complete text/activity/coverage
-  verification, UEM/RTTM datasets and training approval are still planned, not implemented.
+- Preserve original audio, raw outputs, source-channel/cluster identity and corrections.
+- Schema5 adds assignment measurements and explicit speaker-confirmation history.
+  Schema3/4 and old split/undo history remain readable, with no startup rewrite. After
+  saving schema5 corrections, older betas cannot safely read the new history.
+- Acknowledgement binds text, speaker ID, times/source, generation and rule version.
+  Relevant edits invalidate only related evidence; title/display-name edits do not.
+  Bulk reassignment never acknowledges hidden issues. This is not dataset approval.
+- Raw flags remain unchanged. UI triage is heuristic, not a calibrated confidence score.
+- Full audio-hash/correction-head/snapshot identities, activity/coverage verification,
+  UEM/RTTM datasets and training approval remain planned, not implemented.
 
-## Validation and installation
+## Validation and release work
 
-- Default Swift:163 passed and5 opt-in skipped (runner168). Python:7 passed.
-- Tests cover typed folder payloads, atomic moves, state/count separation, first/repeated
-  result publication failure, confirmation scope/invalidation, schema compatibility and undo.
-- Beta.9 reran the default suites and synthetic offscreen native layout checks.
-  Beta.8 previously exercised existing-file read compatibility and packaged native
-  import/edit/reopen; those unchanged inference paths were not rerun for separators alone.
-  Personal-input results/timing and snapshots remain in ignored local evidence only.
-- Release packaging and strict deep code-signature verification passed. Installed main SHA256:
-  `7a1bae50a9e255f526597fd3e9e848366c56a2bce9277b954fc1fb22e01a5f8f`.
-- The idle prior app was normally quit before replacement. The new app's executable path was
-  verified; existing library bytes were unchanged across installation and read-only UI QA.
-- Beta.9 installed UI confirmed separators and preserved row controls. Prior beta.8
-  installed UI checks covered transcript columns/ranges, folder structure, issue filtering,
-  reasons and the explicit confirmation checkbox. Dialogs were cancelled; no user recording,
-  speaker assignment or folder was changed. The full transcript was restored with playback off.
-- Real pointer drag/drop, VoiceOver, full IME/export and microphone hardware edge cases
-  remain separate QA gates. Unit tests do not prove those interactions or model accuracy.
+Run the commands in `AGENTS.md` before publishing code or replacing an application.
+Use the opt-in synthetic layout check for transcript changes, and inspect the actual
+installed window when authorized. Keep code-test results separate from model quality.
 
-## Publication and next work
+Tests cover formatting, exact split boundaries, typed folder moves, publication/storage
+failure, explicit confirmation, schema compatibility and undo. Hardware interruption,
+pointer drag/drop, VoiceOver and full IME/export checks remain independent QA gates;
+unit tests are not evidence that those workflows were manually tested.
 
-- Offline-only speaker-logic research harnesses now separate unchanged-text alignment,
-  word assignment and frozen-posterior postprocessing. They write independent sidecars;
-  neither production projection-v1 nor stored documents are changed. See
-  [experiment contracts](speaker-logic-experiments.md). Private runs and full-text
-  inspection remain under ignored `results/`, not public documentation.
-- Regenerable build/Python caches and an obsolete research executable were moved to
-  a dedicated recoverable Trash location after checking active references. App assets,
-  evaluation inputs, raw evidence, source and locks were preserved. Rebuilding now
-  recreates the app build cache; no new app bundle was packaged or installed.
-- Temporary alignment weights, interpreter environment and download caches were also
-  removed from the working project after the experiments; pinned reproduction metadata
-  and raw outputs remain private. Re-run inference only after recreating those inputs.
-- Offline validation:43 Python suite checks plus13 alignment-contract checks passed.
-  The scientific evaluator suite ran in its qualified environment, not as skipped
-  checks. Swift/app packaging and UI smoke were not rerun for research-only tooling.
-- Public commits/pushes use the personal account, then restore the active GitHub CLI
-  account to `nathan-glorang`, as specified in `AGENTS.md`.
-- Personal audio, references, labels, model outputs, raw or aggregate private evaluation
-  results, screenshots, local paths and caches are not publication artifacts.
-- The new review layer is speaker-issue triage only. Read the separate annotation plan
-  before extending it into training/evaluation data production.
-- Fresh installations still require qualified native helpers and local model weights.
-  Do not claim first-run download/packaging or untested hardware support is complete.
-- For a future app replacement, check for active recording, inference, export or user
-  editing first; preserve current state and do not restore an old library over newer data.
+Before replacing an app, confirm permission and check for active recording, inference,
+export or editing. Preserve data, keep a recoverable prior bundle, verify signing and
+confirm the new process. Never restore an old library over newer data. Do not leave
+duplicate generated apps in Downloads or Applications.
+
+Qualified native helpers and local model weights remain prerequisites for a fresh
+installation. Do not claim first-run model download or untested hardware support.
+Research environments and build caches are regenerable; preserve source, locks,
+licenses and private evidence before scoped cleanup.
+
+## Research boundaries and next work
+
+- [Automatic speaker identification](automatic-speaker-identification.md) is a researched
+  proposal only: explicit voice enrollment, folder-scoped matching, unknown-person
+  rejection and protected voice storage. Names-only manual reuse remains shipped.
+- [Offline speaker-logic experiments](speaker-logic-experiments.md) separate unchanged-text
+  alignment, word assignment and frozen-posterior postprocessing. They create research
+  sidecars, not app documents; production projection-v1 and human edits remain unchanged.
+- [Annotation plans](review-mode-spec.md) are separate from speaker-issue triage. Read
+  their data contracts before implementing training/evaluation dataset production.
+- Public Git contains code, synthetic tests and generic documentation only. Private
+  audio, references, labels, voice features, measurements, qualitative diagnoses,
+  screenshots, local paths and installation receipts remain ignored.
+- Commit/push with the personal account and restore the active GitHub CLI account
+  to `nathan-glorang`, as required by `AGENTS.md`.
 
 See [transcript/library UX](transcript-library-ux.md), [file management](recording-file-management.md),
-[release readiness](release-readiness.md), [annotation plan](review-mode-spec.md) and
-[artifact retention](artifact-retention.md). Detailed prior handoffs remain local under
-ignored `results/publication-private-notes/`.
+[release readiness](release-readiness.md), [saved speakers](microphone-folders-and-speaker-reuse.md)
+and [artifact retention](artifact-retention.md). Historical private notes and local
+installation details remain under ignored `results/`.

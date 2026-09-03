@@ -201,7 +201,7 @@ struct TranscriptView: View {
 
     private func transcript(_ document: TranscriptDocument) -> some View {
         let rows = visibleRows
-        let metadataWidth: CGFloat = rows.contains { $0.utterance.endTime >= 3599.995 } ? 168 : 140
+        let metadataWidth: CGFloat = rows.contains { $0.utterance.endTime >= 3600 } ? 168 : 140
         return ScrollViewReader { proxy in
             ScrollView {
                 if reviewOnly && document.speakerReviewCount == 0 {

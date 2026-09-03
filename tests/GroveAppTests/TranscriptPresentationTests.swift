@@ -59,13 +59,27 @@ struct TranscriptPresentationTests {
         #expect(reviewRows.allSatisfy { !$0.continuesPrevious })
     }
 
-    @Test func timeRangeShowsShortTurnsAndHourBoundaries() {
-        #expect(TranscriptPresentation.timeRange(utterance(22.24, 22.64, a.id)) == "00:22.24 – 00:22.64")
-        #expect(TranscriptPresentation.timestamp(0.08) == "00:00.08")
-        #expect(TranscriptPresentation.timestamp(59.999) == "01:00.00")
-        #expect(TranscriptPresentation.timestamp(3599.999) == "01:00:00.00")
-        #expect(TranscriptPresentation.timestamp(3661.25) == "01:01:01.25")
+    @Test func basicTimeRangeUsesWholeSecondsWithoutRoundingIntoTheNextSecond() {
+        #expect(TranscriptPresentation.timeRange(utterance(12.34, 18.76, a.id)) == "00:12 – 00:18")
+        #expect(TranscriptPresentation.timeRange(utterance(22.24, 22.64, a.id)) == "00:22 – 00:22")
+        #expect(TranscriptPresentation.timestamp(0.08) == "00:00")
+        #expect(TranscriptPresentation.timestamp(59.999) == "00:59")
+        #expect(TranscriptPresentation.timestamp(60) == "01:00")
+        #expect(TranscriptPresentation.timestamp(3599.999) == "59:59")
+        #expect(TranscriptPresentation.timestamp(3600) == "01:00:00")
+        #expect(TranscriptPresentation.timestamp(3661.25) == "01:01:01")
         #expect(TranscriptRenderer.timestamp(22.24) == "00:22")
+    }
+
+    @Test func displayFormattingDoesNotChangeStoredPlaybackOrSplitBoundaries() throws {
+        let original = utterance(12.34, 18.76, a.id)
+        var document = try TranscriptDocument(speakers: [a], utterances: [original])
+        _ = TranscriptPresentation.timeRange(original)
+        #expect(document.utterances.first?.startTime == 12.34)
+        #expect(document.utterances.first?.endTime == 18.76)
+        try document.splitUtterance(original.id, at: 14.125, firstText: "앞", secondText: "뒤")
+        #expect(document.utterances.first?.endTime == 14.125)
+        #expect(document.utterances.last?.startTime == 14.125)
     }
 
     @Test func invalidTimestampsNeverLookLikeTheStartOfARecording() {

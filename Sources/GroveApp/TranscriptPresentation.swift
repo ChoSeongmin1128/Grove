@@ -37,16 +37,14 @@ enum TranscriptPresentation {
         return gap >= 0 && gap <= 2
     }
 
-    // UI-only precision; stored boundaries and export formatting are unchanged.
+    // Basic UI uses whole seconds, like playback/export. Stored boundaries stay precise.
     static func timestamp(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max / 100) else { return "—" }
-        let hundredths = Int((seconds * 100).rounded())
-        let whole = hundredths / 100
-        let fraction = hundredths % 100
+        guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max) else { return "—" }
+        let whole = Int(seconds)
         if whole >= 3600 {
-            return String(format: "%02d:%02d:%02d.%02d", whole / 3600, whole / 60 % 60, whole % 60, fraction)
+            return String(format: "%02ld:%02ld:%02ld", whole / 3600, whole / 60 % 60, whole % 60)
         }
-        return String(format: "%02d:%02d.%02d", whole / 60, whole % 60, fraction)
+        return String(format: "%02ld:%02ld", whole / 60, whole % 60)
     }
 
     static func timeRange(_ utterance: DocumentUtterance) -> String {

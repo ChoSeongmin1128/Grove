@@ -18,8 +18,9 @@ take precedence. Installation/test evidence is recorded in `handoff.md`.
 - Only adjacent, same-ID/same-source, non-overlapping turns with a gap of at most
   two seconds get reduced spacing/emphasis. Unknown speakers, long silences,
   overlaps and intervening filtered-out turns break this visual continuation.
-- Time ranges use hundredths and support hour boundaries. This is display precision,
-  not a claim that model boundaries are accurate to 10 ms. Stored times and existing
+- Basic UI time ranges use whole seconds, truncated consistently with playback, and
+  include hours when needed. Sub-second turns can show the same displayed start/end;
+  their exact stored boundaries, playback and split input retain fractional seconds.
   TXT/Markdown timestamp conventions remain unchanged.
 - Clicking the range plays that utterance with the existing surrounding context.
   Text stays selectable; reading/selecting text does not start playback.
