@@ -6,6 +6,8 @@ struct TranscriptView: View {
     let meeting: MeetingRecord
     @Binding var reviewOnly: Bool
     @Binding var showsSpeakers: Bool
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @StateObject private var player = AudioPlayerController()
     @State private var query = ""
     @State private var speakerFilter = "all"
@@ -218,6 +220,17 @@ struct TranscriptView: View {
                         ForEach(rows) { row in
                             utteranceRow(row, document: document, metadataWidth: metadataWidth)
                                 .padding(.top, row.id == rows.first?.id || row.continuesPrevious ? 0 : 8)
+                                .overlay(alignment: .top) {
+                                    if row.id != rows.first?.id {
+                                        Rectangle()
+                                            .fill(GroveTheme.ink.opacity(separatorOpacity(for: row)))
+                                            .frame(height: 1 / max(1, displayScale))
+                                            .padding(.horizontal, 10)
+                                            .offset(y: row.continuesPrevious ? 0 : 4)
+                                            .allowsHitTesting(false)
+                                            .accessibilityHidden(true)
+                                    }
+                                }
                                 .id(row.id)
                         }
                     }
@@ -230,6 +243,11 @@ struct TranscriptView: View {
                 if let id = rows.first?.id { proxy.scrollTo(id, anchor: .top) }
             }
         }
+    }
+
+    private func separatorOpacity(for row: TranscriptDisplayRow) -> Double {
+        if colorSchemeContrast == .increased { return row.continuesPrevious ? 0.18 : 0.28 }
+        return row.continuesPrevious ? 0.07 : 0.14
     }
 
     private func utteranceRow(_ row: TranscriptDisplayRow, document: TranscriptDocument, metadataWidth: CGFloat) -> some View {

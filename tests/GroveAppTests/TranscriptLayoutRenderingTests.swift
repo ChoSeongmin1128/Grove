@@ -39,10 +39,15 @@ struct TranscriptLayoutRenderingTests {
             ])
         try store.acceptInferenceResult(result, meetingID: meeting.id, sourceChannelID: "recording")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for (name, width, scale, reviewing) in [("compact", 780.0, 1.0, false), ("large-type", 600.0, 2.0, false), ("review", 780.0, 1.0, true)] {
+        for (name, width, scale, reviewing, scheme) in [
+            ("compact", 780.0, 1.0, false, ColorScheme.dark),
+            ("large-type", 600.0, 2.0, false, .dark),
+            ("review", 780.0, 1.0, true, .dark),
+            ("light", 780.0, 1.0, false, .light)
+        ] {
             defaults.set(scale, forKey: "transcriptTextScale")
             let view = TranscriptView(store: store, meeting: meeting, reviewOnly: .constant(reviewing), showsSpeakers: .constant(false))
-                .defaultAppStorage(defaults).environment(\.colorScheme, .dark)
+                .defaultAppStorage(defaults).environment(\.colorScheme, scheme)
                 .frame(width: width, height: 740)
             let host = NSHostingView(rootView: view)
             let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: width, height: 740),
@@ -55,7 +60,7 @@ struct TranscriptLayoutRenderingTests {
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
-            try png.write(to: output.appendingPathComponent("beta8-synthetic-\(name).png"), options: .atomic)
+            try png.write(to: output.appendingPathComponent("transcript-\(name).png"), options: .atomic)
             #expect(bitmap.pixelsWide >= Int(width))
             window.contentView = nil
         }

@@ -11,6 +11,10 @@ take precedence. Installation/test evidence is recorded in `handoff.md`.
   replace the repeated heading/body block and its large bottom padding.
 - Every utterance retains its own visible speaker button, identity, text, timing,
   selection and editing actions. There is no automatic text/segment merge.
+- Thin horizontal separators connect each row's metadata and text visually. The first
+  visible row has no top separator; continuous same-speaker rows use a lighter line.
+  Lines are noninteractive overlays, so they add no row height and do not intercept
+  selection/clicks or add accessibility elements. System increased contrast is respected.
 - Only adjacent, same-ID/same-source, non-overlapping turns with a gap of at most
   two seconds get reduced spacing/emphasis. Unknown speakers, long silences,
   overlaps and intervening filtered-out turns break this visual continuation.

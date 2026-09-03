@@ -8,9 +8,15 @@ excluded from public documentation; retain those only under ignored `results/`.
 
 ## Current build
 
-Local-beta.8, version0.3.0, build10 is installed at `/Applications/Grove.app`.
+Local-beta.9, version0.3.0, build11 is installed at `/Applications/Grove.app`.
 It is a personal local beta, not a notarized release or a standalone model installer.
 The previous bundle is recoverable in Trash. There is no intermediate app in `dist`.
+
+Beta.9 adds only thin horizontal transcript separators: lighter between continuous
+same-speaker turns, with no extra spacing or interaction target. First visible rows
+remain unruled. Normal light/dark, large-body and review-filter synthetic renders were
+inspected; system increased-contrast behavior is implemented but not manually toggled.
+Model routing, transcription data, speaker review and schema are unchanged.
 
 ## Product behavior
 
@@ -53,14 +59,16 @@ The previous bundle is recoverable in Trash. There is no intermediate app in `di
 - Default Swift:163 passed and5 opt-in skipped (runner168). Python:7 passed.
 - Tests cover typed folder payloads, atomic moves, state/count separation, first/repeated
   result publication failure, confirmation scope/invalidation, schema compatibility and undo.
-- Separate opt-in checks exercised existing-file read compatibility, synthetic offscreen
-  native layouts at compact/large text sizes and packaged native import/edit/reopen.
+- Beta.9 reran the default suites and synthetic offscreen native layout checks.
+  Beta.8 previously exercised existing-file read compatibility and packaged native
+  import/edit/reopen; those unchanged inference paths were not rerun for separators alone.
   Personal-input results/timing and snapshots remain in ignored local evidence only.
 - Release packaging and strict deep code-signature verification passed. Installed main SHA256:
-  `503c29ab20692d098f722a40e0bf5524e037dc57d09b82f2fe12f0d26dd6f2d0`.
-- The prior app had exited before replacement. The new app's actual executable path was
+  `7a1bae50a9e255f526597fd3e9e848366c56a2bce9277b954fc1fb22e01a5f8f`.
+- The idle prior app was normally quit before replacement. The new app's executable path was
   verified; existing library bytes were unchanged across installation and read-only UI QA.
-- Installed UI checks covered transcript columns/ranges, folder structure, issue filtering,
+- Beta.9 installed UI confirmed separators and preserved row controls. Prior beta.8
+  installed UI checks covered transcript columns/ranges, folder structure, issue filtering,
   reasons and the explicit confirmation checkbox. Dialogs were cancelled; no user recording,
   speaker assignment or folder was changed. The full transcript was restored with playback off.
 - Real pointer drag/drop, VoiceOver, full IME/export and microphone hardware edge cases

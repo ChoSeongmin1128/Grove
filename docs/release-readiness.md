@@ -5,7 +5,7 @@ Private meeting-derived results are kept outside public documentation.
 
 ## Installed beta
 
-Version0.3.0 / local-beta.8, build10 is installed at `/Applications/Grove.app`.
+Version0.3.0 / local-beta.9, build11 is installed at `/Applications/Grove.app`.
 The prior app is recoverable in Trash, and `dist/Grove.app` is absent.
 Release packaging, strict deep signature and the actual executable location were checked.
 Existing library bytes were preserved through replacement and read-only UI inspection.
@@ -18,7 +18,7 @@ Existing library bytes were preserved through replacement and read-only UI inspe
 | Ultra8 / Community-1 / Sortformer4 | Approved beta routing and explicit engine choices; capacity is not quality evidence |
 | Recording titles and original files | Rename, path access and protected original export implemented |
 | Folder organization | CRUD, counts, title search, per-store typed drag/drop and menu alternative implemented |
-| Compact transcript | Left speaker/start–end metadata and right body; individual utterances remain editable |
+| Compact transcript | Left metadata/right body, subtle horizontal row separators; spacing and individual editing preserved |
 | Speaker/text correction | Scope selection, split, undo/redo and TXT/Markdown copy/export implemented |
 | Saved speakers | Explicit folder-scoped name reuse; no automatic voice identity matching |
 | Processing vs review | Completion, counts, failure/cancellation, retained result and issue queue separated |
@@ -29,11 +29,16 @@ Existing library bytes were preserved through replacement and read-only UI inspe
 ## Checks performed
 
 - Swift default run:163 passed,5 opt-in skipped (runner168). Python7 passed.
-- Separate opt-in checks exercised existing-document/history/raw-result read compatibility,
-  packaged native import/edit/reopen and synthetic offscreen native layouts.
+- Beta.9 separator-only changes were inspected in synthetic light/dark, large-body and
+  review-filter native renders. No model/data behavior changed. Increased-contrast and
+  non-Retina environments were not manually exercised.
+- Earlier beta.8 opt-in checks exercised existing-document/history/raw-result read
+  compatibility and packaged native import/edit/reopen. Beta.9 reran synthetic native
+  layouts but did not rerun unchanged model inference for a separator-only change.
 - Fault injection covers first/repeated processing index publication failure, source/raw
   preservation, prior correction retention and folder/confirmation save failure.
-- Installed UI verified transcript columns/ranges, folder hierarchy, pending-only reasons
+- Beta.9 installed UI verified separators and row controls. Prior beta.8 verified
+  transcript columns/ranges, folder hierarchy, pending-only reasons
   and explicit acknowledgement controls. Dialogs were cancelled rather than changing user data.
 - Fine-grained model outputs, metrics, timings and real-data screenshots remain in ignored
   local evidence and are not public release attachments.

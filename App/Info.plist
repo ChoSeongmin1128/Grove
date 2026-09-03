@@ -21,9 +21,9 @@
     <key>CFBundleShortVersionString</key>
 	<string>0.3.0</string>
     <key>GroveReleaseChannel</key>
-    <string>local-beta.8</string>
+    <string>local-beta.9</string>
     <key>CFBundleVersion</key>
-	<string>10</string>
+	<string>11</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>
