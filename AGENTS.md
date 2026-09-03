@@ -85,8 +85,8 @@ codesign --verify --deep --strict dist/Grove.app
 ## Document index
 
 - [`docs/automatic-speaker-identification.md`](docs/automatic-speaker-identification.md):
-  researched cross-meeting voice identity proposal, separate from diarization, with
-  explicit enrollment, folder scope and privacy/validation gates; not shipped.
+  implemented, release-gated voice identity foundation: explicit enrollment, encrypted
+  registry, cleanup, folder scope and proposal confirmation; product activation blocked.
 - [`docs/speaker-logic-experiments.md`](docs/speaker-logic-experiments.md): offline-only
   alignment/projection and limited-postprocessing ablations, identity checks, separate
   text/activity metrics and no production integration.

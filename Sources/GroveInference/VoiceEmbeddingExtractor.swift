@@ -41,25 +41,57 @@ public struct SpeakerVoicePrint: Codable, Hashable, Sendable {
     }
 }
 
+public struct VoiceEmbeddingSample: Codable, Equatable, Sendable {
+    public let range: VoiceSampleRange
+    public let voicePrint: SpeakerVoicePrint
+
+    public init(range: VoiceSampleRange, voicePrint: SpeakerVoicePrint) {
+        self.range = range
+        self.voicePrint = voicePrint
+    }
+}
+
+public enum VoiceEmbeddingRecipe: String, Codable, Sendable {
+    case rawPaddedV1
+    /// Diagnostic recipe until independently qualified for production use.
+    case activeFrameCenteredV2
+}
+
 /// Extracts local voice features only. Callers must supply single-speaker spans and
 /// apply enrollment/identity-confirmation policy separately; this does not name people.
 public actor VoiceEmbeddingExtractor {
     private let modelDirectory: URL
     private let usePLDATransform: Bool
+    private let recipe: VoiceEmbeddingRecipe
 
-    public init(modelDirectory: URL) {
+    public init(modelDirectory: URL, recipe: VoiceEmbeddingRecipe = .rawPaddedV1) {
         self.modelDirectory = modelDirectory
         self.usePLDATransform = false
+        self.recipe = recipe
     }
 
     init(modelDirectory: URL, usePLDATransform: Bool) {
         self.modelDirectory = modelDirectory
         self.usePLDATransform = usePLDATransform
+        self.recipe = .rawPaddedV1
     }
 
     public func extract(source: URL, ranges: [VoiceSampleRange], workingDirectory: URL) async throws -> SpeakerVoicePrint {
+        let samples = try await extractSamples(source: source, ranges: VoiceEmbeddingMath.selectRanges(ranges),
+                                               workingDirectory: workingDirectory)
+        guard let first = samples.first else { throw InferenceError.invalidOutput("유효한 화자 음성 구간이 없습니다.") }
+        return SpeakerVoicePrint(modelIdentifier: first.voicePrint.modelIdentifier,
+            embedding: try VoiceEmbeddingMath.centroid(samples.map { $0.voicePrint.embedding },
+                durations: samples.map { $0.voicePrint.speechDuration }, dimension: usePLDATransform ? 128 : 256),
+            speechDuration: samples.reduce(0) { $0 + $1.voicePrint.speechDuration }, sampleCount: samples.count)
+    }
+
+    /// Returns one vector per supplied span, in caller order. Unlike the legacy
+    /// centroid API, invalid/oversized ranges are rejected, never silently dropped.
+    /// One span is allowed for diagnostics; the app owns enrollment/query minimums.
+    public func extractSamples(source: URL, ranges: [VoiceSampleRange], workingDirectory: URL) async throws -> [VoiceEmbeddingSample] {
         try Task.checkCancellation()
-        let selected = try VoiceEmbeddingMath.selectRanges(ranges)
+        let selected = try VoiceEmbeddingMath.strictRanges(ranges)
         guard modelDirectory.isFileURL, source.isFileURL, workingDirectory.isFileURL else {
             throw InferenceError.invalidOutput("음성 특징 추출에는 로컬 파일 경로가 필요합니다.")
         }
@@ -70,7 +102,8 @@ public actor VoiceEmbeddingExtractor {
         let prepared = try await AnalysisAudioPreparer.prepare(source: source, destination: scratch.appendingPathComponent("analysis.wav"))
         let spans = try VoiceEmbeddingMath.frameRanges(selected, frameCount: prepared.frameCount)
         try Task.checkCancellation()
-        let identifier = try Self.modelFingerprint(directory: modelDirectory, includePLDA: usePLDATransform)
+        let identifier = try Self.modelFingerprint(directory: modelDirectory, includePLDA: usePLDATransform, recipe: recipe)
+        let useActiveFrameCentering = recipe == .activeFrameCenteredV2
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .cpuAndNeuralEngine
         let fbank = try MLModel(contentsOf: modelDirectory.appendingPathComponent("FBank.mlmodelc"), configuration: configuration)
@@ -78,9 +111,8 @@ public actor VoiceEmbeddingExtractor {
         let plda = usePLDATransform ? try MLModel(contentsOf: modelDirectory.appendingPathComponent("PldaRho.mlmodelc"), configuration: configuration) : nil
         let layout = try ModelLayout(fbank: fbank, embedder: embedder)
         let file = try AVAudioFile(forReading: prepared.url, commonFormat: .pcmFormatFloat32, interleaved: false)
-        var vectors: [[Float]] = []
-        var durations: [Double] = []
-        for span in spans {
+        var samples: [VoiceEmbeddingSample] = []
+        for (range, span) in zip(selected, spans) {
             try Task.checkCancellation()
             let vector = try autoreleasepool {
                 let audio = try Self.readSpan(file: file, startFrame: span.start, frameCount: span.count)
@@ -90,7 +122,9 @@ public actor VoiceEmbeddingExtractor {
                       features.shape.map(\.intValue) == [1, 1, 80, 998] else {
                     throw InferenceError.invalidOutput("음성 특징 모델의 주파수 출력 형식이 다릅니다.")
                 }
-                let featuresInput = try VoiceEmbeddingMath.convert(features, to: layout.featureType)
+                let preparedFeatures = useActiveFrameCentering
+                    ? try VoiceEmbeddingMath.centerActiveFrames(features, activeSamples: span.count) : features
+                let featuresInput = try VoiceEmbeddingMath.convert(preparedFeatures, to: layout.featureType)
                 let weights = try VoiceEmbeddingMath.multiArray(
                     values: VoiceEmbeddingMath.weights(activeSamples: span.count), shape: [1, 589], dataType: layout.weightType
                 )
@@ -119,13 +153,12 @@ public actor VoiceEmbeddingExtractor {
                 }
                 return try VoiceEmbeddingMath.normalized(raw)
             }
-            vectors.append(vector)
-            durations.append(Double(span.count) / 16_000)
+            samples.append(VoiceEmbeddingSample(range: range,
+                voicePrint: SpeakerVoicePrint(modelIdentifier: identifier, embedding: vector,
+                    speechDuration: Double(span.count) / 16_000, sampleCount: 1)))
         }
         try Task.checkCancellation()
-        return SpeakerVoicePrint(modelIdentifier: identifier,
-                                 embedding: try VoiceEmbeddingMath.centroid(vectors, durations: durations, dimension: usePLDATransform ? 128 : 256),
-                                 speechDuration: durations.reduce(0, +), sampleCount: spans.count)
+        return samples
     }
 
     private static func readSpan(file: AVAudioFile, startFrame: Int64, frameCount: Int) throws -> [Float] {
@@ -153,7 +186,11 @@ public actor VoiceEmbeddingExtractor {
         return audio
     }
 
-    static func modelFingerprint(directory: URL, includePLDA: Bool = false) throws -> String {
+    static func modelFingerprint(directory: URL, includePLDA: Bool = false,
+                                 recipe: VoiceEmbeddingRecipe = .rawPaddedV1) throws -> String {
+        guard !includePLDA || recipe == .rawPaddedV1 else {
+            throw InferenceError.invalidOutput("활성 프레임 정규화와 PLDA의 결합은 검증되지 않았습니다.")
+        }
         var digest = SHA256()
         let files = FileManager.default
         let names = ["FBank.mlmodelc", "Embedding.mlmodelc"] + (includePLDA ? ["PldaRho.mlmodelc"] : [])
@@ -190,6 +227,7 @@ public actor VoiceEmbeddingExtractor {
             }
         }
         let hash = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        if recipe == .activeFrameCenteredV2 { return "grove-fbank-embedding-active-centered-span-v2:" + hash }
         return (includePLDA ? "grove-fbank-embedding-plda-span-v2:" : "grove-fbank-embedding-span-v1:") + hash
     }
 
@@ -215,6 +253,42 @@ public actor VoiceEmbeddingExtractor {
 }
 
 enum VoiceEmbeddingMath {
+    /// The qualified FBank uses a valid400-sample window and160-sample hop.
+    /// Its original global mean includes padded silence; subtracting the active
+    /// mean cancels that offset. Neutral padding stays outside the pooling mask.
+    static func centerActiveFrames(_ features: MLMultiArray, activeSamples: Int) throws -> MLMultiArray {
+        guard features.shape.map(\.intValue) == [1, 1, 80, 998],
+              [.float16, .float32].contains(features.dataType), (32_000...160_000).contains(activeSamples) else {
+            throw InferenceError.invalidOutput("활성 음성 프레임을 정규화할 수 없습니다.")
+        }
+        let activeFrames = min(998, (activeSamples - 400) / 160 + 1)
+        var output = [Float](repeating: 0, count: 80 * 998)
+        for band in 0..<80 {
+            var values = [Float]()
+            values.reserveCapacity(activeFrames)
+            for frame in 0..<activeFrames {
+                let value = features[[0, 0, NSNumber(value: band), NSNumber(value: frame)]].floatValue
+                guard value.isFinite else { throw InferenceError.invalidOutput("음성 특징에 유효하지 않은 값이 있습니다.") }
+                values.append(value)
+            }
+            let mean = values.reduce(0.0) { $0 + Double($1) } / Double(activeFrames)
+            for frame in 0..<activeFrames { output[band * 998 + frame] = Float(Double(values[frame]) - mean) }
+        }
+        return try multiArray(values: output, shape: [1, 1, 80, 998], dataType: features.dataType)
+    }
+
+    static func strictRanges(_ ranges: [VoiceSampleRange]) throws -> [VoiceSampleRange] {
+        guard (1...5).contains(ranges.count), ranges.allSatisfy({
+            $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+                && $0.end - $0.start >= 2 - 1e-9 && $0.end - $0.start <= 10 + 1e-9
+        }) else { throw InferenceError.invalidOutput("2초 이상 10초 이하의 단독 발화를 최대 5개 선택해 주세요.") }
+        let sorted = ranges.sorted { $0.start < $1.start }
+        guard zip(sorted, sorted.dropFirst()).allSatisfy({ pair in pair.0.end <= pair.1.start }) else {
+            throw InferenceError.invalidOutput("겹친 음성 구간은 별개의 화자 등록 자료로 사용할 수 없습니다.")
+        }
+        return ranges
+    }
+
     static func selectRanges(_ ranges: [VoiceSampleRange]) throws -> [VoiceSampleRange] {
         guard !ranges.isEmpty, ranges.count <= 10_000,
               ranges.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }) else {

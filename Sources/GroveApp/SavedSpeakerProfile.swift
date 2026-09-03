@@ -6,6 +6,9 @@ struct SavedSpeakerProfile: Identifiable, Codable, Hashable, Sendable {
     let folderID: UUID
     var name: String
     var voice: SpeakerVoicePrint? = nil
+    // Written before touching Keychain. A failed first registration still has an
+    // addressable cleanup action after restart, even if no ciphertext was published.
+    var voiceStorageReferenced: Bool? = nil
     let sourceMeetingID: UUID
     let sourceRevisionID: UUID
     let sourceSpeakerID: UUID
@@ -17,6 +20,15 @@ struct SpeakerProfileMatch: Codable, Hashable, Sendable {
     let profileID: UUID
     let similarity: Float?
     let isConfirmed: Bool
+    var originalName: String? = nil
+    var identityEvidence: SpeakerIdentityEvidence? = nil
+}
+
+struct SpeakerIdentityEvidence: Codable, Hashable, Sendable {
+    let modelIdentifier: String
+    let policyVersion: String
+    let enrollmentCreatedAt: Date
+    let queryUtteranceIDs: [UUID]
 }
 
 enum VoiceProfileError: LocalizedError {

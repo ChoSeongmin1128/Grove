@@ -3,6 +3,7 @@ import Foundation
 struct MeetingFolder: Identifiable, Codable, Hashable, Sendable {
     var id = UUID()
     var name: String
+    var automaticSpeakerIdentification: Bool? = nil
 }
 
 struct MeetingLibrary: Codable, Equatable {
@@ -40,15 +41,27 @@ struct MeetingLibraryStorage {
 
     func save(_ library: MeetingLibrary) throws {
         try library.validate()
+        var namesOnly = library
+        namesOnly.speakerProfiles = library.speakerProfiles?.map { profile in
+            var clean = profile
+            clean.voice = nil
+            return clean
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(library)
+        let data = try encoder.encode(namesOnly)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: url.path) {
             var previous = try load()
             // A removed voiceprint must not linger in the automatic backup.
             let retainedProfiles = Set((library.speakerProfiles ?? []).map(\.id))
             previous.speakerProfiles?.removeAll { !retainedProfiles.contains($0.id) }
+            // Legacy experimental voice fields are never written into new names or backups.
+            previous.speakerProfiles = previous.speakerProfiles?.map { profile in
+                var clean = profile
+                clean.voice = nil
+                return clean
+            }
             try encoder.encode(previous).write(to: url.appendingPathExtension("backup"), options: .atomic)
         }
         try data.write(to: url, options: .atomic)

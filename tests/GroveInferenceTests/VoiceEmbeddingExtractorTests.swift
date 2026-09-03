@@ -11,6 +11,17 @@ struct VoiceEmbeddingExtractorTests {
         return result
     }
 
+    @Test func perSampleRangeContractPreservesOrderAndRejectsSilentTrimming() throws {
+        let ranges = [VoiceSampleRange(start: 5, end: 8), .init(start: 0, end: 3)]
+        #expect(try VoiceEmbeddingMath.strictRanges(ranges) == ranges)
+        #expect(throws: InferenceError.self) { try VoiceEmbeddingMath.strictRanges([.init(start: 0, end: 11)]) }
+        #expect(throws: InferenceError.self) { try VoiceEmbeddingMath.strictRanges([.init(start: 0, end: 1.9), .init(start: 3, end: 6)]) }
+        #expect(throws: InferenceError.self) { try VoiceEmbeddingMath.strictRanges([.init(start: 0, end: 3), .init(start: 2, end: 5)]) }
+        let sample = VoiceEmbeddingSample(range: ranges[0], voicePrint: SpeakerVoicePrint(
+            modelIdentifier: "synthetic", embedding: vector(0), speechDuration: 3, sampleCount: 1))
+        #expect(try JSONDecoder().decode(VoiceEmbeddingSample.self, from: JSONEncoder().encode(sample)) == sample)
+    }
+
     @Test func rangeSelectionIsBoundedAndDoesNotCountOverlappingAudioTwice() throws {
         let ranges: [VoiceSampleRange] = (0..<8).map { (index: Int) -> VoiceSampleRange in
             let start = Double(index) * 20
@@ -48,6 +59,25 @@ struct VoiceEmbeddingExtractorTests {
         #expect(weights.dropFirst(118).allSatisfy { $0 == 0 })
         #expect(VoiceEmbeddingMath.weights(activeSamples: 160_000).allSatisfy { $0 == 1 })
         #expect(VoiceEmbeddingMath.weights(activeSamples: 0).allSatisfy { $0 == 0 })
+    }
+
+    @Test func activeFrameCenteringCancelsPaddedGlobalOffsetAndKeepsTailNeutral() throws {
+        let count = (32_000 - 400) / 160 + 1
+        var first = [Float](repeating: -40, count: 80 * 998)
+        var shifted = first
+        for band in 0..<80 {
+            for frame in 0..<count {
+                first[band * 998 + frame] = Float(frame % 5) + 17
+                shifted[band * 998 + frame] = first[band * 998 + frame] - 9
+            }
+        }
+        let one = try VoiceEmbeddingMath.multiArray(values: first, shape: [1, 1, 80, 998], dataType: .float32)
+        let two = try VoiceEmbeddingMath.multiArray(values: shifted, shape: [1, 1, 80, 998], dataType: .float32)
+        let centered = try VoiceEmbeddingMath.centerActiveFrames(one, activeSamples: 32_000)
+        let same = try VoiceEmbeddingMath.centerActiveFrames(two, activeSamples: 32_000)
+        #expect((0..<centered.count).allSatisfy { abs(centered[$0].floatValue - same[$0].floatValue) < 1e-6 })
+        #expect(abs((0..<count).reduce(0.0) { $0 + Double(centered[$1].floatValue) }) < 1e-4)
+        #expect((count..<998).allSatisfy { centered[$0].floatValue == 0 })
     }
 
     @Test func float16AndFloat32ArraysUseTheActualDeclaredType() throws {
@@ -100,6 +130,8 @@ struct VoiceEmbeddingExtractorTests {
         let first = try VoiceEmbeddingExtractor.modelFingerprint(directory: root.appendingPathComponent("one"))
         let second = try VoiceEmbeddingExtractor.modelFingerprint(directory: root.appendingPathComponent("two"))
         #expect(first == second)
+        let centered = try VoiceEmbeddingExtractor.modelFingerprint(directory: root.appendingPathComponent("one"), recipe: .activeFrameCenteredV2)
+        #expect(centered != first)
         try Data([1, 2, 4]).write(to: root.appendingPathComponent("two/Embedding.mlmodelc/weights/weight.bin"))
         #expect(try VoiceEmbeddingExtractor.modelFingerprint(directory: root.appendingPathComponent("two")) != first)
     }

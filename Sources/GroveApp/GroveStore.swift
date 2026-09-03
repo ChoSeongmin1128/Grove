@@ -19,12 +19,17 @@ final class GroveStore: ObservableObject {
     @Published private(set) var processingMeetingID: UUID?
     @Published private(set) var isStartingCapture = false
     @Published private(set) var isSavingSpeakerProfile = false
+    @Published private(set) var isRecognizingVoices = false
+    @Published private(set) var isCommittingVoiceEnrollment = false
+    @Published private(set) var registeredVoiceProfileIDs: Set<UUID> = []
+    @Published private(set) var voiceIdentificationMessages: [UUID: String] = [:]
     @Published private(set) var library = MeetingLibrary()
     @Published private(set) var folderMoveFeedback: MeetingFolderMoveFeedback?
     @Published private(set) var transcriptDocuments: [UUID: TranscriptDocument] = [:]
     @Published private(set) var transcriptDocumentErrors: [UUID: String] = [:]
 
     let recorder = AudioRecorder()
+    let voiceIdentificationAvailable: Bool
 
     private let storageURL: URL
     private let audioDirectory: URL
@@ -35,9 +40,16 @@ final class GroveStore: ObservableObject {
     private let libraryStorage: MeetingLibraryStorage
     private let inferenceService: any MeetingInferenceRunning
     private var processingTask: Task<Void, Never>?
+    private let voiceVault: SpeakerVoiceVault
+    private let voiceExtractor: any SpeakerVoiceExtracting
+    private var voiceTask: Task<Bool, Never>?
+    private var voiceRegistryLoaded = false
     private let folderTransferScopeID = UUID()
 
-    init(baseDirectory: URL? = nil, inferenceService: (any MeetingInferenceRunning)? = nil) {
+    init(baseDirectory: URL? = nil, inferenceService: (any MeetingInferenceRunning)? = nil,
+         voiceVault: SpeakerVoiceVault? = nil, voiceExtractor: (any SpeakerVoiceExtracting)? = nil,
+         voiceIdentificationAvailable: Bool = VoiceIdentityReleaseGate.isEnabled) {
+        self.voiceIdentificationAvailable = voiceIdentificationAvailable
         let base = baseDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -47,6 +59,9 @@ final class GroveStore: ObservableObject {
         audioDirectory = base.appendingPathComponent("Audio", isDirectory: true)
         transcriptStorage = TranscriptDocumentStorage(directory: base.appendingPathComponent("Documents", isDirectory: true))
         self.inferenceService = inferenceService ?? BundledMeetingInferenceService(appBundle: Bundle.main.bundleURL, applicationSupport: base)
+        self.voiceVault = voiceVault ?? SpeakerVoiceVault(directory: base.appendingPathComponent("VoiceRegistry", isDirectory: true),
+            keyStore: KeychainSpeakerVoiceKeyStore(storage: .login))
+        self.voiceExtractor = voiceExtractor ?? LocalSpeakerVoiceService(modelDirectory: LocalSpeakerVoiceService.defaultModelDirectory())
         isDemoMode = CommandLine.arguments.contains("--demo")
 
         try? FileManager.default.createDirectory(
@@ -72,6 +87,7 @@ final class GroveStore: ObservableObject {
             }
         }
         loadTranscriptDocuments()
+        Task { [weak self] in await self?.refreshVoiceEnrollmentStatus() }
     }
 
     var activeMeeting: MeetingRecord? {
@@ -85,7 +101,7 @@ final class GroveStore: ObservableObject {
 
     var isProcessing: Bool { processingMeetingID != nil }
     var isExportingOriginal: Bool { exportingOriginalMeetingID != nil }
-    var isBusy: Bool { isRecording || isProcessing || isStartingCapture || isSavingSpeakerProfile || isPreparingToQuit }
+    var isBusy: Bool { isRecording || isProcessing || isStartingCapture || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit }
 
     var defaultSpeakerOptions: MeetingSpeakerOptions {
         get { library.defaultSpeakerOptions }
@@ -117,7 +133,7 @@ final class GroveStore: ObservableObject {
 
     func canMoveMeeting(id: UUID) -> Bool {
         guard meetingIndexError == nil, libraryError == nil, !isPreparingToQuit,
-              !isStartingCapture, !isSavingSpeakerProfile,
+              !isStartingCapture, !isSavingSpeakerProfile, !isRecognizingVoices,
               let meeting = meetings.first(where: { $0.id == id }) else { return false }
         return id != activeMeetingID && id != processingMeetingID && id != exportingOriginalMeetingID
             && meeting.status != .recording && meeting.status != .processing
@@ -250,6 +266,11 @@ final class GroveStore: ObservableObject {
 
     func deleteFolder(id: UUID) -> Bool {
         guard canModifyMeetingIndex, libraryError == nil, !isBusy else { return false }
+        let profiles = speakerProfiles(in: id)
+        guard profiles.isEmpty || (voiceRegistryLoaded && profiles.allSatisfy { !voiceProfileHasStorage($0.id) }) else {
+            alertMessage = "폴더의 저장한 화자에서 등록 목소리를 먼저 삭제해 주세요. 음성 정보를 남긴 채 폴더를 삭제하지 않습니다."
+            return false
+        }
         let previous = meetings
         for index in meetings.indices where meetings[index].folderID == id { meetings[index].folderID = nil }
         guard saveMeetings() else { meetings = previous; return false }
@@ -280,6 +301,9 @@ final class GroveStore: ObservableObject {
         }
         var updated = library
         mutation(&updated)
+        updated.speakerProfiles = updated.speakerProfiles?.map { profile in
+            var namesOnly = profile; namesOnly.voice = nil; return namesOnly
+        }
         do {
             if !isDemoMode { try libraryStorage.save(updated) }
             library = updated
@@ -296,6 +320,10 @@ final class GroveStore: ObservableObject {
 
     func removeSpeakerProfile(id: UUID) -> Bool {
         guard !isBusy else { return false }
+        guard voiceRegistryLoaded, !voiceProfileHasStorage(id) else {
+            alertMessage = "등록한 목소리를 먼저 삭제한 뒤 이름을 삭제해 주세요."
+            return false
+        }
         return editLibrary { $0.speakerProfiles?.removeAll { $0.id == id } }
     }
 
@@ -308,6 +336,12 @@ final class GroveStore: ObservableObject {
         if let linked = original.speakers.first(where: { $0.id == speakerID })?.profileMatch,
            speakerProfiles(in: folderID).contains(where: { $0.id == linked.profileID }) {
             alertMessage = "이미 저장한 화자가 연결되어 있습니다. 다른 사람이라면 먼저 화자 이름을 변경해 연결을 해제해 주세요."
+            return false
+        }
+        guard !speakerProfiles(in: folderID).contains(where: {
+            $0.sourceMeetingID == meetingID && $0.sourceSpeakerID == speakerID
+        }) else {
+            alertMessage = "이 화자에서 저장한 이름이 이미 있습니다. 폴더의 기존 화자를 적용하거나, 등록 목소리와 이름을 먼저 삭제해 주세요."
             return false
         }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -338,6 +372,283 @@ final class GroveStore: ObservableObject {
         guard let meeting = meetings.first(where: { $0.id == meetingID }),
               let profile = library.speakerProfiles?.first(where: { $0.id == profileID && $0.folderID == meeting.folderID }) else { return false }
         return editDocument(meetingID: meetingID) { try $0.applySpeakerProfile(profile, to: speakerID, similarity: nil, confirmed: true) }
+    }
+
+    func automaticSpeakerIdentificationEnabled(folderID: UUID) -> Bool {
+        voiceIdentificationAvailable && library.folders.first(where: { $0.id == folderID })?.automaticSpeakerIdentification == true
+    }
+
+    func setAutomaticSpeakerIdentification(folderID: UUID, enabled: Bool) -> Bool {
+        guard !enabled || voiceIdentificationAvailable else { alertMessage = VoiceIdentityReleaseGate.message; return false }
+        guard !isBusy, let index = library.folders.firstIndex(where: { $0.id == folderID }) else { return false }
+        return editLibrary { $0.folders[index].automaticSpeakerIdentification = enabled }
+    }
+
+    func voiceProfileIsRegistered(_ profileID: UUID) -> Bool { registeredVoiceProfileIDs.contains(profileID) }
+    func voiceProfileHasStorage(_ profileID: UUID) -> Bool {
+        voiceProfileIsRegistered(profileID) || library.speakerProfiles?.first(where: { $0.id == profileID })?.voiceStorageReferenced == true
+    }
+    func voiceIdentificationMessage(for meetingID: UUID) -> String? { voiceIdentificationMessages[meetingID] }
+
+    func refreshVoiceEnrollmentStatus() async {
+        let profiles = library.speakerProfiles ?? []
+        do {
+            var found: Set<UUID> = []
+            for profile in profiles where try await voiceVault.hasRecord(profileID: profile.id) { found.insert(profile.id) }
+            guard profiles == library.speakerProfiles ?? [] else { return }
+            registeredVoiceProfileIDs = found
+            voiceRegistryLoaded = true
+        } catch {
+            voiceRegistryLoaded = false
+            alertMessage = "목소리 등록 상태를 읽지 못했습니다. 기존 자료는 보존됩니다. \(error.localizedDescription)"
+        }
+    }
+
+    func voiceEnrollmentCandidates(meetingID: UUID, speakerID: UUID) -> [DocumentUtterance] {
+        guard let document = transcriptDocuments[meetingID] else { return [] }
+        return VoiceIdentitySelection.candidates(in: document, speakerID: speakerID)
+    }
+
+    func voiceEnrollmentDuration(_ utterance: DocumentUtterance) -> Double {
+        let range = VoiceIdentitySelection.range(for: utterance)
+        return max(0, range.end - range.start)
+    }
+
+    func cancelVoiceWork() {
+        guard !isCommittingVoiceEnrollment else { return }
+        voiceTask?.cancel()
+    }
+
+    func confirmSpeakerIdentity(meetingID: UUID, speakerID: UUID) -> Bool {
+        editDocument(meetingID: meetingID) { try $0.confirmSpeakerIdentity(speakerID) }
+    }
+
+    func rejectSpeakerIdentity(meetingID: UUID, speakerID: UUID) -> Bool {
+        editDocument(meetingID: meetingID) { try $0.rejectSpeakerIdentity(speakerID) }
+    }
+
+    func removeVoiceEnrollment(profileID: UUID) async -> Bool {
+        guard !isBusy, let profile = library.speakerProfiles?.first(where: { $0.id == profileID }) else { return false }
+        isSavingSpeakerProfile = true
+        defer { isSavingSpeakerProfile = false }
+        do {
+            try await voiceVault.remove(profileID: profileID, folderID: profile.folderID)
+            guard editLibrary({ updated in
+                if let index = updated.speakerProfiles?.firstIndex(where: { $0.id == profileID }) {
+                    updated.speakerProfiles?[index].voiceStorageReferenced = nil
+                }
+            }) else { return false }
+            await refreshVoiceEnrollmentStatus()
+            return !registeredVoiceProfileIDs.contains(profileID)
+        } catch {
+            await refreshVoiceEnrollmentStatus()
+            alertMessage = "목소리 삭제를 마치지 못했습니다. 이름과 기존 전사는 유지됩니다. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func enrollVoice(meetingID: UUID, speakerID: UUID, name: String,
+                     selectedUtteranceIDs: Set<UUID>, permissionConfirmed: Bool,
+                     enableAutomaticIdentification: Bool) async -> Bool {
+        guard !isBusy else { return false }
+        guard voiceIdentificationAvailable else { alertMessage = VoiceIdentityReleaseGate.message; return false }
+        guard permissionConfirmed else { alertMessage = VoiceIdentityError.consentRequired.localizedDescription; return false }
+        isSavingSpeakerProfile = true
+        let task = Task { await self.performVoiceEnrollment(meetingID: meetingID, speakerID: speakerID, name: name,
+            selectedUtteranceIDs: selectedUtteranceIDs, enableAutomaticIdentification: enableAutomaticIdentification) }
+        voiceTask = task
+        let result = await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        voiceTask = nil
+        isSavingSpeakerProfile = false
+        return result
+    }
+
+    private func performVoiceEnrollment(meetingID: UUID, speakerID: UUID, name: String,
+                                        selectedUtteranceIDs: Set<UUID>, enableAutomaticIdentification: Bool) async -> Bool {
+        defer { isCommittingVoiceEnrollment = false }
+        do {
+            guard !isDemoMode, let meeting = meetings.first(where: { $0.id == meetingID }),
+                  let document = transcriptDocuments[meetingID], transcriptDocumentErrors[meetingID] == nil,
+                  let speaker = document.speakers.first(where: { $0.id == speakerID }),
+                  let path = meeting.audioPath else { throw VoiceIdentityError.missingSource }
+            guard let folderID = meeting.folderID, library.folders.contains(where: { $0.id == folderID }) else {
+                throw VoiceProfileError.folderRequired
+            }
+            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                throw TranscriptEditError.emptyName
+            }
+            let beforeLibrary = library
+            let candidates = try VoiceIdentitySelection.selected(in: document, speakerID: speakerID, ids: selectedUtteranceIDs)
+            let profiles = speakerProfiles(in: folderID)
+            let existing = profiles.first(where: { $0.id == speaker.profileMatch?.profileID })
+                ?? profiles.first(where: { $0.sourceMeetingID == meetingID && $0.sourceSpeakerID == speakerID })
+            guard existing == nil || existing?.name == name else { throw VoiceIdentityError.namesOnlyConflict }
+            var profile = existing ?? SavedSpeakerProfile(folderID: folderID, name: name, sourceMeetingID: meetingID,
+                sourceRevisionID: document.revisionID, sourceSpeakerID: speakerID, createdAt: Date())
+            profile.voiceStorageReferenced = true
+            let source = URL(fileURLWithPath: path)
+            let hash = try await VoiceIdentitySelection.audioHash(source)
+            let extracted = try await extractVoiceSamples(source: source, utterances: candidates)
+            let samples = zip(candidates, extracted).map { utterance, sample in
+                VoiceEnrollmentSample(utteranceID: utterance.id, start: sample.range.start, end: sample.range.end,
+                    voice: sample.voicePrint, sourceMeetingID: meetingID, sourceRevisionID: document.revisionID, audioSHA256: hash)
+            }
+            try VoiceRecognitionPolicy.validateEnrollment(samples: samples)
+            guard try await VoiceIdentitySelection.audioHash(source) == hash else { throw VoiceIdentityError.changed }
+            try Task.checkCancellation()
+            guard transcriptDocuments[meetingID] == document, library == beforeLibrary,
+                  meetings.first(where: { $0.id == meetingID })?.audioPath == path,
+                  meetings.first(where: { $0.id == meetingID })?.folderID == folderID else { throw VoiceIdentityError.changed }
+
+            // Publish names first: a crash before the encrypted commit can leave only
+            // a harmless names-only entry, never a hidden/orphaned enrollment.
+            isCommittingVoiceEnrollment = true
+            guard editLibrary({
+                if $0.speakerProfiles == nil { $0.speakerProfiles = [] }
+                $0.speakerProfiles?.removeAll { $0.id == profile.id }
+                $0.speakerProfiles?.append(profile)
+            }) else { return false }
+            var cleanupWarning: String?
+            do {
+                try await voiceVault.put(VoiceEnrollmentRecord(profileID: profile.id, folderID: folderID,
+                    modelIdentifier: samples[0].voice.modelIdentifier, samples: samples, createdAt: Date()))
+            } catch SpeakerVoiceVaultError.publishedButCleanupFailed(let reason) {
+                cleanupWarning = SpeakerVoiceVaultError.publishedButCleanupFailed(reason).localizedDescription
+            } catch {
+                // Retaining a names-only profile keeps any failed-generation cleanup
+                // addressable. Never claim the encrypted commit succeeded.
+                await refreshVoiceEnrollmentStatus()
+                throw error
+            }
+            await refreshVoiceEnrollmentStatus()
+            var warnings: [String] = cleanupWarning.map { [$0] } ?? []
+            if transcriptDocuments[meetingID] == document,
+               meetings.first(where: { $0.id == meetingID })?.folderID == folderID {
+                if !editDocument(meetingID: meetingID, mutation: {
+                    try $0.applySpeakerProfile(profile, to: speakerID, similarity: nil, confirmed: true)
+                }) { warnings.append("등록은 저장했지만 현재 전사에 이름을 적용하지 못했습니다.") }
+            } else { warnings.append("등록은 저장했지만 처리 중 바뀐 전사에는 이름을 적용하지 않았습니다.") }
+            if let index = library.folders.firstIndex(where: { $0.id == folderID }),
+               !editLibrary({ $0.folders[index].automaticSpeakerIdentification = enableAutomaticIdentification }) {
+                warnings.append("폴더의 자동 식별 설정은 저장하지 못했습니다.")
+            }
+            let message = warnings.isEmpty ? "목소리를 등록했습니다. 같은 폴더의 다른 녹음에서 이름을 추정할 수 있습니다." : warnings.joined(separator: " ")
+            voiceIdentificationMessages[meetingID] = message
+            if !warnings.isEmpty { alertMessage = message }
+            return true
+        } catch is CancellationError {
+            alertMessage = "목소리 등록을 취소했습니다."
+            return false
+        } catch {
+            alertMessage = "목소리를 등록하지 못했습니다. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func extractVoiceSamples(source: URL, utterances: [DocumentUtterance]) async throws -> [VoiceEmbeddingSample] {
+        let directory = storageURL.deletingLastPathComponent().appendingPathComponent("VoiceWork/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                              attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ranges = utterances.map { VoiceIdentitySelection.range(for: $0) }
+        let samples = try await voiceExtractor.extractSamples(source: source, ranges: ranges, workingDirectory: directory)
+        guard samples.count == ranges.count, zip(samples, ranges).allSatisfy({
+            $0.0.range.start == $0.1.start && $0.0.range.end == $0.1.end
+        }) else { throw VoiceIdentityError.invalidSelection }
+        return samples
+    }
+
+    func identifySpeakers(meetingID: UUID) async {
+        guard !isBusy else { return }
+        guard voiceIdentificationAvailable else {
+            voiceIdentificationMessages[meetingID] = VoiceIdentityReleaseGate.message
+            return
+        }
+        await runVoiceIdentification(meetingID: meetingID, automatic: false)
+    }
+
+    private func runVoiceIdentification(meetingID: UUID, automatic: Bool) async {
+        guard voiceIdentificationAvailable else { return }
+        guard !isRecognizingVoices, !isSavingSpeakerProfile, !isRecording, !isPreparingToQuit else { return }
+        isRecognizingVoices = true
+        let task = Task { await self.performVoiceIdentification(meetingID: meetingID, automatic: automatic) }
+        voiceTask = task
+        _ = await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        voiceTask = nil
+        isRecognizingVoices = false
+    }
+
+    private func performVoiceIdentification(meetingID: UUID, automatic: Bool) async -> Bool {
+        do {
+            guard !isDemoMode, let meeting = meetings.first(where: { $0.id == meetingID }),
+                  let document = transcriptDocuments[meetingID], transcriptDocumentErrors[meetingID] == nil,
+                  let path = meeting.audioPath else { throw VoiceIdentityError.missingSource }
+            guard let folderID = meeting.folderID else { throw VoiceProfileError.folderRequired }
+            if automatic && !automaticSpeakerIdentificationEnabled(folderID: folderID) { return false }
+            let beforeLibrary = library
+            let profiles = speakerProfiles(in: folderID)
+            var records: [VoiceEnrollmentRecord] = []
+            for profile in profiles {
+                try Task.checkCancellation()
+                if let record = try await voiceVault.load(profileID: profile.id, folderID: folderID) { records.append(record) }
+            }
+            guard !records.isEmpty else {
+                if automatic { return false }
+                throw VoiceIdentityError.noEnrolledVoices
+            }
+            let source = URL(fileURLWithPath: path)
+            let hash = try await VoiceIdentitySelection.audioHash(source)
+            records.removeAll { $0.samples.contains(where: { $0.sourceMeetingID == meetingID || $0.audioSHA256.lowercased() == hash }) }
+            guard !records.isEmpty else { throw VoiceIdentityError.sourceEnrollmentOnly }
+            var proposals: [(UUID, SavedSpeakerProfile, Float, SpeakerIdentityEvidence)] = []
+            var deferredReasons: [String] = []
+            for speaker in document.speakers where VoiceIdentitySelection.permitsAutomaticName(speaker, in: document) {
+                try Task.checkCancellation()
+                let utterances = VoiceIdentitySelection.query(in: document, speakerID: speaker.id)
+                guard utterances.count >= VoiceRecognitionPolicy.minimumQuerySamples else {
+                    deferredReasons.append("\(speaker.name): 단독 발화 부족")
+                    continue
+                }
+                let samples = try await extractVoiceSamples(source: source, utterances: utterances)
+                let decision = VoiceRecognitionPolicy.evaluate(samples: samples.map(\.voicePrint), enrollments: records)
+                if let id = decision.profileID, let score = decision.similarity,
+                   let profile = profiles.first(where: { $0.id == id }),
+                   let record = records.first(where: { $0.profileID == id }) {
+                    let evidence = SpeakerIdentityEvidence(modelIdentifier: record.modelIdentifier,
+                        policyVersion: decision.policyVersion, enrollmentCreatedAt: record.createdAt,
+                        queryUtteranceIDs: utterances.map(\.id))
+                    proposals.append((speaker.id, profile, score, evidence))
+                }
+                else { deferredReasons.append("\(speaker.name): \(decision.reason?.message ?? "이름 추정 보류")") }
+            }
+            let counts = Dictionary(grouping: proposals, by: { $0.1.id })
+            let unique = proposals.filter { counts[$0.1.id]?.count == 1 }
+            if unique.count != proposals.count { deferredReasons.append("여러 화자가 같은 사람으로 추정되어 해당 이름은 적용하지 않았습니다.") }
+            guard try await VoiceIdentitySelection.audioHash(source) == hash else { throw VoiceIdentityError.changed }
+            try Task.checkCancellation()
+            guard transcriptDocuments[meetingID] == document, library == beforeLibrary,
+                  meetings.first(where: { $0.id == meetingID })?.folderID == folderID,
+                  meetings.first(where: { $0.id == meetingID })?.audioPath == path else { throw VoiceIdentityError.changed }
+            if !unique.isEmpty {
+                guard editDocument(meetingID: meetingID, mutation: { updated in
+                    for (id, profile, score, evidence) in unique {
+                        try updated.applySpeakerProfile(profile, to: id, similarity: score, confirmed: false, identityEvidence: evidence)
+                    }
+                }) else { return false }
+            }
+            let summary = unique.isEmpty ? "새로 추정한 이름이 없습니다. 사용자가 지정한 이름과 확인·거절한 제안은 유지합니다." : "화자 \(unique.count)명의 이름을 추정했습니다. 듣고 맞는지 확인해 주세요."
+            voiceIdentificationMessages[meetingID] = ([summary] + deferredReasons).joined(separator: "\n")
+            return true
+        } catch is CancellationError {
+            voiceIdentificationMessages[meetingID] = "이름 찾기를 취소했습니다. 전사문과 기존 이름은 유지됩니다."
+            return false
+        } catch {
+            let message = "이름 찾기를 마치지 못했습니다. 전사문과 기존 이름은 유지됩니다. \(error.localizedDescription)"
+            voiceIdentificationMessages[meetingID] = message
+            if !automatic { alertMessage = message }
+            return false
+        }
     }
 
     func toggleRecordingPause() {
@@ -374,8 +685,10 @@ final class GroveStore: ObservableObject {
         isPreparingToQuit = true
         defer { isPreparingToQuit = false }
         cancelProcessing()
+        cancelVoiceWork()
         await processingTask?.value
-        guard !isExportingOriginal, !isRecording, !isStartingCapture, !isSavingSpeakerProfile else {
+        _ = await voiceTask?.value
+        guard !isExportingOriginal, !isRecording, !isStartingCapture, !isSavingSpeakerProfile, !isRecognizingVoices else {
             alertMessage = "진행 중인 저장이나 녹음을 마친 뒤 앱을 닫아 주세요."
             return false
         }
@@ -738,6 +1051,9 @@ final class GroveStore: ObservableObject {
                 try self.publishProcessingRecord(completed)
                 self.transcriptDocuments[id] = document
                 self.transcriptDocumentErrors.removeValue(forKey: id)
+                if let folderID = meeting.folderID, self.automaticSpeakerIdentificationEnabled(folderID: folderID) {
+                    await self.runVoiceIdentification(meetingID: id, automatic: true)
+                }
             } catch {
                 guard let updated = self.meetings.firstIndex(where: { $0.id == id }) else { return }
                 var message = error is CancellationError ? "전사를 중단했습니다. 원본 녹음은 보존됩니다." : error.localizedDescription

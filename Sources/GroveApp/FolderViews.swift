@@ -126,38 +126,106 @@ struct FolderSpeakerLibraryView: View {
     @ObservedObject var store: GroveStore
     let folderID: UUID
     @State private var removingProfile: SavedSpeakerProfile?
+    @State private var removingVoice: SavedSpeakerProfile?
+    @State private var deletingVoice = false
+    @State private var error: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("저장한 화자").font(GroveTypography.heading)
+            if !store.voiceIdentificationAvailable { VoiceIdentityAvailabilityNotice() }
             let profiles = store.speakerProfiles(in: folderID)
+            let hasVoices = profiles.contains { store.voiceProfileIsRegistered($0.id) }
             if profiles.isEmpty {
-                Text("녹음의 화자 목록에서 이름을 저장하고, 다음 녹음의 화자에 직접 연결할 수 있습니다.")
+                Text(store.voiceIdentificationAvailable
+                     ? "녹음의 화자 목록에서 이름을 저장하거나 목소리를 등록할 수 있습니다. 등록한 목소리는 같은 폴더에서만 비교합니다."
+                     : "녹음의 화자 목록에서 이름을 저장하고, 같은 폴더의 다음 녹음에 직접 연결할 수 있습니다.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                ForEach(profiles) { profile in
-                    HStack {
-                        Image(systemName: "person.wave.2").foregroundStyle(.secondary)
-                        Text(profile.name)
-                        Spacer()
-                        Button("삭제") { removingProfile = profile }.disabled(store.isBusy)
+                Toggle("새 녹음에서 화자 자동 식별", isOn: Binding(
+                    get: { store.automaticSpeakerIdentificationEnabled(folderID: folderID) },
+                    set: { enabled in
+                        if !store.setAutomaticSpeakerIdentification(folderID: folderID, enabled: enabled) {
+                            error = store.alertMessage ?? "설정을 저장하지 못했습니다."
+                            store.alertMessage = nil
+                        }
                     }
+                ))
+                .toggleStyle(.checkbox).font(GroveTypography.bodySmall)
+                .disabled(store.isBusy || deletingVoice || !hasVoices || !store.voiceIdentificationAvailable)
+                if store.voiceIdentificationAvailable {
+                    Text(hasVoices
+                         ? "등록한 목소리와 일치할 때 이름을 제안합니다. 끄더라도 등록한 목소리는 삭제되지 않습니다."
+                         : "아직 이름만 저장되어 있습니다. 녹음의 화자 목록에서 목소리를 등록하면 자동 식별을 사용할 수 있습니다.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("같은 폴더에서만 사용할 수 있습니다. 목소리를 이용한 자동 연결은 아직 제공하지 않습니다.")
-                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(profiles) { profile in
+                    let hasVoiceStorage = store.voiceProfileHasStorage(profile.id)
+                    HStack(spacing: 10) {
+                        Image(systemName: store.voiceProfileIsRegistered(profile.id) ? "waveform" : "person")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(profile.name).font(GroveTypography.label)
+                            Text(store.voiceProfileIsRegistered(profile.id) ? "목소리 등록됨"
+                                 : hasVoiceStorage ? "등록 정리 필요" : "이름만 저장")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Menu {
+                            if hasVoiceStorage {
+                                Button("등록한 목소리만 삭제…", role: .destructive) { removingVoice = profile }
+                            } else {
+                                Button("저장한 이름 삭제…", role: .destructive) { removingProfile = profile }
+                            }
+                        } label: { Image(systemName: "ellipsis") }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .accessibilityLabel("\(profile.name) 관리")
+                        .disabled(store.isBusy || deletingVoice)
+                    }
+                    .padding(.vertical, 4)
+                }
             }
+            if deletingVoice {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("등록한 목소리 삭제 중").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         .padding(20)
         .background(GroveTheme.surface, in: RoundedRectangle(cornerRadius: 10))
-        .alert("저장한 화자를 삭제할까요?", isPresented: Binding(get: { removingProfile != nil }, set: { if !$0 { removingProfile = nil } })) {
+        .alert("저장한 이름을 삭제할까요?", isPresented: Binding(get: { removingProfile != nil }, set: { if !$0 { removingProfile = nil } })) {
             Button("취소", role: .cancel) { removingProfile = nil }
-            Button("화자 삭제", role: .destructive) {
-                if let profile = removingProfile { _ = store.removeSpeakerProfile(id: profile.id) }
+            Button("이름 삭제", role: .destructive) {
+                if let profile = removingProfile, !store.removeSpeakerProfile(id: profile.id) {
+                    error = store.alertMessage ?? "화자를 삭제하지 못했습니다."
+                    store.alertMessage = nil
+                }
                 removingProfile = nil
             }
         } message: {
-            Text("이 폴더에서 재사용할 화자 정보를 삭제합니다. 기존 녹음과 전사의 화자 이름은 바뀌지 않습니다.")
+            Text("이 폴더에서 재사용할 이름을 삭제합니다. 기존 녹음과 전사의 화자 이름은 바뀌지 않습니다.")
         }
+        .alert("등록한 목소리만 삭제할까요?", isPresented: Binding(get: { removingVoice != nil }, set: { if !$0 { removingVoice = nil } })) {
+            Button("취소", role: .cancel) { removingVoice = nil }
+            Button("목소리 삭제", role: .destructive) {
+                if let profile = removingVoice {
+                    deletingVoice = true
+                    Task {
+                        if !(await store.removeVoiceEnrollment(profileID: profile.id)) {
+                            error = store.alertMessage ?? "등록한 목소리를 삭제하지 못했습니다."
+                            store.alertMessage = nil
+                        }
+                        deletingVoice = false
+                    }
+                }
+                removingVoice = nil
+            }
+        } message: {
+            Text("목소리로 이 사람을 찾는 데 쓰는 음성 특징을 삭제합니다. 저장한 이름과 기존 전사는 유지됩니다. 다시 자동 식별하려면 목소리를 새로 등록해야 합니다.")
+        }
+        .task { await store.refreshVoiceEnrollmentStatus() }
     }
 }
 
@@ -179,14 +247,16 @@ struct SaveSpeakerProfileSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("폴더에 화자 저장").font(GroveTypography.heading)
+            Text("폴더에 이름 저장").font(GroveTypography.heading)
             Text("‘\(store.folderName(meeting.folderID))’ 안의 다음 녹음에서 같은 사람에게 이 이름을 연결할 수 있습니다.")
                 .foregroundStyle(.secondary)
             TextField("화자 이름", text: $name).textFieldStyle(.roundedBorder)
             Toggle("이 화자의 이름과 발화를 확인했습니다", isOn: $confirmed)
                 .toggleStyle(.checkbox)
-            Text("이름만 이 Mac에 저장합니다. 이번 베타는 목소리를 자동으로 연결하지 않으며, 음성 특징도 저장하지 않습니다.")
-                .font(.callout).foregroundStyle(.secondary)
+            if store.voiceIdentificationAvailable {
+                Text("여기서는 이름만 저장합니다. 음성 특징을 저장하거나 자동 식별에 사용하려면 별도로 ‘목소리 등록’을 선택해 주세요.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else { VoiceIdentityAvailabilityNotice() }
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
                 if store.isSavingSpeakerProfile { ProgressView().controlSize(.small); Text("화자 저장 중").font(.caption) }

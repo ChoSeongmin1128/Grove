@@ -18,6 +18,7 @@ struct TranscriptView: View {
     @State private var changingSpeaker: DocumentUtterance?
     @State private var renamingSpeaker: MeetingSpeaker?
     @State private var savingSpeaker: MeetingSpeaker?
+    @State private var enrollingSpeaker: MeetingSpeaker?
     @State private var showsExport = false
     @State private var showsHistory = false
     @State private var notice: String?
@@ -62,7 +63,10 @@ struct TranscriptView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task { player.prepare(meeting: meeting) }
+        .task {
+            player.prepare(meeting: meeting)
+            await store.refreshVoiceEnrollmentStatus()
+        }
         .onDisappear { player.stop() }
         .onChange(of: document?.revisionID) { _, _ in
             selectedIDs.removeAll()
@@ -105,6 +109,9 @@ struct TranscriptView: View {
         }
         .sheet(item: $savingSpeaker) { speaker in
             SaveSpeakerProfileSheet(store: store, meeting: meeting, speaker: speaker)
+        }
+        .sheet(item: $enrollingSpeaker) { speaker in
+            VoiceEnrollmentSheet(store: store, meeting: meeting, speaker: speaker, player: player)
         }
         .sheet(isPresented: $showsExport) {
             if let document {
@@ -201,7 +208,7 @@ struct TranscriptView: View {
 
     private func transcript(_ document: TranscriptDocument) -> some View {
         let rows = visibleRows
-        let metadataWidth: CGFloat = rows.contains { $0.utterance.endTime >= 3600 } ? 168 : 140
+        let metadataWidth: CGFloat = rows.contains { $0.utterance.endTime >= 3600 } ? 148 : 112
         return ScrollViewReader { proxy in
             ScrollView {
                 if reviewOnly && document.speakerReviewCount == 0 {
@@ -255,7 +262,7 @@ struct TranscriptView: View {
         let isPlaying = player.playingSegmentID == utterance.id
         let isSelected = selectedIDs.contains(utterance.id)
         let review = document.speakerReview(for: utterance)
-        return HStack(alignment: .top, spacing: 16) {
+        return HStack(alignment: .top, spacing: 12) {
             if selectionMode {
                 Toggle("발화 선택", isOn: Binding(
                     get: { selectedIDs.contains(utterance.id) },
@@ -291,7 +298,7 @@ struct TranscriptView: View {
                 .help("시작–종료 시간 · 클릭하면 이 발화의 앞뒤 문맥을 함께 듣습니다")
                 .accessibilityLabel("시작 \(TranscriptPresentation.timestamp(utterance.startTime)), 종료 \(TranscriptPresentation.timestamp(utterance.endTime)), 발화 듣기")
                 if document.speakers.first(where: { $0.id == utterance.speakerID })?.profileMatch?.isConfirmed == false {
-                    Text("화자 추정").font(.caption2).foregroundStyle(GroveTheme.evidence)
+                    Text("이름 제안").font(.caption2).foregroundStyle(GroveTheme.evidence)
                 }
                 if utterance.sourceChannelID == "system" || utterance.sourceChannelID == "microphone" {
                     Text(utterance.sourceChannelID == "system" ? "컴퓨터 소리" : "마이크")
@@ -363,6 +370,28 @@ struct TranscriptView: View {
                 Text("화자").font(GroveTypography.heading)
                 Text("이름을 바꾸면 해당 화자의 모든 발화에 적용됩니다.")
                     .font(.caption).foregroundStyle(.secondary)
+                if !store.voiceIdentificationAvailable { VoiceIdentityAvailabilityNotice() }
+                if let folderID = meeting.folderID,
+                   store.speakerProfiles(in: folderID).contains(where: { store.voiceProfileIsRegistered($0.id) }) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        if store.isRecognizingVoices {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("등록한 목소리 확인 중").font(.caption)
+                            }
+                            Button("식별 취소") { store.cancelVoiceWork() }.buttonStyle(.plain).font(.caption)
+                        } else {
+                            Button("목소리로 이름 찾기") {
+                                player.pause()
+                                Task { await store.identifySpeakers(meetingID: meeting.id) }
+                            }.disabled(store.isBusy || !store.voiceIdentificationAvailable)
+                        }
+                        if let message = store.voiceIdentificationMessage(for: meeting.id) {
+                            Text(message).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
                 ForEach(document.speakers.sorted { $0.order < $1.order }) { speaker in
                     let utterances = document.utterances.filter { $0.speakerID == speaker.id }
                     VStack(alignment: .leading, spacing: 8) {
@@ -391,6 +420,17 @@ struct TranscriptView: View {
                             if speaker.profileMatch?.isConfirmed == false {
                                 Text("저장한 목소리로 추정한 이름입니다. 확인하거나 다른 화자로 바꿔 주세요.")
                                     .font(.caption).foregroundStyle(GroveTheme.evidence)
+                                HStack(spacing: 12) {
+                                    Button("맞음") {
+                                        _ = store.confirmSpeakerIdentity(meetingID: meeting.id, speakerID: speaker.id)
+                                    }
+                                    .accessibilityLabel("\(speaker.name) 이름 제안 확인")
+                                    Button("다른 사람") {
+                                        _ = store.rejectSpeakerIdentity(meetingID: meeting.id, speakerID: speaker.id)
+                                    }
+                                    .accessibilityLabel("\(speaker.name) 이름 제안 거절")
+                                }
+                                .buttonStyle(.plain).font(.caption).disabled(store.isBusy)
                             }
                             Menu("폴더의 화자") {
                                 ForEach(store.speakerProfiles(in: folderID)) { profile in
@@ -401,6 +441,10 @@ struct TranscriptView: View {
                                 Divider()
                                 Button("이 화자 이름 저장…") { savingSpeaker = speaker }
                                     .disabled(store.speakerProfiles(in: folderID).contains { $0.id == speaker.profileMatch?.profileID })
+                                Button("목소리 등록…") {
+                                    player.pause()
+                                    enrollingSpeaker = speaker
+                                }.disabled(utterances.isEmpty || !store.voiceIdentificationAvailable)
                             }.disabled(store.isBusy)
                         } else {
                             Text("폴더로 옮기면 다음 녹음에 화자를 재사용할 수 있습니다.")

@@ -7,13 +7,13 @@ detailed validation logs remain in ignored `results/`.
 
 ## Current source
 
-The source targets version0.3.0 / local-beta.10. This is a personal local beta, not a
+The source targets version0.3.0 / local-beta.11. This is a personal local beta, not a
 notarized release or a standalone model installer. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
 - Basic transcript and accessibility time labels show whole seconds. Stored playback
-  and split boundaries retain fractional precision. Metadata column widths are
-  unchanged; a narrower gutter was discussed but is not implemented.
+  and split boundaries retain fractional precision. The metadata column is112pt
+  (148pt for hour-long timestamps), with a12pt gap before transcript text.
 - Thin horizontal separators are lighter between continuous same-speaker turns.
   The first visible row remains unruled; lines add no height or interaction targets.
 - General-purpose microphone recording, pause/resume and file import are supported.
@@ -29,7 +29,9 @@ build identifier and local receipts for actual installation state.
 - Folders and 미분류 share one section. 모든 녹음 is an aggregate; recent recordings are
   shortcuts. Drag/drop uses typed IDs and publishes changes only after successful save.
 - Speaker/text editing, split, undo/redo, history and TXT/Markdown copy/export exist.
-  Names can be manually reused within a folder; automatic voice matching is not shipped.
+  Names can be manually reused within a folder. Voice enrollment/matching integration
+  exists behind a disabled release gate; UI explicitly labels it validation-pending.
+  Neither enrollment nor matching can execute through normal app controls.
 - Completion, speaker issues, count mismatch and failure/cancellation are separate.
   Failed retranscription retains and labels the prior transcript.
 
@@ -43,6 +45,13 @@ build identifier and local receipts for actual installation state.
   Relevant edits invalidate only related evidence; title/display-name edits do not.
   Bulk reassignment never acknowledges hidden issues. This is not dataset approval.
 - Raw flags remain unchanged. UI triage is heuristic, not a calibrated confidence score.
+- Voice registration is separate from names-only reuse. Gated code includes encrypted
+  storage, explicit clean-span/permission confirmation, per-folder opt-in, ambiguous
+  result deferral, user-name protection and confirm/reject/undo without auto-learning.
+  Persist cleanup references before Keychain access; deletion/failed registration must
+  not orphan keys. Ordinary library saves/backups strip legacy plaintext embeddings.
+- The ad-hoc beta's login Keychain path is explicit. Future signed-app replacements
+  need a qualified access/reauthorization flow; never silently reset missing keys.
 - Full audio-hash/correction-head/snapshot identities, activity/coverage verification,
   UEM/RTTM datasets and training approval remain planned, not implemented.
 
@@ -53,7 +62,10 @@ Use the opt-in synthetic layout check for transcript changes, and inspect the ac
 installed window when authorized. Keep code-test results separate from model quality.
 
 Tests cover formatting, exact split boundaries, typed folder moves, publication/storage
-failure, explicit confirmation, schema compatibility and undo. Hardware interruption,
+failure, explicit confirmation, schema compatibility and undo. Voice tests use synthetic
+features/fake keys for encrypted storage, cancellation, stale-source deferral, unknown
+and conflicting proposals, cleanup/restart and the disabled product gate. These are not
+real-voice accuracy tests or a substitute for signed-app Keychain qualification. Hardware interruption,
 pointer drag/drop, VoiceOver and full IME/export checks remain independent QA gates;
 unit tests are not evidence that those workflows were manually tested.
 
@@ -69,9 +81,11 @@ licenses and private evidence before scoped cleanup.
 
 ## Research boundaries and next work
 
-- [Automatic speaker identification](automatic-speaker-identification.md) is a researched
-  proposal only: explicit voice enrollment, folder-scoped matching, unknown-person
-  rejection and protected voice storage. Names-only manual reuse remains shipped.
+- [Automatic speaker identification](automatic-speaker-identification.md) has implemented
+  integration and safety contracts but remains **blocked by the release gate**. A new
+  embedding recipe needs independent-session known/unknown calibration and evaluation.
+  Rejecting every speaker is not success. Do not enable collection just to demonstrate
+  an otherwise unqualified matching pipeline. Names-only manual reuse remains usable.
 - [Offline speaker-logic experiments](speaker-logic-experiments.md) separate unchanged-text
   alignment, word assignment and frozen-posterior postprocessing. They create research
   sidecars, not app documents; production projection-v1 and human edits remain unchanged.

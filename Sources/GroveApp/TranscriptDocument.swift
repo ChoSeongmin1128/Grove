@@ -211,12 +211,36 @@ struct TranscriptDocument: Codable, Hashable, Sendable {
         ]))
     }
 
-    mutating func applySpeakerProfile(_ profile: SavedSpeakerProfile, to id: UUID, similarity: Float?, confirmed: Bool) throws {
+    mutating func applySpeakerProfile(_ profile: SavedSpeakerProfile, to id: UUID, similarity: Float?, confirmed: Bool,
+                                     identityEvidence: SpeakerIdentityEvidence? = nil) throws {
         guard let speaker = speakers.first(where: { $0.id == id }) else { throw TranscriptEditError.missingSpeaker }
-        let match = SpeakerProfileMatch(folderID: profile.folderID, profileID: profile.id, similarity: similarity, isConfirmed: confirmed)
+        let match = SpeakerProfileMatch(folderID: profile.folderID, profileID: profile.id, similarity: similarity,
+                                        isConfirmed: confirmed, originalName: speaker.profileMatch?.originalName ?? speaker.name,
+                                        identityEvidence: identityEvidence)
         try commit(TranscriptChange(label: confirmed ? "저장한 화자 적용" : "저장한 목소리로 이름 추정", mutations: [
             .speakerName(id: id, before: speaker.name, after: profile.name),
             .speakerProfile(id: id, before: speaker.profileMatch, after: match)
+        ]))
+    }
+
+    mutating func confirmSpeakerIdentity(_ id: UUID) throws {
+        guard let speaker = speakers.first(where: { $0.id == id }), let old = speaker.profileMatch else {
+            throw TranscriptEditError.missingSpeaker
+        }
+        guard !old.isConfirmed else { return }
+        let confirmed = SpeakerProfileMatch(folderID: old.folderID, profileID: old.profileID,
+            similarity: old.similarity, isConfirmed: true, originalName: old.originalName, identityEvidence: old.identityEvidence)
+        try commit(TranscriptChange(label: "추정한 화자 이름 확인", mutations: [
+            .speakerProfile(id: id, before: old, after: confirmed)
+        ]))
+    }
+
+    mutating func rejectSpeakerIdentity(_ id: UUID) throws {
+        guard let speaker = speakers.first(where: { $0.id == id }), let old = speaker.profileMatch,
+              !old.isConfirmed else { throw TranscriptEditError.missingSpeaker }
+        try commit(TranscriptChange(label: "추정한 화자 이름 해제", mutations: [
+            .speakerName(id: id, before: speaker.name, after: old.originalName ?? "화자 \(speaker.order + 1)"),
+            .speakerProfile(id: id, before: old, after: nil)
         ]))
     }
 
