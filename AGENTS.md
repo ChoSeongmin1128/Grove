@@ -84,6 +84,9 @@ codesign --verify --deep --strict dist/Grove.app
 
 ## Document index
 
+- [`docs/speaker-logic-experiments.md`](docs/speaker-logic-experiments.md): offline-only
+  alignment/projection and limited-postprocessing ablations, identity checks, separate
+  text/activity metrics and no production integration.
 - [`docs/transcript-library-ux.md`](docs/transcript-library-ux.md): compact transcript rows,
   folder drag/drop and navigation, processing versus speaker-review states, explicit
   confirmation and schema-5 compatibility; distinct from dataset annotation.

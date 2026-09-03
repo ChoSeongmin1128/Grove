@@ -76,6 +76,21 @@ Model routing, transcription data, speaker review and schema are unchanged.
 
 ## Publication and next work
 
+- Offline-only speaker-logic research harnesses now separate unchanged-text alignment,
+  word assignment and frozen-posterior postprocessing. They write independent sidecars;
+  neither production projection-v1 nor stored documents are changed. See
+  [experiment contracts](speaker-logic-experiments.md). Private runs and full-text
+  inspection remain under ignored `results/`, not public documentation.
+- Regenerable build/Python caches and an obsolete research executable were moved to
+  a dedicated recoverable Trash location after checking active references. App assets,
+  evaluation inputs, raw evidence, source and locks were preserved. Rebuilding now
+  recreates the app build cache; no new app bundle was packaged or installed.
+- Temporary alignment weights, interpreter environment and download caches were also
+  removed from the working project after the experiments; pinned reproduction metadata
+  and raw outputs remain private. Re-run inference only after recreating those inputs.
+- Offline validation:43 Python suite checks plus13 alignment-contract checks passed.
+  The scientific evaluator suite ran in its qualified environment, not as skipped
+  checks. Swift/app packaging and UI smoke were not rerun for research-only tooling.
 - Public commits/pushes use the personal account, then restore the active GitHub CLI
   account to `nathan-glorang`, as specified in `AGENTS.md`.
 - Personal audio, references, labels, model outputs, raw or aggregate private evaluation
