@@ -1,0 +1,3 @@
+# Preserve upstream license text and the significant context lines in this patch.
+Sources/GroveApp/Resources/Fonts/OFL.txt -whitespace
+scripts/native-ultra8-harness/upstream.patch -whitespace

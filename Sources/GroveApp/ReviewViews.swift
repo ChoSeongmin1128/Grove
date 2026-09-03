@@ -23,7 +23,7 @@ struct ReviewInboxView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         Text("다시 들어볼 구간")
-                            .font(.system(.title, design: .serif).weight(.semibold))
+                            .font(GroveTypography.title)
                         Text("전체 전사를 읽는 대신 판단이 필요한 부분만 확인합니다.")
                             .foregroundStyle(.secondary)
                         ForEach(items, id: \.1.id) { meeting, segment in

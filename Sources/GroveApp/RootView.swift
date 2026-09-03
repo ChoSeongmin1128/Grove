@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @ObservedObject var store: GroveStore
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var pendingImport: PendingImport?
+
+    private struct PendingImport: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -21,6 +27,7 @@ struct RootView: View {
                 } label: {
                     Label("파일 가져오기", systemImage: "square.and.arrow.down")
                 }
+                .disabled(store.isBusy)
 
                 Button {
                     store.isPresentingNewMeeting = true
@@ -28,10 +35,20 @@ struct RootView: View {
                     Label("새 회의", systemImage: "record.circle")
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(store.isBusy)
             }
         }
         .sheet(isPresented: $store.isPresentingNewMeeting) {
             NewMeetingSheet(store: store)
+        }
+        .sheet(item: $pendingImport) { request in
+            ImportRecordingOptionsSheet(store: store, source: request.url)
+        }
+        .sheet(item: $store.meetingToRename) { meeting in
+            RecordingNameEditor(store: store, meeting: meeting)
+        }
+        .sheet(item: $store.meetingForOriginalFiles) { meeting in
+            OriginalRecordingFilesSheet(store: store, meetingID: meeting.id)
         }
         .fileImporter(
             isPresented: $store.isPresentingImporter,
@@ -41,7 +58,7 @@ struct RootView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    Task { await store.importRecording(from: url) }
+                    pendingImport = PendingImport(url: url)
                 }
             case .failure(let error):
                 store.alertMessage = error.localizedDescription
@@ -59,11 +76,14 @@ struct RootView: View {
             Text(store.alertMessage ?? "")
         }
         .overlay(alignment: .bottom) {
-            if store.isRecording, let meeting = store.activeMeeting {
-                RecordingHUD(store: store, meeting: meeting)
-                    .padding(.bottom, 18)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            VStack(spacing: 8) {
+                FolderMoveFeedbackView(store: store)
+                if store.isRecording, let meeting = store.activeMeeting {
+                    RecordingHUD(store: store, meeting: meeting)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .padding(.bottom, 18)
         }
     }
 
@@ -72,6 +92,10 @@ struct RootView: View {
         switch store.selection {
         case .library, .none:
             LibraryHomeView(store: store)
+        case .unfiled:
+            LibraryHomeView(store: store, showsUnfiled: true)
+        case .folder(let id):
+            LibraryHomeView(store: store, folderID: id)
         case .review:
             ReviewInboxView(store: store)
         case .glossary:

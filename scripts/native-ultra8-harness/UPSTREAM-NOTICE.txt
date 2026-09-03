@@ -1,0 +1,22 @@
+Grove Ultra8 helper upstream notice
+
+The worker uses a modified parakeet-rs 0.3.7 source checkout at
+1d6ffeae1b8641f497e4ef9a5e9fff37aa7a4181 (MIT OR Apache-2.0).
+The patch increases the compile-time speaker output capacity from four to eight.
+It does not train or alter model weights and does not enforce an exact speaker count.
+The bundled worker uses ONNX Runtime 1.28.0 through ort 2.0.0-rc.13 (MIT OR Apache-2.0).
+See the per-component licenses and ONNX Runtime third-party notices in this directory.
+
+The helper's timestamp semantics follow the public default postprocessing parameters
+in NVIDIA NeMo Speech at ea1ebf55b25fceff372f885b4e7b5803f3d33dea (Apache-2.0):
+strictly greater than 0.5 starts, strictly less than 0.5 stops, equality retains
+state; no median smoothing, padding, gap merging or minimum duration.
+https://github.com/NVIDIA-NeMo/Speech/blob/ea1ebf55b25fceff372f885b4e7b5803f3d33dea/nemo/collections/asr/parts/utils/vad_utils.py
+
+Model weights are NOT included in the worker. The separately supplied Ultra8 ONNX
+artifact comes from investguy/ultra_diar_streaming_sortformer_8spk_v1_onnx at revision
+2a45f114eaf920b4d50b04a5964cc1aab35ddf5f, based on the author's
+mago-ai/ultra_diar_streaming_sortformer_8spk_v1 fine-tune of NVIDIA Sortformer v2.1.
+The author labels their weights/documentation Apache-2.0; the original NVIDIA base
+has NVIDIA Open Model License terms. Those separate terms are not replaced by this
+helper's source-code notices. Local testing is not a review of public redistribution.

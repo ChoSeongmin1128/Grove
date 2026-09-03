@@ -258,8 +258,8 @@ GB 저장 모델을 필요로 하지 않으므로 범위에서 제외합니다.
 
 ### 도입 가치가 높은 항목
 
-- Core Audio process tap을 기본으로 유지
-- mic/system source를 영구적으로 분리
+- 현재 Grove는 마이크 녹음과 파일 가져오기만 지원하며 system-output capture는 도입하지 않음
+- 기존 이중 채널 파일은 출처를 보존해 읽되 신규 녹음 경로와 혼동하지 않음
 - raw transcript, diarized transcript, corrected transcript와 summary를 별도 revision으로 관리
 - meeting-local speaker cluster와 확인된 person profile 분리
 - speaker sample 재생 후 이름 확인
@@ -291,17 +291,18 @@ GB 저장 모델을 필요로 하지 않으므로 범위에서 제외합니다.
 - M4 Pro 외 저사양 Mac의 memory·energy
 
 `Korean supported`, `multilingual`, `speaker diarization`은 세 기능이 함께 정확하다는 뜻이 아닙니다.
-Grove는 후보 코드를 도입하더라도 현재 한국어 회의 샘플로 별도 release gate를 유지해야 합니다.
+Grove는 후보 코드를 도입하더라도 사용이 승인된 독립적인 한국어 평가 자료로 별도 release gate를 유지해야 합니다.
 
 ## 다음 검증 제안
 
 Meeting Transcriber, Muesli, diarize의 shallow source audit는 수행했습니다. 다음 단계는 코드를
-복사하는 것이 아니라 동일한 비공개 한국어 4화자 reference로 후보 pipeline을 실행하는 것입니다.
+복사하는 것이 아니라 동일한 평가 조건으로 후보 pipeline을 실행하는 것입니다. 개인 회의에서
+도출된 결과는 이 공개 문서에 포함하지 않습니다. 현재 제품 상태는 `handoff.md`를 확인하십시오.
 
-1. SpeakerKit/pyannote Community-1 현재 baseline의 DER/JER를 정답 4명으로 계산
+1. SpeakerKit/pyannote Community-1의 DER/JER를 독립적인 화자 정답과 비교
 2. FluidAudio offline VBx와 Sortformer 4-speaker를 같은 RTTM 기준으로 비교
 3. MOSS-Transcribe-Diarize MLX를 speaker-attributed CER/cpCER 보조 후보로 비교
 4. 구간·cluster 재지정, 병합과 Undo를 Grove 자체 versioned schema로 구현
 
-이 평가 전에는 외부 코드를 Grove에 복사하거나 diarization dependency를 제품 기본값으로
-추가하지 않습니다.
+외부 코드나 diarization dependency를 새로 도입할 때는 실행 가능성과 품질 검증을 분리합니다.
+현재 기본 프리셋은 베타 제품 정책이며, 그 자체를 일반적인 정확도 우위로 해석하지 않습니다.

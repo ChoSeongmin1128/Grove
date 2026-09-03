@@ -2,14 +2,35 @@
 import Foundation
 
 @MainActor
+protocol AudioRecordingDevice: AnyObject {
+    var isRecording: Bool { get }
+    var currentTime: TimeInterval { get }
+    var isMeteringEnabled: Bool { get set }
+    func prepareToRecord() -> Bool
+    func record() -> Bool
+    func pause()
+    func stop()
+    func updateMeters()
+    func averagePower(forChannel channelNumber: Int) -> Float
+}
+
+extension AVAudioRecorder: AudioRecordingDevice {}
+
+@MainActor
 final class AudioRecorder: NSObject, ObservableObject {
     @Published private(set) var isRecording = false
+    @Published private(set) var isPaused = false
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var level: Double = 0
 
-    private var recorder: AVAudioRecorder?
+    private var recorder: (any AudioRecordingDevice)?
     private var meterTimer: Timer?
-    private var startedAt: Date?
+    private let makeRecorder: (URL, [String: Any]) throws -> any AudioRecordingDevice
+
+    init(makeRecorder: @escaping (URL, [String: Any]) throws -> any AudioRecordingDevice = { try AVAudioRecorder(url: $0, settings: $1) }) {
+        self.makeRecorder = makeRecorder
+        super.init()
+    }
 
     func requestPermission() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -25,6 +46,7 @@ final class AudioRecorder: NSObject, ObservableObject {
     }
 
     func start(to url: URL) throws {
+        guard !isRecording else { throw RecordingError.couldNotStart }
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 48_000,
@@ -32,13 +54,13 @@ final class AudioRecorder: NSObject, ObservableObject {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
             AVEncoderBitRateKey: 128_000,
         ]
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
+        let recorder = try makeRecorder(url, settings)
         recorder.isMeteringEnabled = true
         guard recorder.prepareToRecord(), recorder.record() else {
             throw RecordingError.couldNotStart
         }
         self.recorder = recorder
-        startedAt = Date()
+        isPaused = false
         elapsed = 0
         level = 0
         isRecording = true
@@ -54,16 +76,30 @@ final class AudioRecorder: NSObject, ObservableObject {
 
     @discardableResult
     func stop() -> TimeInterval {
+        let finalDuration = recorder?.currentTime ?? elapsed
         recorder?.stop()
         recorder = nil
         meterTimer?.invalidate()
         meterTimer = nil
-        let finalDuration = startedAt.map { Date().timeIntervalSince($0) } ?? elapsed
-        startedAt = nil
         isRecording = false
+        isPaused = false
         elapsed = finalDuration
         level = 0
         return finalDuration
+    }
+
+    func pause() {
+        guard isRecording, !isPaused, let recorder else { return }
+        recorder.pause()
+        elapsed = recorder.currentTime
+        isPaused = true
+        level = 0
+    }
+
+    func resume() throws {
+        guard isRecording, isPaused, let recorder else { return }
+        guard recorder.record() else { throw RecordingError.couldNotStart }
+        isPaused = false
     }
 
     @objc private func updateMeter() {
@@ -71,9 +107,7 @@ final class AudioRecorder: NSObject, ObservableObject {
         recorder.updateMeters()
         let decibels = recorder.averagePower(forChannel: 0)
         level = max(0, min(1, pow(10, Double(decibels) / 28)))
-        if let startedAt {
-            elapsed = Date().timeIntervalSince(startedAt)
-        }
+        elapsed = recorder.currentTime
     }
 }
 

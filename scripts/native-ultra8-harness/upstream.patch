@@ -1,0 +1,22 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -54,5 +54,6 @@ serde = { version = "1.0", features = ["derive"] }
+ serde_json = "1.0"
+ realfft = "3"
++hmac-sha256 = "=1.1.14"
+ 
+ [dev-dependencies]
+ 
+diff --git a/src/sortformer.rs b/src/sortformer.rs
+--- a/src/sortformer.rs
++++ b/src/sortformer.rs
+@@ -43,7 +43,7 @@ const SPKCACHE_LEN: usize = 188; // Speaker cache length
+ const RIGHT_CONTEXT: usize = 1; // Future frames for lookahead
+ const SUBSAMPLING: usize = 8; // Audio frames -> model frames
+ const EMB_DIM: usize = 512; // Embedding dimension
+-pub const NUM_SPEAKERS: usize = 4; // Model supports 4 speakers
++pub const NUM_SPEAKERS: usize = 8; // Grove Ultra8 adapter: output capacity, not an exact-count request.
+ const FRAME_DURATION: f32 = 0.08; // 80ms per frame
+ 
+ // Cache compression params (from NeMo)

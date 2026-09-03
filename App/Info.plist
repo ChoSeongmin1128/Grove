@@ -19,9 +19,11 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>0.3.0</string>
+    <key>GroveReleaseChannel</key>
+    <string>local-beta.8</string>
     <key>CFBundleVersion</key>
-	<string>2</string>
+	<string>10</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>
@@ -30,10 +32,21 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>회의 음성을 이 Mac에 녹음하고 한국어로 전사하기 위해 마이크 접근이 필요합니다.</string>
-    <key>NSAudioCaptureUsageDescription</key>
-    <string>온라인 회의의 상대방 음성을 로컬 회의록에 포함하기 위해 Mac의 출력 오디오 접근이 필요합니다.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.choseongmin1128.grove.recording-reference</string>
+            <key>UTTypeDescription</key>
+            <string>Grove Recording Reference</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
     <key>NSSupportsAutomaticTermination</key>
     <false/>
     <key>NSSupportsSuddenTermination</key>

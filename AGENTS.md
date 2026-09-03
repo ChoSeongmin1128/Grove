@@ -20,6 +20,8 @@ inference, proposals, and unverified items.
 ## Product boundaries
 
 - Grove is a general-purpose local macOS meeting recorder and transcription app.
+- New recording is microphone-only. Do not reintroduce computer/system-output capture;
+  file import and read-only compatibility with existing recordings remain supported.
 - Do not hardcode organization names, project terms, people, or private meeting examples.
 - User glossaries are optional machine-local profiles and never public defaults.
 - Preserve original audio and raw transcripts. Store corrections, speaker assignments,
@@ -42,8 +44,24 @@ inference, proposals, and unverified items.
 
 - The canonical installed app is `/Applications/Grove.app`.
 - Validate tests, release packaging, code signing, and a smoke test before replacing it.
+- An explicit user-approved local-beta exception may waive full UI QA. Record the
+  exception and remaining limitations; never call unperformed checks a pass. Do not
+  interrupt an active user test or overwrite the bundle they are running.
 - Research-only work does not authorize replacing the installed app.
 - Do not leave duplicate apps or generated artifacts in Downloads or `/Applications`.
+
+## Git account and publication
+
+- Grove commits and pushes use the personal `ChoSeongmin1128` account/repository.
+- Use that account's public noreply commit identity; do not expose a private email or
+  change global Git author settings for this project.
+- After completing commit/push work, restore the active `gh` account to `nathan-glorang`
+  and verify the switch. Do not leave the personal account active between tasks.
+- Inspect the exact staged files and diff before every push. Raw/test meeting data,
+  user libraries, local model files and generated result artifacts remain excluded.
+- Personal-meeting-derived benchmark numbers and qualitative error analyses also stay
+  private, even when names/audio have been removed. Public docs contain product behavior,
+  generic methodology and upstream technical information, not private sample results.
 
 ## Work sequence
 
@@ -66,6 +84,35 @@ codesign --verify --deep --strict dist/Grove.app
 
 ## Document index
 
+- [`docs/transcript-library-ux.md`](docs/transcript-library-ux.md): compact transcript rows,
+  folder drag/drop and navigation, processing versus speaker-review states, explicit
+  confirmation and schema-5 compatibility; distinct from dataset annotation.
+- [`docs/recording-file-management.md`](docs/recording-file-management.md): recording title
+  changes, original file export/path access, source protection and verification limits.
+- [`docs/artifact-retention.md`](docs/artifact-retention.md): active app assets versus
+  regenerable experiments; retained evidence and scoped cleanup.
+- [`docs/review-mode-spec.md`](docs/review-mode-spec.md): planned native review workflow,
+  edit/invalidation/undo matrix and phased completion gates; NOT implemented.
+- [`docs/annotation-schema.md`](docs/annotation-schema.md): planned audio/model/correction/
+  review/snapshot identities, timebases, content binding and migration.
+- [`docs/labeling-guidelines-ko.md`](docs/labeling-guidelines-ko.md): planned Korean
+  verbatim labeling, uncertainty, overlap and independent completeness rules.
+- [`docs/dataset-export.md`](docs/dataset-export.md): planned backup versus approved dataset,
+  immutable snapshots, RTTM/UEM, permission and development/holdout separation.
+
+- [`docs/ultra8-option-and-speaker-count.md`](docs/ultra8-option-and-speaker-count.md):
+  Ultra8 automatic-default policy, count boundaries, same-engine comparisons, native worker
+  and historical engine provenance.
+
+- [`docs/microphone-folders-and-speaker-reuse.md`](docs/microphone-folders-and-speaker-reuse.md):
+  microphone-only recording, pause/resume, per-file options, folders, manual speaker
+  reuse, and the evidence-based hold on automatic voice identity matching.
+
+- [`docs/release-readiness.md`](docs/release-readiness.md): requirement-by-requirement
+  completion audit, pending authorization/runtime gates, and installation resume sequence.
+
+- [`docs/grove-v0.3-implementation-plan-2026-09-03.md`](docs/grove-v0.3-implementation-plan-2026-09-03.md):
+  approved v0.3 scope, typography, speaker/text editing, export, and engine-validation gates.
 - [`docs/handoff.md`](docs/handoff.md): current implementation state and next work.
 - [`docs/open-source-local-meeting-apps-2026-09-02.md`](docs/open-source-local-meeting-apps-2026-09-02.md):
   local meeting app source review.

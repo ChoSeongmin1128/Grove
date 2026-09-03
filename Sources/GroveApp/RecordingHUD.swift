@@ -3,47 +3,38 @@ import SwiftUI
 struct RecordingHUD: View {
     @ObservedObject var store: GroveStore
     @ObservedObject private var recorder: AudioRecorder
-    @ObservedObject private var systemCapture: SystemAudioTapService
     let meeting: MeetingRecord
 
     init(store: GroveStore, meeting: MeetingRecord) {
         self.store = store
         self.meeting = meeting
         recorder = store.recorder
-        systemCapture = store.systemCapture
     }
 
     var body: some View {
         HStack(spacing: 16) {
             Circle()
-                .fill(.red)
+                .fill(recorder.isPaused ? Color.secondary : .red)
                 .frame(width: 10, height: 10)
                 .shadow(color: .red.opacity(0.35), radius: 5)
             VStack(alignment: .leading, spacing: 2) {
                 Text(meeting.title)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
-                Text("원본 저장 중")
+                Text(recorder.isPaused ? "일시정지됨 · 멈춘 시간은 저장하지 않습니다" : "원본 저장 중")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            Text(elapsed.clockString)
+            Text(recorder.elapsed.clockString)
                 .font(.body.monospacedDigit().weight(.medium))
-            if store.activeCaptureMode == .systemAndMicrophone {
-                channelMeter(
-                    label: "System",
-                    symbol: "speaker.wave.2.fill",
-                    level: systemCapture.level
-                )
-                channelMeter(
-                    label: "Mic",
-                    symbol: "mic.fill",
-                    level: recorder.level
-                )
-            } else {
-                channelMeter(label: "Mic", symbol: "mic.fill", level: recorder.level)
-            }
+            channelMeter(label: "마이크", symbol: "mic.fill", level: recorder.level)
             Divider().frame(height: 26)
+            Button {
+                store.toggleRecordingPause()
+            } label: {
+                Label(recorder.isPaused ? "계속 녹음" : "일시정지", systemImage: recorder.isPaused ? "play.fill" : "pause.fill")
+            }
+            .accessibilityIdentifier("recording.pause-resume")
             Button("종료") {
                 Task { await store.stopRecording() }
             }
@@ -58,12 +49,6 @@ struct RecordingHUD: View {
         }
         .shadow(color: .black.opacity(0.16), radius: 20, y: 7)
         .frame(maxWidth: 760)
-    }
-
-    private var elapsed: TimeInterval {
-        store.activeCaptureMode == .systemAndMicrophone
-            ? max(systemCapture.elapsed, recorder.elapsed)
-            : recorder.elapsed
     }
 
     private func channelMeter(label: String, symbol: String, level: Double) -> some View {

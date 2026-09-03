@@ -1,4 +1,5 @@
 import Foundation
+import GroveInference
 
 enum MeetingStatus: String, Codable, CaseIterable, Sendable {
     case recording
@@ -11,7 +12,7 @@ enum MeetingStatus: String, Codable, CaseIterable, Sendable {
         switch self {
         case .recording: "녹음 중"
         case .processing: "정확 전사 중"
-        case .ready: "완료"
+        case .ready: "전사 완료"
         case .needsReview: "확인 필요"
         case .failed: "처리 실패"
         }
@@ -28,18 +29,11 @@ enum MeetingStatus: String, Codable, CaseIterable, Sendable {
     }
 }
 
-enum CaptureMode: String, Codable, CaseIterable, Identifiable, Sendable {
+// The second case is retained solely to decode recordings made by older versions.
+enum CaptureMode: String, Codable, Sendable {
     case microphone = "마이크"
     case systemAndMicrophone = "시스템 + 마이크"
 
-    var id: String { rawValue }
-
-    var symbol: String {
-        switch self {
-        case .microphone: "mic.fill"
-        case .systemAndMicrophone: "rectangle.on.rectangle.and.waveform"
-        }
-    }
 }
 
 struct TranscriptSegment: Identifiable, Codable, Hashable, Sendable {
@@ -81,6 +75,11 @@ struct MeetingRecord: Identifiable, Codable, Hashable, Sendable {
     var microphoneAudioPath: String? = nil
     var captureManifestPath: String? = nil
     var captureMode: CaptureMode? = nil
+    var inferenceConfiguration: InferenceConfiguration? = nil
+    var channelInferenceConfigurations: [String: InferenceConfiguration]? = nil
+    var processingOutcome: MeetingProcessingOutcome? = nil
+    var completedResult: MeetingCompletedResult? = nil
+    var folderID: UUID? = nil
     var glossaryProfile: String
     var transcript: [TranscriptSegment]
     var claims: [EvidenceClaim]
@@ -101,6 +100,8 @@ struct GlossaryTerm: Identifiable, Codable, Hashable, Sendable {
 
 enum SidebarDestination: Hashable {
     case library
+    case unfiled
+    case folder(UUID)
     case review
     case glossary
     case meeting(UUID)

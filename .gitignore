@@ -22,6 +22,12 @@
 *.srt
 *.vtt
 *.jsonl
+*.safetensors
+*.gguf
+*.nemo
+*.onnx
+*.mlmodelc/
+*.mlpackage/
 
 # Credentials and machine-local configuration
 .env
@@ -37,6 +43,8 @@
 /.build/
 /dist/
 /.swiftpm/
+**/.build/
+**/.swiftpm/
 **/__pycache__/
 *.pyc
 .DS_Store
