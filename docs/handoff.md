@@ -51,9 +51,9 @@ build identifier and local receipts for actual installation state.
 - Folders and 미분류 share one section. 모든 녹음 is an aggregate; recent recordings are
   shortcuts. Drag/drop uses typed IDs and publishes changes only after successful save.
 - Speaker/text editing, split, undo/redo, history and TXT/Markdown copy/export exist.
-  Names can be manually reused within a folder. Voice enrollment/matching integration
-  exists behind a disabled release gate; UI explicitly labels it validation-pending.
-  Neither enrollment nor matching can execute through normal app controls.
+  Names can be manually reused within a folder. Dedicated microphone enrollment is
+  available from team profiles. Automatic naming and legacy enrollment from meeting
+  utterances remain behind the disabled release gate.
 - Completion, speaker issues, count mismatch and failure/cancellation are separate.
   Failed retranscription retains and labels the prior transcript.
 
@@ -67,13 +67,14 @@ build identifier and local receipts for actual installation state.
   Relevant edits invalidate only related evidence; title/display-name edits do not.
   Bulk reassignment never acknowledges hidden issues. This is not dataset approval.
 - Raw flags remain unchanged. UI triage is heuristic, not a calibrated confidence score.
-- Voice registration is separate from names-only reuse. Gated code includes encrypted
-  storage, explicit clean-span/permission confirmation, per-folder opt-in, ambiguous
-  result deferral, user-name protection and confirm/reject/undo without auto-learning.
+- Voice registration is separate from names-only reuse. Microphone enrollment uses
+  encrypted storage and explicit consent / single-speaker confirmation. Gated matching
+  uses selected attendance candidates, ambiguous-result deferral, user-name protection
+  and confirm/reject/undo without auto-learning.
   Persist cleanup references before Keychain access; deletion/failed registration must
   not orphan keys. Ordinary library saves/backups strip legacy plaintext embeddings.
-- The ad-hoc beta's login Keychain path is explicit. Future signed-app replacements
-  need a qualified access/reauthorization flow; never silently reset missing keys.
+- Signed-app replacements need a qualified Keychain access / reauthorization flow;
+  never silently reset missing keys.
 - Full audio-hash/correction-head/snapshot identities, activity/coverage verification,
   UEM/RTTM datasets and training approval remain planned, not implemented.
 
@@ -105,10 +106,10 @@ licenses and private evidence before scoped cleanup.
 ## Research boundaries and next work
 
 - [Automatic speaker identification](automatic-speaker-identification.md) has implemented
-  integration and safety contracts but remains **blocked by the release gate**. A new
-  embedding recipe needs independent-session known/unknown calibration and evaluation.
-  Rejecting every speaker is not success. Do not enable collection just to demonstrate
-  an otherwise unqualified matching pipeline. Names-only manual reuse remains usable.
+  microphone enrollment and attendance selection. **Automatic naming remains gated**.
+  A new embedding recipe needs independent-session known/unknown calibration and
+  evaluation. Rejecting every speaker is not success. Enrollment alone does not qualify
+  automatic naming. Names-only manual reuse remains usable.
 - [Offline speaker-logic experiments](speaker-logic-experiments.md) separate unchanged-text
   alignment, word assignment and frozen-posterior postprocessing. They create research
   sidecars, not app documents; production projection-v1 and human edits remain unchanged.

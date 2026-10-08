@@ -72,6 +72,10 @@ inference, proposals, and unverified items.
 - Personal-meeting-derived benchmark numbers and qualitative error analyses also stay
   private, even when names/audio have been removed. Public docs contain product behavior,
   generic methodology and upstream technical information, not private sample results.
+- Meeting timing reports separate audio preparation, transcription model loading /
+  inference, diarization and speaker projection. Report the sequential total and its
+  scope; exclude unrelated idle gaps. Record first-use/cache, priority and memory-pressure
+  conditions. A worker-stage sum is not a measured GUI save / rendering duration.
 
 ## Resume and MVP integration rules
 
