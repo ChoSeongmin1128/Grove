@@ -96,7 +96,8 @@ struct LibraryHomeView: View {
             Text(isSearching ? "검색 결과 \(recordings.count)개" : "녹음 \(recordings.count)개")
                 .font(GroveTypography.label).foregroundStyle(.secondary)
                 .padding(.horizontal, 16).padding(.vertical, 14)
-            ForEach(recordings) { meeting in
+            ForEach(Array(recordings.enumerated()), id: \.element.id) { index, meeting in
+                if index > 0 { Divider().padding(.horizontal, 16) }
                 let document = store.transcriptDocuments[meeting.id]
                 let status = MeetingPresentationStatus(meeting: meeting, document: document)
                 let reviewCount = document?.speakerReviewCount ?? 0
@@ -126,7 +127,6 @@ struct LibraryHomeView: View {
                             .foregroundStyle(.tertiary)
                     }
                     .padding(16)
-                    .background(GroveTheme.surface)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -136,12 +136,11 @@ struct LibraryHomeView: View {
                     Divider()
                     MeetingMoveMenu(store: store, meeting: meeting)
                 }
-                Divider()
             }
         }
         .background(GroveTheme.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
-            RoundedRectangle(cornerRadius: 10).stroke(GroveTheme.divider)
+            RoundedRectangle(cornerRadius: 10).stroke(GroveTheme.divider).allowsHitTesting(false)
         }
     }
 }

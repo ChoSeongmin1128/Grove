@@ -82,39 +82,49 @@ struct OriginalRecordingFilesSheet: View {
     private var isExporting: Bool { store.exportingOriginalMeetingID == meetingID }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("원본 파일").font(GroveTypography.heading)
-            Text(meeting?.title ?? "녹음을 찾을 수 없습니다")
-                .font(.headline).lineLimit(2)
-            Text("가져온 파일 또는 녹음한 파일을 원래 형식 그대로 저장합니다. 앱에 보관된 원본은 이동하거나 변경하지 않습니다.")
-                .font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("원본 파일").font(GroveTypography.title)
+                Text(meeting?.title ?? "녹음을 찾을 수 없습니다")
+                    .font(GroveTypography.body).foregroundStyle(.secondary).lineLimit(2)
+            }
             if sources.isEmpty {
                 Text("이 녹음에는 연결된 원본 파일이 없습니다.").foregroundStyle(.secondary)
             } else {
                 ForEach(sources) { source in
-                    VStack(alignment: .leading, spacing: 10) {
-                        if sources.count > 1 { Text(source.label).font(.headline) }
-                        Text(source.url.lastPathComponent).font(.callout).textSelection(.enabled)
-                        Text(source.url.path).font(.caption).foregroundStyle(.secondary)
-                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Label(sources.count > 1 ? source.label : "녹음 파일", systemImage: "waveform")
+                                .font(GroveTypography.heading)
+                            Spacer()
+                            Text(source.url.pathExtension.uppercased()).font(GroveTypography.label).foregroundStyle(.secondary)
+                        }
+                        DisclosureGroup("파일 위치") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(source.url.lastPathComponent).foregroundStyle(GroveTheme.ink)
+                                Text(source.url.path).foregroundStyle(.secondary)
+                            }.font(GroveTypography.bodySmall).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                        }.font(GroveTypography.label)
                         if !isReadable(source.url) {
                             Text("현재 경로에서 원본 파일을 읽을 수 없습니다. 이동되거나 삭제되었는지 확인해 주세요.")
                                 .font(.caption).foregroundStyle(.red)
                         }
                         HStack {
-                            Button("Finder에서 보기") { reveal(source) }.disabled(!isReadable(source.url))
-                            Button("경로 복사") { copyPath(source) }
+                            Button("Finder에서 보기") { reveal(source) }.modifier(GroveActionAppearance()).disabled(!isReadable(source.url))
+                            Button("경로 복사") { copyPath(source) }.modifier(GroveActionAppearance())
                             Spacer()
-                            Button("원본 파일 저장…") { save(source) }
-                                .buttonStyle(.borderedProminent)
+                            Button("사본 저장…") { save(source) }
+                                .buttonStyle(.borderedProminent).controlSize(.large).font(GroveTypography.label)
+                                .tint(Color(nsColor: .controlAccentColor)).foregroundStyle(.white)
                                 .disabled(!store.canExportOriginal(meetingID: meetingID) || !isReadable(source.url))
                         }
-                    }
+                    }.padding(16).background(GroveTheme.canvas, in: RoundedRectangle(cornerRadius: 12))
                     if source.id != sources.last?.id { Divider() }
                 }
             }
             if isRecording {
-                Text("녹음 중에는 경로만 확인할 수 있습니다. 원본 파일 저장은 녹음을 종료한 뒤 가능합니다.")
+                Text("녹음을 마친 뒤 사본을 저장할 수 있습니다.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
@@ -126,10 +136,10 @@ struct OriginalRecordingFilesSheet: View {
                     Button("저장 취소") { exportTask?.cancel() }
                 }
                 Spacer()
-                Button("닫기") { dismiss() }.keyboardShortcut(.cancelAction).disabled(isExporting)
+                Button("닫기") { dismiss() }.modifier(GroveActionAppearance()).keyboardShortcut(.cancelAction).disabled(isExporting)
             }
         }
-        .padding(24).frame(width: 580)
+        .padding(28).frame(width: 600)
         .interactiveDismissDisabled(isExporting)
         .onDisappear { exportTask?.cancel() }
     }

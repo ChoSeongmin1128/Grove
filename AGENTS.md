@@ -55,6 +55,8 @@ inference, proposals, and unverified items.
   interrupt an active user test or overwrite the bundle they are running.
 - Research-only work does not authorize replacing the installed app.
 - Do not leave duplicate apps or generated artifacts in Downloads or `/Applications`.
+- Prefer offscreen rendering for design checks. Explain live dialog checks before opening
+  them, close validation dialogs promptly and avoid interrupting the user's app inspection.
 
 ## Git account and publication
 

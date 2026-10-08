@@ -19,7 +19,6 @@ struct RootView: View {
             detail
                 .background(GroveTheme.canvas)
         }
-        .tint(GroveTheme.grove)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {

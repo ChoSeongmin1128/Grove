@@ -18,11 +18,23 @@ struct TranscriptLayoutRenderingTests {
             audioPath: base.appendingPathComponent("recording.m4a").path, glossaryProfile: "", transcript: [], claims: [],
             errorMessage: "전사를 중단했습니다. 원본 녹음은 보존됩니다.")
         meeting.processingOutcome = .init(kind: .cancelled, message: meeting.errorMessage)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try Data([0]).write(to: URL(fileURLWithPath: try #require(meeting.audioPath)))
         store.meetings = [meeting]
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        for (name, scheme, width) in [("dark", ColorScheme.dark, 960.0), ("light", .light, 960.0), ("compact", .dark, 700.0)] {
-            let host = NSHostingView(rootView: MeetingDetailView(store: store, meeting: meeting)
-                .environment(\.colorScheme, scheme).tint(GroveTheme.grove)
+        let views: [(String, AnyView, ColorScheme, Double)] = [
+            ("detail-dark", AnyView(MeetingDetailView(store: store, meeting: meeting)), .dark, 960),
+            ("detail-light", AnyView(MeetingDetailView(store: store, meeting: meeting)), .light, 960),
+            ("detail-compact", AnyView(MeetingDetailView(store: store, meeting: meeting)), .dark, 700),
+            ("original-dark", AnyView(OriginalRecordingFilesSheet(store: store, meetingID: meeting.id)), .dark, 700),
+            ("original-light", AnyView(OriginalRecordingFilesSheet(store: store, meetingID: meeting.id)), .light, 700),
+            ("library-dark", AnyView(LibraryHomeView(store: store)), .dark, 960),
+            ("calendar-row-dark", AnyView(CalendarMeetingRow(meeting: .init(id: "synthetic", calendarID: "synthetic",
+                title: "제품 검토 회의", start: Date(), end: Date().addingTimeInterval(3600), calendarName: "업무"),
+                isBusy: false, record: {}).padding(24)), .dark, 700)
+        ]
+        for (name, view, scheme, width) in views {
+            let host = NSHostingView(rootView: view.environment(\.colorScheme, scheme)
                 .frame(width: width, height: 680).background(GroveTheme.canvas))
             host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
             let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: width, height: 680), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -34,7 +46,7 @@ struct TranscriptLayoutRenderingTests {
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let normal = try #require(bitmap.representation(using: .png, properties: [:]))
-            try normal.write(to: output.appendingPathComponent("detail-\(name).png"))
+            try normal.write(to: output.appendingPathComponent("\(name).png"))
             window.contentView = nil
         }
     }

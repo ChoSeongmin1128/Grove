@@ -18,7 +18,7 @@ struct CalendarHomeSection: View {
                     }
                     Spacer()
                     if models.isInstalling { ProgressView().controlSize(.small) }
-                    else { Button("모델 설치") { models.install() }.disabled(isBusy) }
+                    else { Button("모델 설치") { models.install() }.modifier(GroveActionAppearance()).disabled(isBusy) }
                 }.padding(18).background(GroveTheme.grove.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
             }
             VStack(alignment: .leading, spacing: 12) {
@@ -26,13 +26,14 @@ struct CalendarHomeSection: View {
                     Label("다가오는 회의", systemImage: "calendar").font(GroveTypography.heading)
                     Spacer()
                     Button("일정 설정") { UserDefaults.standard.set("calendar", forKey: "settingsTab"); openSettings() }
-                        .buttonStyle(.plain).font(GroveTypography.label).foregroundStyle(GroveTheme.grove)
+                        .modifier(GroveActionAppearance()).controlSize(.regular)
                 }
                 if !schedule.enabled {
                     HStack {
                         Text("Mac 캘린더에서 회의 일정을 가져옵니다.").foregroundStyle(.secondary)
                         Spacer()
                         Button("캘린더 연결") { Task { await schedule.setEnabled(true) } }
+                            .modifier(GroveActionAppearance())
                     }
                 } else if let message = schedule.message {
                     Text(message).foregroundStyle(.secondary)
@@ -40,22 +41,32 @@ struct CalendarHomeSection: View {
                     Text("선택한 캘린더에 예정된 회의가 없습니다.").foregroundStyle(.secondary)
                 } else {
                     ForEach(Array(schedule.meetings.prefix(3))) { event in
-                        HStack(spacing: 16) {
-                            Text(event.start, format: .dateTime.hour().minute()).font(GroveTypography.heading).monospacedDigit()
-                                .frame(width: 65, alignment: .leading)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(event.title).font(GroveTypography.body).lineLimit(1)
-                                Text("\(event.start.formatted(date: .abbreviated, time: .omitted)) / \(event.calendarName)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("녹음 시작") { schedule.record(event) }.disabled(isBusy)
-                        }.padding(.vertical, 7)
+                        CalendarMeetingRow(meeting: event, isBusy: isBusy) { schedule.record(event) }
                     }
                 }
             }.padding(18).background(GroveTheme.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).stroke(GroveTheme.divider) }
         }
+    }
+}
+
+struct CalendarMeetingRow: View {
+    let meeting: ScheduledMeeting
+    let isBusy: Bool
+    let record: () -> Void
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Text(meeting.start, format: .dateTime.hour().minute()).font(GroveTypography.heading).monospacedDigit()
+                .fixedSize().frame(minWidth: 80, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(meeting.title).font(GroveTypography.body).lineLimit(1)
+                Text("\(meeting.start.formatted(date: .abbreviated, time: .omitted)) / \(meeting.calendarName)")
+                    .font(GroveTypography.bodySmall).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("녹음 시작", action: record).modifier(GroveActionAppearance()).disabled(isBusy)
+        }.padding(.vertical, 7)
     }
 }
 

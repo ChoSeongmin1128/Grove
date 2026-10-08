@@ -8,7 +8,7 @@ the private installation and evaluation receipts.
 
 ## Current source
 
-The source targets version0.4.0 / local-beta.14. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.15. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -28,11 +28,15 @@ build identifier and local receipts for actual installation state.
   Existing saved routing is preserved. Legacy automatic mode remains Ultra8 for unknown
   count / 1–8 and Community-1 for 9+. Exact counts are still a Community-1 capability.
 - Calendar reminders read selected Mac calendars and start microphone recording.
+  Home actions use the same neutral bordered controls as detail actions. The root no
+  longer forces a fixed dark-green tint onto ordinary native buttons.
 - Notion rich-text copy / parent-end divider and child-page export are explicit actions.
   First-run downloads support byte progress, pause / resume, capacity and runtime checks.
 - Per-recording options are local drafts; persistent defaults live in Settings.
 - Recording names are editable. **원본 파일…** provides path access, Finder reveal and
   byte-preserving export with source/destination protection and cancellation.
+  Internal names and full paths are collapsed under **파일 위치**; **사본 저장…** opens
+  the existing save-copy flow without moving or changing the app's original file.
 - Rows place speaker/start–end time left and text right. Pretendard and body scaling
   remain. Each utterance is independently editable; continuation never merges text.
 - Folders and 미분류 share one section. 모든 녹음 is an aggregate; recent recordings are

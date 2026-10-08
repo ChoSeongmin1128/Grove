@@ -38,6 +38,9 @@ take precedence. Installation/test evidence is recorded in `handoff.md`.
 
 ## Library organization
 
+- Recording cards share one rounded background. Inset dividers appear only between
+  recordings, so the final row does not overlap the card's outer border.
+
 - **모든 녹음** is an aggregate view, not a storage folder or drop destination.
 - **미분류** and user folders share one **폴더** section, indentation and row treatment.
   Each shows its recording count; unknown legacy folder references appear in 미분류.
