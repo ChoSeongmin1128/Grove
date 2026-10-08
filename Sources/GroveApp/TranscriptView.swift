@@ -73,7 +73,6 @@ struct TranscriptView: View {
                             .disabled(store.isBusy)
                     }
                 }
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 600)
                 .padding(.horizontal, 24)
                 .padding(.top, 48)
@@ -233,8 +232,6 @@ struct TranscriptView: View {
                 if reviewOnly && document.speakerReviewCount == 0 {
                     ContentUnavailableView {
                         Label("남은 화자 확인 항목이 없습니다", systemImage: "checkmark.circle")
-                    } description: {
-                        Text("화자 확인 대상에 대한 점검입니다. 전체 전사의 정확성이나 학습용 검수 완료를 의미하지 않습니다.")
                     } actions: {
                         Button("전체 대화 보기") { reviewOnly = false }
                     }
@@ -316,9 +313,6 @@ struct TranscriptView: View {
                 .buttonStyle(.plain)
                 .help("시작–종료 시간 · 클릭하면 이 발화의 앞뒤 문맥을 함께 듣습니다")
                 .accessibilityLabel("시작 \(TranscriptPresentation.timestamp(utterance.startTime)), 종료 \(TranscriptPresentation.timestamp(utterance.endTime)), 발화 듣기")
-                if document.speakers.first(where: { $0.id == utterance.speakerID })?.profileMatch?.isConfirmed == false {
-                    Text("이름 제안").font(.caption2).foregroundStyle(GroveTheme.evidence)
-                }
                 if utterance.sourceChannelID == "system" || utterance.sourceChannelID == "microphone" {
                     Text(utterance.sourceChannelID == "system" ? "컴퓨터 소리" : "마이크")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -389,8 +383,8 @@ struct TranscriptView: View {
                 Text("화자").font(GroveTypography.heading)
                 Text("이름을 바꾸면 해당 화자의 모든 발화에 적용됩니다.")
                     .font(.caption).foregroundStyle(.secondary)
-                if !store.voiceIdentificationAvailable { VoiceIdentityAvailabilityNotice() }
                 if let folderID = meeting.folderID,
+                   store.voiceIdentificationAvailable,
                    store.speakerProfiles(in: folderID).contains(where: { store.voiceProfileIsRegistered($0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
                         if store.isRecognizingVoices {
@@ -460,14 +454,13 @@ struct TranscriptView: View {
                                 Divider()
                                 Button("이 화자 이름 저장…") { savingSpeaker = speaker }
                                     .disabled(store.speakerProfiles(in: folderID).contains { $0.id == speaker.profileMatch?.profileID })
-                                Button("목소리 등록…") {
-                                    player.pause()
-                                    enrollingSpeaker = speaker
-                                }.disabled(utterances.isEmpty || !store.voiceIdentificationAvailable)
+                                if store.voiceIdentificationAvailable {
+                                    Button("목소리 등록…") {
+                                        player.pause()
+                                        enrollingSpeaker = speaker
+                                    }.disabled(utterances.isEmpty)
+                                }
                             }.disabled(store.isBusy)
-                        } else {
-                            Text("폴더로 옮기면 다음 녹음에 화자를 재사용할 수 있습니다.")
-                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -540,7 +533,7 @@ struct TranscriptView: View {
     private var emptyDescription: String {
         switch meeting.status {
         case .recording: "회의를 종료하면 전사를 시작합니다."
-        case .processing: "녹음 파일은 저장되어 있습니다. 전사가 끝나면 대화가 표시됩니다."
+        case .processing: ""
         default: "음성 파일을 가져오거나 새 회의를 녹음해 주세요."
         }
     }

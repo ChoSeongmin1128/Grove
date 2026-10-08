@@ -1,4 +1,5 @@
 import SwiftUI
+import GroveInference
 
 enum VoiceEnrollmentPrompts {
     static let reading = [
@@ -197,7 +198,7 @@ struct RecordedVoiceEnrollmentSheet: View {
             .task {
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-                    if session.recorder.isRecording && session.recorder.elapsed >= 120 { await session.finish() }
+                    if session.recorder.isRecording && session.recorder.elapsed >= VoiceEnrollmentAudio.maximumDuration { await session.finish() }
                 }
             }
     }

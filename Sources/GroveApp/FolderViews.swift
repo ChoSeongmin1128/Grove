@@ -143,19 +143,18 @@ struct FolderSpeakerLibraryView: View {
             let profiles = store.speakerProfiles(in: folderID)
             let hasVoices = profiles.contains { store.voiceProfileIsRegistered($0.id) }
             if !profiles.isEmpty {
-                Toggle("새 녹음에서 이름 자동 연결", isOn: Binding(
-                    get: { store.automaticSpeakerIdentificationEnabled(folderID: folderID) },
-                    set: { enabled in
-                        if !store.setAutomaticSpeakerIdentification(folderID: folderID, enabled: enabled) {
-                            error = store.alertMessage ?? "설정을 저장하지 못했습니다."
-                            store.alertMessage = nil
+                if store.voiceIdentificationAvailable {
+                    Toggle("새 녹음에서 이름 자동 연결", isOn: Binding(
+                        get: { store.automaticSpeakerIdentificationEnabled(folderID: folderID) },
+                        set: { enabled in
+                            if !store.setAutomaticSpeakerIdentification(folderID: folderID, enabled: enabled) {
+                                error = store.alertMessage ?? "설정을 저장하지 못했습니다."
+                                store.alertMessage = nil
+                            }
                         }
-                    }
-                ))
-                .toggleStyle(.checkbox).font(GroveTypography.bodySmall)
-                .disabled(store.isBusy || deletingVoice || !hasVoices || !store.voiceIdentificationAvailable)
-                if !store.voiceIdentificationAvailable {
-                    Text("자동 이름 연결은 정확도 검증 중입니다.").font(.caption).foregroundStyle(.secondary)
+                    ))
+                    .toggleStyle(.checkbox).font(GroveTypography.bodySmall)
+                    .disabled(store.isBusy || deletingVoice || !hasVoices || !store.voiceIdentificationAvailable)
                 }
                 ForEach(profiles) { profile in
                     let hasVoiceStorage = store.voiceProfileHasStorage(profile.id)

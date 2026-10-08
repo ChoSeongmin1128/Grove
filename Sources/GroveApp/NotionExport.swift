@@ -40,7 +40,7 @@ enum MeetingExportContent {
     static func html(meeting: MeetingRecord, document: TranscriptDocument, original: Bool) -> String {
         let document = TranscriptRenderer.exportDocument(document, original: original)
         let body = document.utterances.sorted { $0.startTime < $1.startTime }.map { utterance in
-            let heading = "[\(TranscriptRenderer.timestamp(utterance.startTime))] \(document.speakerName(for: utterance))"
+            let heading = "[\(TranscriptRenderer.timestamp(utterance.startTime))] \(TranscriptRenderer.speakerLabel(in: document, for: utterance))"
             return "<p><b>\(escapeHTML(heading))</b><br>\(escapeHTML(original ? utterance.rawText : utterance.displayedText))</p>"
         }.joined()
         return "<html><head><meta charset=\"utf-8\"></head><body><h1>\(escapeHTML(title(meeting)))</h1>\(body)</body></html>"
@@ -107,7 +107,8 @@ struct NotionClient {
     func create(parent: String, title: String, markdown: String) async throws -> String {
         let page = try await request("pages", method: "POST", body: ["parent": ["page_id": parent],
             "properties": ["title": ["title": [["text": ["content": title]]]]], "markdown": markdown])
-        guard let id = page["id"] as? String, UUID(uuidString: id) != nil else { throw NotionExportError.unknownResult }
+        guard page["object"] as? String == "page", let id = page["id"] as? String,
+              UUID(uuidString: id) != nil else { throw NotionExportError.unknownResult }
         return id
     }
     func ensureDividerAtEnd(parent: String) async throws {

@@ -93,8 +93,7 @@ struct ImportRecordingOptionsSheet: View {
                 Button("취소") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("전사 시작") {
                     guard let plan = try? options.plan(isDual: false) else { return }
-                    dismiss()
-                    Task { await store.importRecording(from: source, plan: plan, folderID: folderID) }
+                    store.startAfterDismissingSheet(.importing(source: source, plan: plan, folderID: folderID))
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(store.isBusy || (try? options.plan(isDual: false)) == nil)
             }

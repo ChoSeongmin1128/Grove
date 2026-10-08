@@ -26,13 +26,20 @@ final class AudioRecorder: NSObject, ObservableObject {
     private var recorder: (any AudioRecordingDevice)?
     private var meterTimer: Timer?
     private let makeRecorder: (URL, [String: Any]) throws -> any AudioRecordingDevice
+    private let permissionRequester: () async -> Bool
 
-    init(makeRecorder: @escaping (URL, [String: Any]) throws -> any AudioRecordingDevice = { try AVAudioRecorder(url: $0, settings: $1) }) {
+    init(makeRecorder: @escaping (URL, [String: Any]) throws -> any AudioRecordingDevice = { try AVAudioRecorder(url: $0, settings: $1) },
+         permissionRequester: @escaping () async -> Bool = AudioRecorder.requestSystemPermission) {
         self.makeRecorder = makeRecorder
+        self.permissionRequester = permissionRequester
         super.init()
     }
 
     func requestPermission() async -> Bool {
+        await permissionRequester()
+    }
+
+    private static func requestSystemPermission() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             return true

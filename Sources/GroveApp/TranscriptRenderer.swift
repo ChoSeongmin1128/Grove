@@ -28,8 +28,7 @@ enum TranscriptRenderer {
             var heading: [String] = []
             if options.includesTimestamps { heading.append("[\(timestamp(utterance.startTime))]") }
             if options.includesSpeakers {
-                let isInferred = document.speakers.first(where: { $0.id == utterance.speakerID })?.profileMatch?.isConfirmed == false
-                let name = document.speakerName(for: utterance) + (isInferred ? " (추정)" : "")
+                let name = speakerLabel(in: document, for: utterance)
                 heading.append(options.format == .markdown ? "**\(escapeMarkdown(name))**" : name)
             }
             let body = options.usesOriginalText ? utterance.rawText : utterance.displayedText
@@ -38,6 +37,11 @@ enum TranscriptRenderer {
             return heading.joined(separator: " ") + "\n" + text
         }
         return blocks.isEmpty ? "" : blocks.joined(separator: "\n\n") + "\n"
+    }
+
+    static func speakerLabel(in document: TranscriptDocument, for utterance: DocumentUtterance) -> String {
+        let isInferred = document.speakers.first(where: { $0.id == utterance.speakerID })?.profileMatch?.isConfirmed == false
+        return document.speakerName(for: utterance) + (isInferred ? " (추정)" : "")
     }
 
     static func timestamp(_ seconds: TimeInterval) -> String {

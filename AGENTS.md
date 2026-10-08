@@ -35,6 +35,10 @@ inference, proposals, and unverified items.
   to choose a transcription mode, grant permissions, understand a limit or recover from errors.
 - Voice enrollment contains no development / validation-status notices or storage
   implementation explanations. Its retention notice is only: "등록 후 녹음 파일은 저장되지 않습니다."
+- A single workspace owns navigation and shared dialogs. Start recording / import after
+  setup dismissal. Empty transcript states must accept the available height; never force
+  a vertically fixed size onto a container-filling view. Verify native file import through
+  processing and completion, not only initial or component rendering.
 - Meeting actions use legible adaptive text, native bordered controls and visible hover
   feedback. Preserve native keyboard / disabled behavior. Align the detail header and
   transcript to the same content margin; show an empty-result error in one place.

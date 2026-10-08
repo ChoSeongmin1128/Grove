@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NewMeetingSheet: View {
     @ObservedObject var store: GroveStore
+    let calendarEvent: ScheduledMeeting?
     @State private var title = ""
     @State private var options: MeetingSpeakerOptions
     @State private var folderID: UUID?
@@ -9,9 +10,10 @@ struct NewMeetingSheet: View {
     @State private var attendance: MeetingAttendance
     @State private var showsAttendance = false
 
-    init(store: GroveStore) {
+    init(store: GroveStore, calendarEvent: ScheduledMeeting? = nil) {
         self.store = store
-        _title = State(initialValue: store.pendingCalendarEvent?.title ?? "")
+        self.calendarEvent = calendarEvent
+        _title = State(initialValue: calendarEvent?.title ?? "")
         _options = State(initialValue: store.defaultSpeakerOptions)
         _folderID = State(initialValue: store.selectedFolderID)
         _attendance = State(initialValue: store.recentAttendance(in: store.selectedFolderID))
@@ -44,17 +46,12 @@ struct NewMeetingSheet: View {
 
             HStack {
                 Spacer()
-                Button("취소") { store.isPresentingNewMeeting = false }
+                Button("취소") { store.cancelRecordingStart(); store.workspaceSheet = nil }
                     .keyboardShortcut(.cancelAction)
                 Button("녹음 시작") {
-                    Task {
-                        await store.beginRecording(
-                            title: title,
-                            glossaryProfile: "사전 없음",
-                            plan: try? options.plan(isDual: false), folderID: folderID,
-                            calendarEvent: store.pendingCalendarEvent, attendance: attendance
-                        )
-                    }
+                    guard let plan = try? options.plan(isDual: false) else { return }
+                    store.startAfterDismissingSheet(.recording(title: title, plan: plan, folderID: folderID,
+                        calendarEvent: calendarEvent, attendance: attendance))
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -64,6 +61,6 @@ struct NewMeetingSheet: View {
         .padding(28)
         .frame(width: 520)
         .onChange(of: folderID) { _, value in attendance = store.recentAttendance(in: value) }
-        .onDisappear { store.pendingCalendarEvent = nil }
+        .onDisappear { store.cancelRecordingStart() }
     }
 }

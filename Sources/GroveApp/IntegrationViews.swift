@@ -152,7 +152,7 @@ struct NotionSettingsView: View {
                 SecureField("연결 토큰", text: $token)
                 HStack {
                     Button("연결 정보 저장") {
-                        do { try NotionTokenStore().save(token); token = ""; message = "Keychain에 저장했습니다." }
+                        do { try NotionTokenStore().save(token); token = ""; message = "연결 정보를 저장했습니다." }
                         catch { message = error.localizedDescription }
                     }.disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Button("연결 정보 삭제") {
@@ -207,7 +207,7 @@ struct NotionExportSheet: View {
                     let source = TranscriptRenderer.exportDocument(document, original: original)
                     ForEach(Array(source.utterances.sorted { $0.startTime < $1.startTime }.prefix(30))) { utterance in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("[\(TranscriptRenderer.timestamp(utterance.startTime))] \(source.speakerName(for: utterance))")
+                            Text("[\(TranscriptRenderer.timestamp(utterance.startTime))] \(TranscriptRenderer.speakerLabel(in: source, for: utterance))")
                                 .font(GroveTypography.label).foregroundStyle(.secondary)
                             Text(original ? utterance.rawText : utterance.displayedText).font(GroveTypography.bodySmall)
                         }

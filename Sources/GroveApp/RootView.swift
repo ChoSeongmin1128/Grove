@@ -4,50 +4,51 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @ObservedObject var store: GroveStore
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var pendingImport: PendingImport?
-
-    private struct PendingImport: Identifiable {
-        let id = UUID()
-        let url: URL
-    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             GroveSidebar(store: store)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 310)
         } detail: {
-            detail
-                .background(GroveTheme.canvas)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    store.isPresentingImporter = true
-                } label: {
-                    Label("파일 가져오기", systemImage: "square.and.arrow.down")
-                }
-                .disabled(store.isBusy || store.needsModelSetup)
+            NavigationStack {
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(GroveTheme.canvas)
+                    .navigationTitle(navigationTitle)
+                    .toolbar {
+                        ToolbarSpacer(.flexible, placement: .primaryAction)
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            Button {
+                                store.requestFileImport()
+                            } label: {
+                                Label("파일 가져오기", systemImage: "square.and.arrow.down")
+                            }
+                            .disabled(!store.canPresentNewMeeting)
 
-                Button {
-                    store.isPresentingNewMeeting = true
-                } label: {
-                    Label("새 회의", systemImage: "record.circle")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(store.isBusy || store.needsModelSetup)
+                            Button {
+                                store.present(.newMeeting())
+                            } label: {
+                                Label("새 회의", systemImage: "record.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!store.canPresentNewMeeting)
+                        }
+                    }
             }
         }
-        .sheet(isPresented: $store.isPresentingNewMeeting) {
-            NewMeetingSheet(store: store)
-        }
-        .sheet(item: $pendingImport) { request in
-            ImportRecordingOptionsSheet(store: store, source: request.url)
-        }
-        .sheet(item: $store.meetingToRename) { meeting in
-            RecordingNameEditor(store: store, meeting: meeting)
-        }
-        .sheet(item: $store.meetingForOriginalFiles) { meeting in
-            OriginalRecordingFilesSheet(store: store, meetingID: meeting.id)
+        #if DEBUG
+        .background(WorkspaceLayoutProbe(state: "\(String(describing: store.selection)):\(store.isProcessing)"))
+        #endif
+        .sheet(item: $store.workspaceSheet, onDismiss: store.workspaceSheetDidDismiss) { sheet in
+            switch sheet {
+            case .newMeeting(let event): NewMeetingSheet(store: store, calendarEvent: event)
+            case .importRecording(let url): ImportRecordingOptionsSheet(store: store, source: url)
+            case .renameRecording(let id):
+                if let meeting = store.meetings.first(where: { $0.id == id }) {
+                    RecordingNameEditor(store: store, meeting: meeting)
+                }
+            case .originalRecording(let id): OriginalRecordingFilesSheet(store: store, meetingID: id)
+            }
         }
         .fileImporter(
             isPresented: $store.isPresentingImporter,
@@ -57,7 +58,7 @@ struct RootView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    pendingImport = PendingImport(url: url)
+                    store.present(.importRecording(url))
                 }
             case .failure(let error):
                 store.alertMessage = error.localizedDescription
@@ -83,6 +84,17 @@ struct RootView: View {
                 }
             }
             .padding(.bottom, 18)
+        }
+    }
+
+    private var navigationTitle: String {
+        switch store.selection {
+        case .library, .none: "모든 녹음"
+        case .unfiled: "미분류"
+        case .folder(let id): store.folderName(id)
+        case .review: "검토"
+        case .glossary: "사전"
+        case .meeting(let id): store.meetings.first(where: { $0.id == id })?.title ?? "Grove"
         }
     }
 

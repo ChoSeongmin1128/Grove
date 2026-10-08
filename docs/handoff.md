@@ -8,6 +8,16 @@ the private installation and evaluation receipts.
 
 ## Current source
 
+- One workspace window owns navigation, its toolbar and recording / import / file-management
+  dialogs. Recording and import begin after setup dismissal. Empty transcript states accept
+  the available height; they must not enlarge the split view beyond the window.
+- Pending microphone permission and file-copy work have explicit ownership. Cancelling
+  an earlier setup cannot start or clear a newer attempt. Failed index writes restore the
+  previous selection and keep source audio.
+- Enrollment inspection uses at most the first120 seconds, allowing timer-stop latency
+  without rejecting an otherwise valid recording. Rich-text export preserves inferred
+  speaker labels, and an asynchronous Notion task is not a confirmed created page.
+
 - Team voice enrollment records prompt reading and free speech, checks amplitude / clipping,
   supports preview and stores encrypted per-span features. The optional 15.3 MB voice
   model has pinned hashes and its own CoreML readiness check. Automatic naming remains
@@ -17,7 +27,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.17. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.18. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -81,8 +91,23 @@ build identifier and local receipts for actual installation state.
 ## Validation and release work
 
 Run the commands in `AGENTS.md` before publishing code or replacing an application.
-Use the opt-in synthetic layout check for transcript changes, and inspect the actual
-installed window when authorized. Keep code-test results separate from model quality.
+Use the opt-in titled-window layout check for transcript changes, and inspect actual
+file-picker / setup-dismissal / processing / completion transitions when authorized.
+Component snapshots do not establish workspace layout correctness. Keep code-test results separate from model quality.
+
+Debug QA can use `--qa-profile <isolated-directory>`; release builds ignore that
+argument. The QA library must contain no production Keychain references or Notion
+connection. `window-layout.jsonl` records geometry only when this argument is present.
+After exercising library / processing / completed or failed states, validate it with:
+
+```bash
+python3 scripts/check_workspace_layout.py <qa-directory>/window-layout.jsonl --require-transitions
+```
+
+A passing offscreen `NSHostingController` render cannot exclude a sizing fault in the
+actual SwiftUI scene. Validate that captured workspace bounds stay inside the window;
+keep the live before/after evidence private. In-window editing menus, real microphone
+capture, pointer hover, IME and external Notion writes require their own runtime checks.
 
 Tests cover formatting, exact split boundaries, typed folder moves, publication/storage
 failure, explicit confirmation, schema compatibility and undo. Voice tests use synthetic

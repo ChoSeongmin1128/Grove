@@ -74,6 +74,20 @@ struct NotionExportTests {
         #expect(NotionProtocol.methods.filter { $0 == "POST" }.count == 1)
         #expect(try reopened.receipt(meetingID: meeting.id)?.pageID == nil)
     }
+    @Test func asynchronousTaskIsNotMistakenForACreatedPage() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory)
+        let (meeting, document) = try fixture()
+        let task = "{\"object\":\"async_task\",\"id\":\"\(child)\",\"status\":\"queued\"}"
+        let client = client([(200, parentPage), (200, parentMarkdown), (200, dividerResult), (202, task)])
+        do {
+            _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+            Issue.record("비동기 작업이 생성된 페이지로 취급됨")
+        } catch { if case NotionExportError.unknownResult = error {} else { Issue.record("예상하지 않은 오류: \(error)") } }
+        #expect(try exporter.receipt(meetingID: meeting.id)?.pageID == nil)
+        #expect(NotionProtocol.methods == ["GET", "GET", "PATCH", "POST"])
+    }
     @Test func missingParentPermissionNeverUploadsTranscript() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -84,5 +98,24 @@ struct NotionExportTests {
         catch { #expect(error is NotionExportError) }
         #expect(NotionProtocol.methods == ["GET"])
         #expect(try exporter.receipt(meetingID: meeting.id) == nil)
+    }
+}
+
+@MainActor
+struct ExportPresentationTests {
+    @Test func inferredSpeakerLabelMatchesInPlainTextAndRichText() throws {
+        let profile = SavedSpeakerProfile(folderID: UUID(), name: "등록한 팀원", sourceMeetingID: nil,
+            sourceRevisionID: nil, sourceSpeakerID: nil, createdAt: Date())
+        let speaker = MeetingSpeaker(name: "화자 1", order: 0)
+        let utterance = DocumentUtterance(id: UUID(), startTime: 0, endTime: 1, rawText: "검토할 내용입니다.",
+            sourceChannelID: "recording", engineClusterID: "0", speakerID: speaker.id, editedText: nil)
+        var document = try TranscriptDocument(speakers: [speaker], utterances: [utterance])
+        try document.applySpeakerProfile(profile, to: speaker.id, similarity: 0.9, confirmed: false)
+        let meeting = MeetingRecord(title: "검토 회의", startedAt: Date(), duration: 1, status: .ready,
+            glossaryProfile: "", transcript: [], claims: [])
+        #expect(MeetingExportContent.markdown(meeting: meeting, document: document, original: false).contains(TranscriptRenderer.escapeMarkdown("등록한 팀원 (추정)")))
+        #expect(MeetingExportContent.html(meeting: meeting, document: document, original: false).contains("등록한 팀원 (추정)"))
+        try document.confirmSpeakerIdentity(speaker.id)
+        #expect(!MeetingExportContent.html(meeting: meeting, document: document, original: false).contains("(추정)"))
     }
 }

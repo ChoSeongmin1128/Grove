@@ -32,7 +32,6 @@ struct LibraryHomeView: View {
             .frame(maxWidth: 980, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(title)
         .modifier(MeetingFolderDropZone(store: store, folderID: folderID, isEnabled: isFolderLocation))
         .onChange(of: folderID) { _, _ in searchText = "" }
         .onChange(of: showsUnfiled) { _, _ in searchText = "" }
@@ -45,11 +44,11 @@ struct LibraryHomeView: View {
                 .foregroundStyle(GroveTheme.ink)
             Spacer()
             Button("녹음 시작") {
-                store.isPresentingNewMeeting = true
+                store.present(.newMeeting())
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(store.isBusy)
+            .disabled(!store.canPresentNewMeeting)
         }
     }
 
@@ -82,9 +81,9 @@ struct LibraryHomeView: View {
                         .foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button("녹음 시작") { store.isPresentingNewMeeting = true }.buttonStyle(.borderedProminent)
-                    Button("파일 가져오기") { store.isPresentingImporter = true }
-                }.disabled(store.isBusy)
+                    Button("녹음 시작") { store.present(.newMeeting()) }.buttonStyle(.borderedProminent)
+                    Button("파일 가져오기") { store.requestFileImport() }
+                }.disabled(!store.canPresentNewMeeting)
             }
         }
         .multilineTextAlignment(.center).padding(24)

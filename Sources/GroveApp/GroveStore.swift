@@ -8,18 +8,16 @@ final class GroveStore: ObservableObject {
     @Published var glossaryTerms: [GlossaryTerm] = []
     @Published var selection: SidebarDestination? = .library
     @Published var selectedTab: MeetingTab = .transcript
-    @Published var isPresentingNewMeeting = false
-    @Published var pendingCalendarEvent: ScheduledMeeting?
+    @Published var workspaceSheet: WorkspaceSheet?
     @Published var isPresentingImporter = false
     @Published var alertMessage: String?
-    @Published var meetingToRename: MeetingRecord?
-    @Published var meetingForOriginalFiles: MeetingRecord?
     @Published private(set) var exportingOriginalMeetingID: UUID?
     @Published private(set) var isPreparingToQuit = false
     @Published var activeMeetingID: UUID?
     @Published var processingStage: String?
     @Published private(set) var processingMeetingID: UUID?
-    @Published private(set) var isStartingCapture = false
+    @Published private var captureStartID: UUID?
+    @Published private(set) var isImportingRecording = false
     @Published private(set) var isSavingSpeakerProfile = false
     @Published private(set) var isRecognizingVoices = false
     @Published private(set) var isCommittingVoiceEnrollment = false
@@ -30,7 +28,7 @@ final class GroveStore: ObservableObject {
     @Published private(set) var transcriptDocuments: [UUID: TranscriptDocument] = [:]
     @Published private(set) var transcriptDocumentErrors: [UUID: String] = [:]
 
-    let recorder = AudioRecorder()
+    let recorder: AudioRecorder
     let calendarSchedule: CalendarSchedule
     let modelManager: ModelManager
     let voiceEnrollmentSession: VoiceEnrollmentSession
@@ -47,6 +45,7 @@ final class GroveStore: ObservableObject {
     private let libraryStorage: MeetingLibraryStorage
     private let inferenceService: any MeetingInferenceRunning
     private var processingTask: Task<Void, Never>?
+    @Published private var pendingWorkspaceStart: WorkspaceStartAction?
     private let voiceVault: SpeakerVoiceVault
     private let voiceExtractor: any SpeakerVoiceExtracting
     private var voiceTask: Task<Bool, Never>?
@@ -55,10 +54,12 @@ final class GroveStore: ObservableObject {
     private var subscriptions: Set<AnyCancellable> = []
 
     init(baseDirectory: URL? = nil, inferenceService: (any MeetingInferenceRunning)? = nil,
+         recorder: AudioRecorder? = nil,
          voiceVault: SpeakerVoiceVault? = nil, voiceExtractor: (any SpeakerVoiceExtracting)? = nil,
          voiceEnrollmentSession: VoiceEnrollmentSession? = nil,
          voiceIdentificationAvailable: Bool = VoiceIdentityReleaseGate.isEnabled) {
         self.voiceIdentificationAvailable = voiceIdentificationAvailable
+        self.recorder = recorder ?? AudioRecorder()
         let base = baseDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -100,10 +101,9 @@ final class GroveStore: ObservableObject {
             }
         }
         loadTranscriptDocuments()
-        calendarSchedule.canRecord = { [weak self] in self?.isBusy == false && self?.needsModelSetup == false }
+        calendarSchedule.canRecord = { [weak self] in self?.canPresentNewMeeting == true }
         calendarSchedule.onRecord = { [weak self] event in
-            self?.pendingCalendarEvent = event
-            self?.isPresentingNewMeeting = true
+            self?.present(.newMeeting(event))
         }
         modelManager.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         self.voiceEnrollmentSession.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
@@ -121,9 +121,49 @@ final class GroveStore: ObservableObject {
     }
 
     var isProcessing: Bool { processingMeetingID != nil }
+    var isStartingCapture: Bool { captureStartID != nil }
     var isExportingOriginal: Bool { exportingOriginalMeetingID != nil }
-    var isBusy: Bool { isRecording || isProcessing || isStartingCapture || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit || modelManager.isInstalling || applePreparation.isPreparing || voiceEnrollmentSession.isActive }
+    var isBusy: Bool { pendingWorkspaceStart != nil || isRecording || isProcessing || isStartingCapture || isImportingRecording || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit || modelManager.isInstalling || applePreparation.isPreparing || voiceEnrollmentSession.isActive }
     var needsModelSetup: Bool { defaultSpeakerOptions.transcriptionEngine == .apple ? !applePreparation.isReady : !modelManager.isReadyForUse }
+    var canPresentNewMeeting: Bool { !isBusy && !needsModelSetup && workspaceSheet == nil && !isPresentingImporter }
+
+    func present(_ sheet: WorkspaceSheet) {
+        guard workspaceSheet == nil, pendingWorkspaceStart == nil, !isPreparingToQuit else { return }
+        switch sheet {
+        case .newMeeting, .importRecording: guard !isBusy else { return }
+        case .renameRecording(let id), .originalRecording(let id):
+            guard meetings.contains(where: { $0.id == id }) else { return }
+        }
+        workspaceSheet = sheet
+    }
+
+    func requestFileImport() {
+        guard canPresentNewMeeting else { return }
+        isPresentingImporter = true
+    }
+
+    func cancelRecordingStart() { captureStartID = nil }
+
+    func startAfterDismissingSheet(_ action: WorkspaceStartAction) {
+        guard workspaceSheet != nil, pendingWorkspaceStart == nil, !isBusy else { return }
+        pendingWorkspaceStart = action
+        workspaceSheet = nil
+    }
+
+    func workspaceSheetDidDismiss() {
+        cancelRecordingStart()
+        guard let action = pendingWorkspaceStart else { return }
+        Task {
+            pendingWorkspaceStart = nil
+            switch action {
+            case .recording(let title, let plan, let folderID, let event, let attendance):
+                await beginRecording(title: title, glossaryProfile: "사전 없음", plan: plan, folderID: folderID,
+                    calendarEvent: event, attendance: attendance)
+            case .importing(let source, let plan, let folderID):
+                await importRecording(from: source, plan: plan, folderID: folderID)
+            }
+        }
+    }
 
     var defaultSpeakerOptions: MeetingSpeakerOptions {
         get { library.defaultSpeakerOptions }
@@ -778,6 +818,12 @@ final class GroveStore: ObservableObject {
             alertMessage = "Notion 저장 결과를 확인한 뒤 앱을 닫아 주세요."
             return false
         }
+        guard !isImportingRecording else {
+            alertMessage = "파일 가져오기를 마친 뒤 앱을 닫아 주세요."
+            return false
+        }
+        isPreparingToQuit = true
+        defer { isPreparingToQuit = false }
         await modelManager.cancelAndWait()
         await applePreparation.cancelAndWait()
         guard !isExportingOriginal else {
@@ -792,8 +838,6 @@ final class GroveStore: ObservableObject {
             alertMessage = "녹음을 종료한 뒤 앱을 닫아 주세요."
             return false
         }
-        isPreparingToQuit = true
-        defer { isPreparingToQuit = false }
         cancelProcessing()
         cancelVoiceWork()
         await processingTask?.value
@@ -940,9 +984,12 @@ final class GroveStore: ObservableObject {
             selectedPlan = try plan ?? defaultSpeakerOptions.plan(isDual: false)
             _ = try selectedPlan.configurations(for: ["recording"])
         } catch { alertMessage = error.localizedDescription; return }
-        isStartingCapture = true
-        defer { isStartingCapture = false }
-        guard await recorder.requestPermission() else {
+        let startID = UUID()
+        captureStartID = startID
+        defer { if captureStartID == startID { captureStartID = nil } }
+        let allowed = await recorder.requestPermission()
+        guard captureStartID == startID, !Task.isCancelled else { return }
+        guard allowed else {
             alertMessage = RecordingError.permissionDenied.localizedDescription
             return
         }
@@ -969,6 +1016,8 @@ final class GroveStore: ObservableObject {
         meeting.folderID = folderID
         meeting.calendarEvent = calendarEvent
         meeting.attendance = attendance
+        let previousSelection = selection
+        let previousTab = selectedTab
 
         do {
             try recorder.start(to: audioURL)
@@ -976,17 +1025,19 @@ final class GroveStore: ObservableObject {
             activeMeetingID = id
             selection = .meeting(id)
             selectedTab = .transcript
-            isPresentingNewMeeting = false
             if !saveMeetings() {
                 _ = recorder.stop()
                 activeMeetingID = nil
                 meetings.removeAll { $0.id == id }
+                selection = previousSelection
+                selectedTab = previousTab
             } else if let attendance {
                 _ = editLibrary {
                     if $0.recentAttendance == nil { $0.recentAttendance = [:] }
                     $0.recentAttendance?[folderID?.uuidString ?? "unfiled"] = attendance
                 }
             }
+            if activeMeetingID == id { workspaceSheet = nil }
         } catch {
             meeting.status = .failed
             meeting.errorMessage = error.localizedDescription
@@ -1027,8 +1078,14 @@ final class GroveStore: ObservableObject {
         let id = UUID()
         let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
         let target = audioDirectory.appendingPathComponent("\(id.uuidString).\(ext)")
+        let previousSelection = selection
+        let previousTab = selectedTab
+        isImportingRecording = true
+        defer { isImportingRecording = false }
         do {
-            try FileManager.default.copyItem(at: sourceURL, to: target)
+            try await Task.detached(priority: .utility) {
+                try FileManager.default.copyItem(at: sourceURL, to: target)
+            }.value
             var meeting = MeetingRecord(
                 id: id,
                 title: sourceURL.deletingPathExtension().lastPathComponent,
@@ -1052,8 +1109,11 @@ final class GroveStore: ObservableObject {
             guard saveMeetings() else {
                 meetings.removeAll { $0.id == id }
                 processingStage = nil
+                selection = previousSelection
+                selectedTab = previousTab
                 return
             }
+            isImportingRecording = false
             await transcribeMeeting(id: id)
         } catch {
             alertMessage = "파일을 가져오지 못했습니다: \(error.localizedDescription)"

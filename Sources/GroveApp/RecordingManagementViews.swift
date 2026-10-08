@@ -22,8 +22,8 @@ struct RecordingManagementActions: View {
     let meeting: MeetingRecord
 
     var body: some View {
-        Button("이름 변경…") { store.meetingToRename = meeting }
-        Button("원본 파일…") { store.meetingForOriginalFiles = meeting }
+        Button("이름 변경…") { store.present(.renameRecording(meeting.id)) }
+        Button("원본 파일…") { store.present(.originalRecording(meeting.id)) }
     }
 }
 

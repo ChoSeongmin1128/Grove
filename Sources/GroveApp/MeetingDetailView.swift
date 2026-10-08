@@ -34,7 +34,6 @@ struct MeetingDetailView: View {
                 .id(meeting.id)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .navigationTitle(meeting.title)
         .onChange(of: meeting.id) { _, _ in reviewOnly = false; showsSpeakers = false }
         .sheet(isPresented: $showsNotionExport) {
             if let document { NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter) }
@@ -67,7 +66,7 @@ struct MeetingDetailView: View {
                         .font(GroveTypography.title)
                         .foregroundStyle(GroveTheme.ink)
                         .lineLimit(2)
-                    Button { store.meetingToRename = meeting } label: {
+                    Button { store.present(.renameRecording(meeting.id)) } label: {
                         Image(systemName: "pencil").font(.body)
                     }
                     .modifier(GroveActionAppearance())
@@ -88,7 +87,7 @@ struct MeetingDetailView: View {
             .font(GroveTypography.label)
             .foregroundStyle(.secondary)
             HStack(spacing: 10) {
-                Button("원본 파일…") { store.meetingForOriginalFiles = meeting }
+                Button("원본 파일…") { store.present(.originalRecording(meeting.id)) }
                     .modifier(GroveActionAppearance())
                 MeetingMoveMenu(store: store, meeting: meeting)
                     .modifier(GroveActionAppearance())

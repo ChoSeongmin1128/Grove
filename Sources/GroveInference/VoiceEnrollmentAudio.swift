@@ -15,6 +15,7 @@ public struct VoiceEnrollmentAudioReview: Sendable {
 }
 
 public enum VoiceEnrollmentAudio {
+    public static let maximumDuration: Double = 120
     public static func inspect(source: URL, naturalSpeechStart: Double, workingDirectory: URL) async throws -> VoiceEnrollmentAudioReview {
         let work = workingDirectory.appendingPathComponent("voice-quality-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -25,19 +26,21 @@ public enum VoiceEnrollmentAudio {
     }
 
     private static func inspectPrepared(_ audio: PreparedAnalysisAudio, naturalSpeechStart: Double) throws -> VoiceEnrollmentAudioReview {
-        guard audio.duration <= 120, naturalSpeechStart.isFinite, naturalSpeechStart > 0,
-              naturalSpeechStart < audio.duration else {
+        let analyzedDuration = min(audio.duration, maximumDuration)
+        guard naturalSpeechStart.isFinite, naturalSpeechStart > 0,
+              naturalSpeechStart < analyzedDuration else {
             throw InferenceError.invalidOutput("예문을 읽은 뒤 자유 발화도 녹음해 주세요. 한 번에 2분까지 등록할 수 있습니다.")
         }
         let file = try AVAudioFile(forReading: audio.url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let lastFrame = min(file.length, AVAudioFramePosition(maximumDuration * audio.sampleRate))
         guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 320) else {
             throw InferenceError.invalidOutput("등록 음성을 읽지 못했습니다.")
         }
         var active: [Bool] = []
         var clipped = 0, frames = 0
-        while file.framePosition < file.length {
+        while file.framePosition < lastFrame {
             try Task.checkCancellation()
-            try file.read(into: buffer, frameCount: 320)
+            try file.read(into: buffer, frameCount: AVAudioFrameCount(min(320, lastFrame - file.framePosition)))
             guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { break }
             var energy = 0.0
             for i in 0..<Int(buffer.frameLength) {
