@@ -27,8 +27,14 @@ Source: https://github.com/orioncactus/pretendard/tree/v1.3.9
   https://huggingface.co/mago-ai/ultra_diar_streaming_sortformer_8spk_v1 and
   https://huggingface.co/investguy/ultra_diar_streaming_sortformer_8spk_v1_onnx.
 
+- Nemotron 3: official NeMo-Speech.cpp 0.2.0 Metal helper. Runtime notices are included
+  under `Contents/Resources/Licenses/Nemotron/`. Source: https://github.com/NVIDIA/NeMo-Speech.cpp.
+  The separately downloaded Q8 model is distributed under OpenMDW 1.1:
+  https://huggingface.co/nvidia/Nemotron-3-Diarization.
+
 Model weights remain in machine-local caches, not the app or public repository.
-This artifact is a local beta, not a notarized or audited public binary distribution.
+Signing and notarization status must be established for each packaged build; these
+notices do not certify a public binary distribution.
 
 Research-only voice matching tests use locally cached FluidAudio community-1
 FBANK/WeSpeaker Core ML models (metadata: CC BY 4.0). The local beta does not run

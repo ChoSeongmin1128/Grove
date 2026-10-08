@@ -2,6 +2,7 @@ import Foundation
 
 public enum SpeakerProjection {
     public static func validate(_ turns: [DiarizationTurn], duration: Double, engine: DiarizationEngine) throws {
+        if engine == .none && !turns.isEmpty { throw InferenceError.invalidOutput("화자 구분 없는 전사에 화자 결과를 넣을 수 없습니다.") }
         guard duration.isFinite, duration > 0,
               turns.allSatisfy({
                   $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start
@@ -10,8 +11,8 @@ public enum SpeakerProjection {
         if engine == .sortformerStreaming && Set(turns.map(\.clusterID)).count > 4 {
             throw InferenceError.invalidOutput("Sortformer의 지원 인원수를 넘는 결과입니다.")
         }
-        if engine == .ultra8 && Set(turns.map(\.clusterID)).count > 8 {
-            throw InferenceError.invalidOutput("Ultra8의 지원 인원수를 넘는 결과입니다.")
+        if (engine == .ultra8 || engine == .nemotron3) && Set(turns.map(\.clusterID)).count > 8 {
+            throw InferenceError.invalidOutput("지원 인원수를 넘는 결과입니다.")
         }
     }
 

@@ -3,12 +3,13 @@
 AI-assisted working document. Current user instructions, live state, source and tests
 take precedence. This public handoff describes code, not a user's installed app,
 machine, recordings or evaluation results. Machine-local installation receipts and
-detailed validation logs remain in ignored `results/`.
+detailed validation logs remain in ignored `.work/`. The root `HANDOFF.md` points to
+the private installation and evaluation receipts.
 
 ## Current source
 
-The source targets version0.3.0 / local-beta.11. This is a personal local beta, not a
-notarized release or a standalone model installer. Consult `App/Info.plist` for the
+The source targets version0.4.0 / local-beta.12. This is a personal local beta, a
+source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
 - Basic transcript and accessibility time labels show whole seconds. Stored playback
@@ -18,9 +19,13 @@ build identifier and local receipts for actual installation state.
   The first visible row remains unruled; lines add no height or interaction targets.
 - General-purpose microphone recording, pause/resume and file import are supported.
   System-output capture is removed; older dual-channel files remain read-compatible.
-- MOSS transcription runs after recording/import. Approved routing is Ultra8 for
-  unknown count or1–8 people and Community-1 for9+. Sortformer4 remains selectable.
-  Ultra8/Sortformer counts are advisory; Community-1 offers exact-count processing.
+- First-run precision mode uses bundled MOSS + Nemotron 3 and verified model downloads.
+  Mac basic transcription uses Apple SpeechAnalyzer with no speaker separation.
+  Existing saved routing is preserved. Legacy automatic mode remains Ultra8 for unknown
+  count / 1–8 and Community-1 for 9+. Exact counts are still a Community-1 capability.
+- Calendar reminders read selected Mac calendars and start microphone recording.
+- Notion rich-text copy / parent-end divider and child-page export are explicit actions.
+  First-run downloads support byte progress, pause / resume, capacity and runtime checks.
 - Per-recording options are local drafts; persistent defaults live in Settings.
 - Recording names are editable. **원본 파일…** provides path access, Finder reveal and
   byte-preserving export with source/destination protection and cancellation.
@@ -74,8 +79,9 @@ export or editing. Preserve data, keep a recoverable prior bundle, verify signin
 confirm the new process. Never restore an old library over newer data. Do not leave
 duplicate generated apps in Downloads or Applications.
 
-Qualified native helpers and local model weights remain prerequisites for a fresh
-installation. Do not claim first-run model download or untested hardware support.
+Qualified native helpers are bundled. The app prepares pinned default weights after
+user selection, or uses Apple-managed Korean assets for basic transcription. Do not
+claim a developer-tool-free separate Mac test unless it was performed.
 Research environments and build caches are regenerable; preserve source, locks,
 licenses and private evidence before scoped cleanup.
 
@@ -101,3 +107,5 @@ See [transcript/library UX](transcript-library-ux.md), [file management](recordi
 [release readiness](release-readiness.md), [saved speakers](microphone-folders-and-speaker-reuse.md)
 and [artifact retention](artifact-retention.md). Historical private notes and local
 installation details remain under ignored `results/`.
+
+See [setup and integrations](setup-and-integrations.md) and [distribution](distribution.md).

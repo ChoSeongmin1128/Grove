@@ -1,25 +1,31 @@
 # Grove
 
-Grove is an experimental local-first macOS meeting recorder and transcription app.
+Grove is a local-first macOS meeting recorder and transcription app.
 Audio and meeting metadata stay on the Mac unless the user explicitly exports them.
 
 > Grove is a local beta, not a production-ready recorder or a self-contained model
-> installer. Current builds require preinstalled native workers and model weights.
+> distribution. Packaging requires prepared native workers; the app can download and verify the default model weights.
 
 ## Current capabilities
 
 - native SwiftUI macOS app
+- first-run choice between precision transcription and Mac basic transcription
 - microphone-only recording to M4A, with pause/resume
 - audio and video file import
-- Korean post-meeting transcription with a native MOSS worker
-- independent diarization: Ultra8 by default for unknown count or 1–8 people,
-  Community-1 for an entered count of 9+, and manually selectable Sortformer4
+- Korean post-meeting transcription with MOSS or Apple SpeechAnalyzer
+- independent diarization: MOSS + Nemotron 3 for a fresh installation, with Ultra8,
+  Community-1 and Sortformer4 remaining selectable
+- Calendar reminders from accounts connected to the Mac Calendar app
+- rich-text copy for Notion and divider / meeting-note child page added at a chosen page end
+- in-app model preparation with byte progress, pause / resume, capacity checks, pinned versions, SHA256 and a runtime check
 - per-recording engine/count options; persistent defaults live in Settings
 - local folders, recording-title editing, and explicit reuse of saved speaker names
 - utterance text/speaker editing, splitting, undo/redo and TXT/Markdown export
 - original audio preservation, path access and byte-preserving file export
 
-Speaker names are not automatically matched across meetings. Ultra8/Sortformer4 count
+Existing saved model choices are retained. Legacy automatic routing uses Ultra8 for
+unknown count or 1–8, and Community-1 for an entered count of 9+.
+Speaker names are not automatically matched across meetings. Nemotron 3/Ultra8/Sortformer4 count
 entry is advisory, not an exact cluster-count constraint. A successful transcription
 or an acknowledged speaker warning does not certify transcription accuracy or approve
 training data. AI summaries and dataset-quality annotation/export are not shipped.
@@ -36,15 +42,18 @@ training data. AI summaries and dataset-quality annotation/export are not shippe
 swift test
 python3 -m unittest discover -s tests -v
 ./scripts/package_app.sh release
-codesign --verify --deep --strict dist/Grove.app
+codesign --verify --deep --strict .work/dist/Grove.app
 ```
 
-The packaged application is written to `dist/Grove.app`. Packaging expects qualified
-workers in `results/native-workers` (or `GROVE_NATIVE_WORKERS_DIR`), including their
+Mac basic transcription uses Apple-managed Korean assets and does not separate speakers.
+The packaged application is written to `.work/dist/Grove.app`. Packaging expects qualified
+workers in `.work/native-workers` (or `GROVE_NATIVE_WORKERS_DIR`), including their
 matching resources and license notices. This ignored directory is not part of a fresh
 checkout. See the [MOSS worker](scripts/native-moss-harness/README.md) and
 [Ultra8 worker](scripts/native-ultra8-harness/README.md) build notes; the app also uses
 FluidAudio and speech-swift helpers described in [third-party notices](THIRD_PARTY_NOTICES.md).
+Calendar access and Notion credentials are configured in Settings. Notion export sends
+text only when the user clicks Apply; copying does not require a Notion connection.
 Models are stored separately under Grove's Application Support directory and are not
 bundled in the app or this repository. Source builds/tests do not establish that the
 runtime models are installed or that a release is notarized.
@@ -85,3 +94,5 @@ If you add your own dataset, keep it under `test-data/` and generated outputs un
 
 Research notes are indexed in [`AGENTS.md`](AGENTS.md). They are AI-assisted working
 documents and must be checked against current code and primary sources.
+
+See [setup and integrations](docs/setup-and-integrations.md) and [distribution](docs/distribution.md).

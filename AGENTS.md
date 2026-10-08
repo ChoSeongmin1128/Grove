@@ -63,6 +63,29 @@ inference, proposals, and unverified items.
   private, even when names/audio have been removed. Public docs contain product behavior,
   generic methodology and upstream technical information, not private sample results.
 
+## Resume and MVP integration rules
+
+- Read root `HANDOFF.md` first when available. It points to the private `.local` handoff;
+  `docs/handoff.md` describes source behavior, not machine-local installation receipts.
+- Read `docs/setup-and-integrations.md` and `docs/distribution.md` for first-run models,
+  Mac basic transcription, Calendar, Notion and Developer ID distribution.
+- Bundle all inference executables / libraries / Metal resources. Never require Python,
+  a separate CLI or development tools on the user's Mac.
+- Keep pinned model versions and hashes in `ModelCatalog`. Download weights only after
+  the user chooses precision transcription and starts preparation. Preserve partial
+  downloads, verify completed bytes and run the readiness check before claiming ready.
+- Mac basic transcription uses Apple-managed language assets and has no diarization.
+  Store this as an explicit no-diarization result, not an invented speaker or confirmation.
+- Calendar uses accounts already connected to Mac Calendar. No Meet capture or Google
+  OAuth registration is in MVP scope. Request Calendar permission through the app UI.
+- Notion tokens stay in Keychain. Copy works without a connection. Add a divider and child
+  meeting-note page at the chosen parent's end; do not replace the existing parent body.
+  Preserve creation receipts and never automatically retry an uncertain page creation.
+- Developer ID signing / notarization credentials are supplied locally; do not commit
+  credentials or reuse another app's update keys / CloudKit profile for Grove.
+- Use `.work` for new logs, builds, app bundles and native-worker preparation. Retained
+  historical `results` are not permission to overwrite or clean unrelated evidence.
+
 ## Work sequence
 
 1. Read this file and `docs/handoff.md`.
@@ -79,7 +102,7 @@ Default validation:
 swift test
 python3 -m unittest discover -s tests -v
 ./scripts/package_app.sh release
-codesign --verify --deep --strict dist/Grove.app
+codesign --verify --deep --strict .work/dist/Grove.app
 ```
 
 ## Document index
@@ -107,7 +130,7 @@ codesign --verify --deep --strict dist/Grove.app
   immutable snapshots, RTTM/UEM, permission and development/holdout separation.
 
 - [`docs/ultra8-option-and-speaker-count.md`](docs/ultra8-option-and-speaker-count.md):
-  Ultra8 automatic-default policy, count boundaries, same-engine comparisons, native worker
+  legacy Ultra8 automatic policy, count boundaries, same-engine comparisons, native worker
   and historical engine provenance.
 
 - [`docs/microphone-folders-and-speaker-reuse.md`](docs/microphone-folders-and-speaker-reuse.md):

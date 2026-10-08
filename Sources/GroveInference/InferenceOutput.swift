@@ -85,7 +85,7 @@ public struct InferenceResult: Codable, Hashable, Sendable {
         self.diarizationEngine = engine
         self.transcription = transcription
         self.rawDiarization = rawDiarization
-        self.assignments = SpeakerProjection.assign(transcription.utterances, turns: rawDiarization)
+        self.assignments = Self.project(transcription.utterances, turns: rawDiarization, engine: engine)
     }
 
     public func validate() throws {
@@ -93,6 +93,8 @@ public struct InferenceResult: Codable, Hashable, Sendable {
         if configuration.diarizationPreference == .automatic {
             // Automatic routing can change; saved results retain their actual engine.
             switch diarizationEngine {
+            case .none: recordedConfiguration.diarizationPreference = .none
+            case .nemotron3: recordedConfiguration.diarizationPreference = .nemotron3
             case .sortformerStreaming: recordedConfiguration.diarizationPreference = .sortformerStreaming
             case .ultra8: recordedConfiguration.diarizationPreference = .ultra8
             case .community1: recordedConfiguration.diarizationPreference = .community1
@@ -103,8 +105,15 @@ public struct InferenceResult: Codable, Hashable, Sendable {
         }
         try transcription.validate(duration: duration)
         try SpeakerProjection.validate(rawDiarization, duration: duration, engine: diarizationEngine)
-        guard assignments == SpeakerProjection.assign(transcription.utterances, turns: rawDiarization) else {
+        guard assignments == Self.project(transcription.utterances, turns: rawDiarization, engine: diarizationEngine) else {
             throw InferenceError.invalidOutput("원본 화자 구간과 발화 배정이 일치하지 않습니다.")
         }
+    }
+
+    private static func project(_ utterances: [RecognizedUtterance], turns: [DiarizationTurn], engine: DiarizationEngine) -> [UtteranceAssignment] {
+        if engine == .none {
+            return utterances.map { .init(utteranceID: $0.id, clusterID: nil, overlapSecondsByCluster: [:], reviewReasons: []) }
+        }
+        return SpeakerProjection.assign(utterances, turns: turns)
     }
 }

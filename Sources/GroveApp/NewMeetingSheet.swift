@@ -5,6 +5,7 @@ struct NewMeetingSheet: View {
     @State private var title = ""
     @State private var options: MeetingSpeakerOptions
     @State private var folderID: UUID?
+    @State private var showsOptions = false
 
     init(store: GroveStore) {
         self.store = store
@@ -25,7 +26,9 @@ struct NewMeetingSheet: View {
                 TextField("회의 제목", text: $title, prompt: Text("회의 제목 입력"))
                 RecordingFolderPicker(store: store, folderID: $folderID)
                 LabeledContent("입력", value: "마이크")
-                MeetingSpeakerOptionsView(options: $options)
+                DisclosureGroup("전사 옵션", isExpanded: $showsOptions) {
+                    MeetingSpeakerOptionsView(options: $options)
+                }
                 LabeledContent("저장", value: "이 Mac에 녹음 파일 보관")
             }
             .formStyle(.grouped)

@@ -13,10 +13,12 @@ struct TranscriptExportOptions: Sendable {
     var includesSpeakers = true
     var includesTimestamps = true
     var selectedUtteranceIDs: Set<UUID>?
+    var usesOriginalText = false
 }
 
 enum TranscriptRenderer {
     static func render(_ document: TranscriptDocument, options: TranscriptExportOptions = .init()) -> String {
+        let document = exportDocument(document, original: options.usesOriginalText)
         let utterances = document.utterances.enumerated().filter {
             options.selectedUtteranceIDs?.contains($0.element.id) ?? true
         }.sorted {
@@ -30,7 +32,8 @@ enum TranscriptRenderer {
                 let name = document.speakerName(for: utterance) + (isInferred ? " (추정)" : "")
                 heading.append(options.format == .markdown ? "**\(escapeMarkdown(name))**" : name)
             }
-            let text = options.format == .markdown ? escapeMarkdown(utterance.displayedText) : utterance.displayedText
+            let body = options.usesOriginalText ? utterance.rawText : utterance.displayedText
+            let text = options.format == .markdown ? escapeMarkdown(body) : body
             guard !heading.isEmpty else { return text }
             return heading.joined(separator: " ") + "\n" + text
         }
@@ -43,8 +46,17 @@ enum TranscriptRenderer {
         return String(format: "%02d:%02d", value / 60, value % 60)
     }
 
-    private static func escapeMarkdown(_ value: String) -> String {
-        let special: Set<Character> = ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", ">", "|", "~"]
+    static func exportDocument(_ document: TranscriptDocument, original: Bool) -> TranscriptDocument {
+        guard original else { return document }
+        var source = document
+        while !source.undoHistory.isEmpty {
+            do { try source.undo() } catch { break }
+        }
+        return source
+    }
+
+    static func escapeMarkdown(_ value: String) -> String {
+        let special: Set<Character> = ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "<", ">", "|", "~"]
         return value.map { special.contains($0) ? "\\\($0)" : String($0) }.joined()
     }
 }

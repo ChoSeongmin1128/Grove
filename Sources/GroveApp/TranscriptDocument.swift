@@ -124,7 +124,9 @@ struct TranscriptDocument: Codable, Hashable, Sendable {
     }
 
     func speakerName(for utterance: DocumentUtterance) -> String {
-        speakers.first { $0.id == utterance.speakerID }?.name ?? "화자 미확정"
+        if let speaker = speakers.first(where: { $0.id == utterance.speakerID }) { return speaker.name }
+        if let source = utterance.sourceChannelID, sourceDiarizationEngines?[source] == DiarizationEngine.none { return "화자 구분 없음" }
+        return "화자 미확정"
     }
 
     func reassignmentIDs(from utteranceID: UUID, scope: SpeakerEditScope) throws -> Set<UUID> {

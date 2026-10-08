@@ -16,6 +16,10 @@ struct LibraryHomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
+                if !isFolderLocation && !isSearching {
+                    CalendarHomeSection(schedule: store.calendarSchedule, models: store.modelManager, isBusy: store.isBusy,
+                        requiresModels: store.defaultSpeakerOptions.transcriptionEngine == .moss)
+                }
                 searchField
                 if let folderID { FolderSpeakerLibraryView(store: store, folderID: folderID) }
                 if recordings.isEmpty {

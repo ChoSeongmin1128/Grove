@@ -6,6 +6,47 @@ import Testing
 
 @MainActor
 struct TranscriptLayoutRenderingTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"] != nil))
+    func renderIntegrationSurfaces() throws {
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"]))
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        _ = NSApplication.shared
+        GroveTypography.registerFonts()
+        let store = GroveStore(baseDirectory: base)
+        let meeting = MeetingRecord(title: "제품 검토 회의", startedAt: Date(), duration: 40, status: .ready,
+            audioPath: nil, glossaryProfile: "", transcript: [], claims: [], errorMessage: nil)
+        store.meetings = [meeting]
+        let document = try TranscriptDocument(speakers: [], utterances: [.init(id: UUID(), startTime: 0, endTime: 10,
+            rawText: "오늘 논의한 내용은 전체 전사문으로 남기겠습니다.", sourceChannelID: "recording", engineClusterID: nil, speakerID: nil, editedText: nil)])
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let event = ScheduledMeeting(id: "synthetic", calendarID: "synthetic", title: "제품 검토 회의", start: Date(), end: Date().addingTimeInterval(3600), calendarName: "업무")
+        let views: [(String, AnyView, Double, Double)] = [
+            ("first-run", AnyView(FirstRunSetupView(store: store)), 900, 720),
+            ("home", AnyView(LibraryHomeView(store: store)), 1000, 720),
+            ("models", AnyView(ModelSettingsView(models: store.modelManager, isBusy: false)), 620, 570),
+            ("calendar", AnyView(CalendarSettingsView(schedule: store.calendarSchedule)), 620, 570),
+            ("notion-export", AnyView(NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter)), 692, 650),
+            ("new-meeting", AnyView(NewMeetingSheet(store: store)), 560, 600),
+            ("reminder", AnyView(MeetingReminderBanner(meeting: event, record: {}, snooze: {}, close: {})), 680, 76)
+        ]
+        for (name, view, width, height) in views {
+            let host = NSHostingView(rootView: view.environment(\.colorScheme, .light).tint(GroveTheme.grove)
+                .frame(width: width, height: height).background(Color.white))
+            host.appearance = NSAppearance(named: .aqua)
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: width, height: height), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try #require(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: output.appendingPathComponent(name + ".png"), options: .atomic)
+            window.contentView = nil
+        }
+    }
     // Opt-in images use synthetic text in an offscreen host; no app is launched or window shown.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"] != nil))
     func renderSyntheticTranscriptAtCompactAndLargeTypeSizes() throws {

@@ -12,6 +12,16 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
 
     func run(source: URL, configuration: InferenceConfiguration, directory: URL,
              progress: @Sendable (String) async -> Void) async throws -> InferenceResult {
+        if configuration.transcriptionEngine == .apple {
+            await progress("Mac 기본 전사로 대화를 옮기고 있습니다")
+            let output = try await AppleTranscriptionService.transcribe(file: source, contextualStrings: [])
+            guard !output.utterances.isEmpty else { throw InferenceError.noSpeech }
+            let result = try InferenceResult(duration: output.duration, configuration: configuration,
+                transcription: .init(utterances: output.utterances), rawDiarization: [])
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(output).write(to: directory.appendingPathComponent("apple-transcript.json"), options: .withoutOverwriting)
+            return result
+        }
         let backend = try backend(configuration: configuration)
         return try await NativeInferencePipeline(backend: backend).runRecording(
             source: source, configuration: configuration, directory: directory, progress: progress)
@@ -23,9 +33,12 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
         let sortformer = helpers.appendingPathComponent("fluidaudiocli")
         let community = helpers.appendingPathComponent("speech")
         let ultra = helpers.appendingPathComponent("grove-ultra8")
+        let nemotron = helpers.appendingPathComponent("Nemotron/bin/nemo-speech")
         let engine = try configuration.resolvedEngine()
         let diarizer: URL
         switch engine {
+        case .none: diarizer = moss
+        case .nemotron3: diarizer = nemotron
         case .sortformerStreaming: diarizer = sortformer
         case .community1: diarizer = community
         case .ultra8: diarizer = ultra
@@ -36,6 +49,10 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
             }
         }
         let ultraModel = Ultra8Model.url(in: applicationSupport)
+        let nemotronModel = NemotronModel.url(in: applicationSupport)
+        if engine == .nemotron3 && !FileManager.default.isReadableFile(atPath: nemotronModel.path) {
+            throw InferenceError.invalidOutput("설정의 모델 화면에서 기본 모델을 준비해 주세요.")
+        }
         if engine == .ultra8 && !FileManager.default.isReadableFile(atPath: ultraModel.path) {
             throw InferenceError.invalidOutput("Ultra8 로컬 모델이 준비되지 않았습니다. 다른 엔진으로 자동 변경하지 않습니다.")
         }
@@ -43,12 +60,12 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
             "Models/hub/models--OpenMOSS-Team--MOSS-Transcribe-Diarize/snapshots/704aa4a9c304e8520be88901e0d1960158ef5b15", isDirectory: true)
         for file in ["config.json", "tokenizer.json", "tokenizer_config.json", "processor_config.json", "model-00000-of-00001.safetensors"] {
             guard FileManager.default.isReadableFile(atPath: model.appendingPathComponent(file).path) else {
-                throw InferenceError.invalidOutput("로컬 전사 모델이 준비되지 않았습니다. 이 베타는 미리 설치한 MOSS 모델을 사용합니다.")
+                throw InferenceError.invalidOutput("설정의 모델 화면에서 전사 모델을 먼저 준비해 주세요.")
             }
         }
         return NativeInferenceBackend(mossExecutable: moss, mossModelDirectory: model,
             sortformerExecutable: sortformer, communityExecutable: community,
-            ultra8Executable: ultra, ultra8Model: ultraModel)
+            ultra8Executable: ultra, ultra8Model: ultraModel, nemotronExecutable: nemotron, nemotronModel: nemotronModel)
     }
 }
 

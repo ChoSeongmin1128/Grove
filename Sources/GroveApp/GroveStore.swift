@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import GroveInference
 
 @MainActor
@@ -29,6 +30,10 @@ final class GroveStore: ObservableObject {
     @Published private(set) var transcriptDocumentErrors: [UUID: String] = [:]
 
     let recorder = AudioRecorder()
+    let calendarSchedule: CalendarSchedule
+    let modelManager: ModelManager
+    let notionExporter: NotionExporter
+    let applePreparation = AppleTranscriptionPreparation()
     let voiceIdentificationAvailable: Bool
 
     private let storageURL: URL
@@ -45,6 +50,7 @@ final class GroveStore: ObservableObject {
     private var voiceTask: Task<Bool, Never>?
     private var voiceRegistryLoaded = false
     private let folderTransferScopeID = UUID()
+    private var subscriptions: Set<AnyCancellable> = []
 
     init(baseDirectory: URL? = nil, inferenceService: (any MeetingInferenceRunning)? = nil,
          voiceVault: SpeakerVoiceVault? = nil, voiceExtractor: (any SpeakerVoiceExtracting)? = nil,
@@ -55,6 +61,9 @@ final class GroveStore: ObservableObject {
             in: .userDomainMask
         ).first!.appendingPathComponent("Grove", isDirectory: true)
         storageURL = base.appendingPathComponent("meetings.json")
+        calendarSchedule = CalendarSchedule(defaults: baseDirectory == nil ? .standard : UserDefaults(suiteName: "Grove.Tests.\(UUID().uuidString)")!)
+        modelManager = ModelManager(baseDirectory: base)
+        notionExporter = NotionExporter(directory: base.appendingPathComponent("Exports/Notion"))
         libraryStorage = MeetingLibraryStorage(url: base.appendingPathComponent("library.json"))
         audioDirectory = base.appendingPathComponent("Audio", isDirectory: true)
         transcriptStorage = TranscriptDocumentStorage(directory: base.appendingPathComponent("Documents", isDirectory: true))
@@ -87,6 +96,12 @@ final class GroveStore: ObservableObject {
             }
         }
         loadTranscriptDocuments()
+        calendarSchedule.canRecord = { [weak self] in self?.isBusy == false && self?.needsModelSetup == false }
+        calendarSchedule.onRecord = { [weak self] event in
+            Task { await self?.beginRecording(title: event.title, glossaryProfile: "사전 없음", calendarEvent: event) }
+        }
+        modelManager.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
+        applePreparation.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         Task { [weak self] in await self?.refreshVoiceEnrollmentStatus() }
     }
 
@@ -101,7 +116,8 @@ final class GroveStore: ObservableObject {
 
     var isProcessing: Bool { processingMeetingID != nil }
     var isExportingOriginal: Bool { exportingOriginalMeetingID != nil }
-    var isBusy: Bool { isRecording || isProcessing || isStartingCapture || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit }
+    var isBusy: Bool { isRecording || isProcessing || isStartingCapture || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit || modelManager.isInstalling || applePreparation.isPreparing }
+    var needsModelSetup: Bool { defaultSpeakerOptions.transcriptionEngine == .apple ? !applePreparation.isReady : !modelManager.isReadyForUse }
 
     var defaultSpeakerOptions: MeetingSpeakerOptions {
         get { library.defaultSpeakerOptions }
@@ -670,6 +686,12 @@ final class GroveStore: ObservableObject {
 
     func prepareToQuit() async -> Bool {
         guard !isPreparingToQuit else { return false }
+        guard !notionExporter.isSaving else {
+            alertMessage = "Notion 저장 결과를 확인한 뒤 앱을 닫아 주세요."
+            return false
+        }
+        await modelManager.cancelAndWait()
+        await applePreparation.cancelAndWait()
         guard !isExportingOriginal else {
             alertMessage = "원본 파일 저장을 마치거나 취소한 뒤 앱을 닫아 주세요."
             return false
@@ -807,7 +829,8 @@ final class GroveStore: ObservableObject {
         title: String,
         glossaryProfile: String,
         plan: MeetingInferencePlan? = nil,
-        folderID: UUID? = nil
+        folderID: UUID? = nil,
+        calendarEvent: ScheduledMeeting? = nil
     ) async {
         guard canModifyMeetingIndex else { return }
         guard folderID == nil || library.folders.contains(where: { $0.id == folderID }) else {
@@ -849,6 +872,7 @@ final class GroveStore: ObservableObject {
         meeting.inferenceConfiguration = selectedPlan.configuration
         meeting.channelInferenceConfigurations = selectedPlan.channelConfigurations
         meeting.folderID = folderID
+        meeting.calendarEvent = calendarEvent
 
         do {
             try recorder.start(to: audioURL)
@@ -1275,7 +1299,7 @@ final class GroveStore: ObservableObject {
             duration: 58,
             status: .needsReview,
             audioPath: nil,
-            captureMode: .systemAndMicrophone,
+            captureMode: .microphone,
             glossaryProfile: "사전 없음",
             transcript: segments,
             claims: [

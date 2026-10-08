@@ -5,7 +5,9 @@ import Testing
 
 struct MeetingEngineChoiceTests {
     @Test func automaticEngineRemainsAutomaticAfterReopeningAndChangingCount() throws {
-        let initial = try MeetingSpeakerOptions().plan(isDual: false)
+        var automatic = MeetingSpeakerOptions()
+        automatic.engineChoice = .automatic
+        let initial = try automatic.plan(isDual: false)
         var reopened = MeetingSpeakerOptions(configuration: initial.configuration)
         #expect(reopened.engineChoice == .automatic)
         reopened.mode = .manualCount

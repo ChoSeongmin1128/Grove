@@ -1,4 +1,5 @@
 import SwiftUI
+import GroveInference
 
 struct MeetingSpeakerOptionsView: View {
     @Binding var options: MeetingSpeakerOptions
@@ -6,6 +7,14 @@ struct MeetingSpeakerOptionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Picker("전사 방식", selection: $options.transcriptionEngine) {
+                Text("정밀 전사 / 화자 분리").tag(TranscriptionEngine.moss)
+                Text("Mac 기본 전사").tag(TranscriptionEngine.apple)
+            }
+            if options.transcriptionEngine == .apple {
+                Text("Grove 모델을 설치하지 않고 macOS 한국어 전사를 사용합니다. 화자 구분은 제공하지 않습니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
             Picker("화자 분리 엔진", selection: $options.engineChoice) {
                 ForEach(MeetingEngineChoice.allCases) { engine in Text(engine.label).tag(engine) }
             }
@@ -28,11 +37,14 @@ struct MeetingSpeakerOptionsView: View {
                 }
             }
             Text(engineExplanation).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
     private var engineExplanation: String {
         switch options.engineChoice {
+        case .nemotron3:
+            return "최대 8명까지 자동으로 구분하는 가벼운 모델입니다. 입력 인원은 결과 확인용이며 강제하지 않습니다. 화자 배정은 전사 후 확인해 주세요."
         case .automatic:
             return "인원 미입력 또는 1–8명은 Ultra8, 9명 이상은 Community-1을 사용합니다. 인원 미입력은 최대 8명까지만 구분하므로, 9명 이상이면 인원을 입력해 주세요. Ultra8에서는 인원수가 강제되지 않습니다."
         case .sortformerStreaming:

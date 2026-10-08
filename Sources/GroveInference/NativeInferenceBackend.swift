@@ -7,16 +7,21 @@ public struct NativeInferenceBackend: Sendable {
     public let communityExecutable: URL
     public let ultra8Executable: URL?
     public let ultra8Model: URL?
+    public let nemotronExecutable: URL?
+    public let nemotronModel: URL?
     private let runner = NativeProcessRunner()
 
     public init(mossExecutable: URL, mossModelDirectory: URL, sortformerExecutable: URL, communityExecutable: URL,
-                ultra8Executable: URL? = nil, ultra8Model: URL? = nil) {
+                ultra8Executable: URL? = nil, ultra8Model: URL? = nil,
+                nemotronExecutable: URL? = nil, nemotronModel: URL? = nil) {
         self.mossExecutable = mossExecutable
         self.mossModelDirectory = mossModelDirectory
         self.sortformerExecutable = sortformerExecutable
         self.communityExecutable = communityExecutable
         self.ultra8Executable = ultra8Executable
         self.ultra8Model = ultra8Model
+        self.nemotronExecutable = nemotronExecutable
+        self.nemotronModel = nemotronModel
     }
 
     public func transcribe(audio: URL, duration: Double, directory: URL) async throws -> RawTranscription {
@@ -39,9 +44,14 @@ public struct NativeInferenceBackend: Sendable {
             throw InferenceError.invalidOutput("새 작업 폴더가 필요합니다. 기존 화자 결과는 보존됩니다.")
         }
         let log = directory.appendingPathComponent("diarization.log")
-        let arguments = try Self.diarizationArguments(audio: audio, output: output, configuration: configuration, ultra8Model: ultra8Model)
+        let arguments = try Self.diarizationArguments(audio: audio, output: output, configuration: configuration,
+                                                     ultra8Model: ultra8Model, nemotronModel: nemotronModel)
         let executable: URL
         switch engine {
+        case .none: return []
+        case .nemotron3:
+            guard let nemotronExecutable else { throw InferenceError.missingExecutable("Nemotron 3") }
+            executable = nemotronExecutable
         case .sortformerStreaming: executable = sortformerExecutable
         case .community1: executable = communityExecutable
         case .ultra8:
@@ -60,8 +70,15 @@ public struct NativeInferenceBackend: Sendable {
     }
 
     public static func diarizationArguments(audio: URL, output: URL, configuration: InferenceConfiguration,
-                                           ultra8Model: URL? = nil) throws -> [String] {
+                                           ultra8Model: URL? = nil, nemotronModel: URL? = nil) throws -> [String] {
         switch try configuration.resolvedEngine() {
+        case .none: return []
+        case .nemotron3:
+            guard let nemotronModel, nemotronModel.isFileURL else { throw InferenceError.invalidOutput("화자 분리 모델을 먼저 준비해 주세요.") }
+            return ["diarize", audio.path, "--model", nemotronModel.path, "--backend", "metal",
+                    "--preset", "v3-offline", "--format", "json", "--output", output.path,
+                    "--onset", "0.5", "--offset", "0.5", "--pad-onset", "0", "--pad-offset", "0",
+                    "--min-duration-on", "0", "--min-duration-off", "0", "--no-batching"]
         case .sortformerStreaming:
             // The measured streaming condition uses --compute-units all. Never add
             // --offline here: that invokes a different model and timeline algorithm.

@@ -5,7 +5,9 @@ import Testing
 
 struct MeetingSpeakerOptionsTests {
     @Test func automaticUsesUltraWithoutInventingASpeakerCount() throws {
-        let plan = try MeetingSpeakerOptions().plan(isDual: false)
+        var options = MeetingSpeakerOptions()
+        options.engineChoice = .automatic
+        let plan = try options.plan(isDual: false)
         #expect(plan.configuration.expectedSpeakerCount == nil)
         #expect(try plan.configuration.resolvedEngine() == .ultra8)
         #expect(plan.configuration.speakerCountPolicy == .advisory)
@@ -14,6 +16,7 @@ struct MeetingSpeakerOptionsTests {
     @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8, 9, 12])
     func enteredCountChoosesEngineAndIsPassedWithoutClamping(_ count: Int) throws {
         var options = MeetingSpeakerOptions()
+        options.engineChoice = .automatic
         options.mode = .manualCount
         options.countText = String(count)
         let config = try options.plan(isDual: false).configuration
@@ -35,6 +38,7 @@ struct MeetingSpeakerOptionsTests {
     @Test(arguments: ["", " ", "0", "-2", "4.5", "네 명", "999999999999999999999999"])
     func invalidCountsCannotStartAJob(_ input: String) {
         var options = MeetingSpeakerOptions()
+        options.engineChoice = .automatic
         options.mode = .manualCount
         options.countText = input
         #expect(throws: InferenceError.self) { try options.plan(isDual: false) }
@@ -42,6 +46,7 @@ struct MeetingSpeakerOptionsTests {
 
     @Test func fullWidthDigitsAndStoredCountsRoundTrip() throws {
         var options = MeetingSpeakerOptions()
+        options.engineChoice = .automatic
         options.mode = .manualCount
         options.countText = " ５ "
         let config = try options.plan(isDual: false).configuration
@@ -61,6 +66,7 @@ struct MeetingSpeakerOptionsTests {
 
     @Test func dualSourceCountsAreIndependentAndPersistable() throws {
         var options = MeetingSpeakerOptions()
+        options.engineChoice = .automatic
         options.mode = .manualCount
         options.systemCountText = "5"
         options.microphoneCountText = "1"

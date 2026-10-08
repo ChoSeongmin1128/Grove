@@ -1,16 +1,14 @@
-# Ultra8 default policy and speaker-count controls
+# Diarization selection and speaker-count controls
 
-2026-09-03. AI-assisted notes; verify against source, tests and current user intent.
+Current source contract. AI-assisted notes; verify against source and tests.
 
-## User decision
+## Default policy
 
-After the selectable beta.5 release, the user approved Ultra8 as
-the automatic default: no entered count or 1–8 uses MOSS + Ultra8; 9+ uses MOSS +
-Community-1 with an exact count. Sortformer streaming remains manually selectable.
-This supersedes the earlier option-only product decision. It is a user-approved beta
-policy, not a published model-quality ranking.
-Preserve microphone-only capture, file import, pause, folders and manual speaker reuse.
-No system capture or automatic voice identity matching is reintroduced.
+Fresh installations select Nemotron 3 for lightweight automatic separation of up to
+eight speakers. MOSS remains the transcription model. Existing persisted engine choices
+and legacy automatic routing remain unchanged. This is a resource choice, not a claim
+that every Korean meeting will have better speaker accuracy.
+Microphone-only capture, file import, pause, folders and manual speaker reuse remain.
 
 ## Selection contract
 
@@ -19,6 +17,7 @@ options. Persistent defaults remain in Settings, not in an always-visible toolba
 
 | Engine choice | Automatic speaker count | Entered speaker count |
 | --- | --- | --- |
+| Nemotron 3 (fresh default) | Up to eight output speakers | Advisory only; >8 rejected |
 | Automatic engine selection | Ultra8; explicitly warn that unknown-count processing supports at most eight | Ultra8 advisory for 1–8; Community-1 exact for 9+ |
 | Sortformer streaming | Up to four output speakers | Advisory only; >4 rejected |
 | Ultra8 | Up to eight output speakers | Advisory only; >8 rejected |
@@ -67,7 +66,7 @@ preprocessing loads the recording into memory; the helper runs outside the UI pr
 For count-effect evaluation, keep ASR text fixed and compare automatic versus constrained
 conditions within the same diarizer. Alternate run order and report speaker confusion,
 overall diarization error, combined transcript error and resource use separately.
-Ultra8/Sortformer have no exact-count condition; do not fabricate one by clipping output.
+Nemotron 3/Ultra8/Sortformer have no exact-count condition; do not fabricate one by clipping output.
 
 Private recordings, references, per-recording diagnostics, derived metrics and resource
 receipts remain in ignored local storage and are not part of the public documentation.

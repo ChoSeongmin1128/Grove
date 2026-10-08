@@ -167,7 +167,10 @@ extension TranscriptDocument {
     var speakerReviewCount: Int { utterances.filter { speakerReview(for: $0).needsReview }.count }
 
     func speakerReview(for utterance: DocumentUtterance) -> SpeakerReviewAssessment {
-        SpeakerReviewPolicy.assess(utterance, documentRevisionID: revisionID,
+        if utterance.speakerID == nil, let source = utterance.sourceChannelID, sourceDiarizationEngines?[source] == DiarizationEngine.none {
+            return .init(isConfirmed: false, canConfirm: false, reasons: [], hasRawAssignmentEvidence: false)
+        }
+        return SpeakerReviewPolicy.assess(utterance, documentRevisionID: revisionID,
             speakerExists: utterance.speakerID.map { id in speakers.contains { $0.id == id } } ?? false)
     }
 

@@ -42,18 +42,26 @@ struct MeetingInferenceIntegrationTests {
             store.defaultSpeakerOptions.mode = .manualCount
             store.defaultSpeakerOptions.countText = count
         }
+        if environment["GROVE_BETA_TRANSCRIPTION_ENGINE"] == "apple" {
+            store.defaultSpeakerOptions.transcriptionEngine = .apple
+            if environment["GROVE_BETA_PREPARE_APPLE"] == "1" {
+                store.applePreparation.prepare()
+                while store.applePreparation.isPreparing { try await Task.sleep(for: .milliseconds(200)) }
+                #expect(store.applePreparation.isReady, "\(store.applePreparation.message ?? "기본 전사 준비 실패")")
+            }
+        }
         await store.importRecording(from: input)
         let meeting = try #require(store.meetings.first)
-        #expect(meeting.status == .ready || meeting.status == .needsReview)
+        #expect(meeting.status == .ready || meeting.status == .needsReview, "\(meeting.errorMessage ?? "처리 실패 사유 없음")")
         let document = try #require(store.transcriptDocuments[meeting.id])
         #expect(!document.utterances.isEmpty)
-        #expect((1...4).contains(document.speakers.count))
+        #expect(store.defaultSpeakerOptions.transcriptionEngine == .apple ? document.speakers.isEmpty : (1...4).contains(document.speakers.count))
         #expect(document.utterances.allSatisfy { !$0.rawText.hasPrefix("[S0") })
         let configuration = try #require(meeting.inferenceConfiguration)
         #expect(document.sourceDiarizationEngines?["recording"] == (try configuration.resolvedEngine()))
-        if environment["GROVE_BETA_ENGINE"] == nil {
-            #expect(configuration.diarizationPreference == .automatic)
-            #expect(try configuration.resolvedEngine() == .ultra8)
+        if environment["GROVE_BETA_ENGINE"] == nil && environment["GROVE_BETA_TRANSCRIPTION_ENGINE"] != "apple" {
+            #expect(configuration.diarizationPreference == .nemotron3)
+            #expect(try configuration.resolvedEngine() == .nemotron3)
             #expect(configuration.expectedSpeakerCount == environment["GROVE_BETA_SPEAKER_COUNT"].flatMap(Int.init))
         }
         if environment["GROVE_BETA_ENGINE"] == "ultra8" {
@@ -79,6 +87,7 @@ struct MeetingInferenceIntegrationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let service = MeetingInferenceFixture()
         let store = GroveStore(baseDirectory: base, inferenceService: service)
+        store.defaultSpeakerOptions.engineChoice = .automatic
         store.defaultSpeakerOptions.mode = .manualCount
         store.defaultSpeakerOptions.countText = "4"
         let original = try Data(contentsOf: audio)
@@ -207,6 +216,7 @@ struct MeetingInferenceIntegrationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let service = MeetingInferenceFixture()
         let store = GroveStore(baseDirectory: base, inferenceService: service)
+        store.defaultSpeakerOptions.engineChoice = .automatic
         store.defaultSpeakerOptions.mode = .manualCount
         store.defaultSpeakerOptions.countText = "0"
         await store.importRecording(from: audio)

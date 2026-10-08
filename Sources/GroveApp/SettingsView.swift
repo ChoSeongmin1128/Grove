@@ -2,12 +2,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: GroveStore
+    @AppStorage("settingsTab") private var selectedTab = "processing"
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             Form {
                 LabeledContent("전사 시점", value: "녹음 종료 후")
-                LabeledContent("전사 모델", value: "MOSS · 로컬 베타")
+                LabeledContent("기본 전사", value: store.defaultSpeakerOptions.transcriptionEngine == .apple ? "Mac 기본 전사" : "MOSS")
                 Section("새 녹음·가져오기의 기본값") {
                     MeetingSpeakerOptionsView(options: $store.defaultSpeakerOptions)
                     Text("각 녹음에서 따로 변경할 수 있습니다. 기존 녹음에는 적용되지 않습니다.")
@@ -21,16 +22,28 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("처리", systemImage: "waveform") }
+            .tag("processing")
+
+            ModelSettingsView(models: store.modelManager, isBusy: store.isBusy)
+                .tabItem { Label("모델", systemImage: "externaldrive") }
+                .tag("models")
+            CalendarSettingsView(schedule: store.calendarSchedule)
+                .tabItem { Label("일정", systemImage: "calendar") }
+                .tag("calendar")
+            NotionSettingsView()
+                .tabItem { Label("Notion", systemImage: "square.and.arrow.up") }
+                .tag("notion")
 
             Form {
                 Label("음성과 전사는 기본적으로 이 Mac에만 저장됩니다.", systemImage: "lock.shield")
                 LabeledContent("저장 위치", value: "Application Support/Grove")
-                Text("녹음과 전사를 외부 서비스로 자동 전송하는 기능은 없습니다.")
+                Text("Notion 내보내기에서 적용을 누르면 선택한 전사문이 Notion에 전송됩니다. 음성 파일은 전송하지 않습니다.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .formStyle(.grouped)
             .tabItem { Label("개인정보", systemImage: "hand.raised") }
+            .tag("privacy")
         }
         .padding(12)
     }

@@ -27,7 +27,7 @@ struct RootView: View {
                 } label: {
                     Label("파일 가져오기", systemImage: "square.and.arrow.down")
                 }
-                .disabled(store.isBusy)
+                .disabled(store.isBusy || store.needsModelSetup)
 
                 Button {
                     store.isPresentingNewMeeting = true
@@ -35,7 +35,7 @@ struct RootView: View {
                     Label("새 회의", systemImage: "record.circle")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.isBusy)
+                .disabled(store.isBusy || store.needsModelSetup)
             }
         }
         .sheet(isPresented: $store.isPresentingNewMeeting) {
@@ -91,7 +91,8 @@ struct RootView: View {
     private var detail: some View {
         switch store.selection {
         case .library, .none:
-            LibraryHomeView(store: store)
+            if store.needsModelSetup { FirstRunSetupView(store: store) }
+            else { LibraryHomeView(store: store) }
         case .unfiled:
             LibraryHomeView(store: store, showsUnfiled: true)
         case .folder(let id):

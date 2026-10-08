@@ -2,12 +2,13 @@ import Foundation
 import GroveInference
 
 enum MeetingEngineChoice: String, Codable, CaseIterable, Identifiable {
-    case automatic, sortformerStreaming, ultra8, community1
+    case automatic, nemotron3, sortformerStreaming, ultra8, community1
 
     var id: String { rawValue }
     var label: String {
         switch self {
         case .automatic: "자동 선택"
+        case .nemotron3: "Nemotron 3 (최대 8명, 경량)"
         case .sortformerStreaming: "Sortformer (최대 4명)"
         case .ultra8: "Ultra8 (최대 8명)"
         case .community1: "Community-1 (인원 지정 지원)"
@@ -17,6 +18,7 @@ enum MeetingEngineChoice: String, Codable, CaseIterable, Identifiable {
     func configuration(mode: MeetingProcessingMode, count: Int?) throws -> InferenceConfiguration {
         let result: InferenceConfiguration
         switch self {
+        case .nemotron3: result = .init(expectedSpeakerCount: count, diarizationPreference: .nemotron3)
         case .automatic: result = try mode.configuration(speakerCount: count)
         case .sortformerStreaming:
             result = .init(expectedSpeakerCount: count, diarizationPreference: .sortformerStreaming)
@@ -54,18 +56,20 @@ struct MeetingInferencePlan: Equatable, Sendable {
 
 struct MeetingSpeakerOptions: Codable, Equatable {
     var mode: MeetingProcessingMode = .automatic
-    var engineChoice: MeetingEngineChoice = .automatic
+    var transcriptionEngine: TranscriptionEngine = .moss
+    var engineChoice: MeetingEngineChoice = .nemotron3
     var countText = ""
     var systemCountText = ""
     var microphoneCountText = ""
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case mode, engineChoice, countText, systemCountText, microphoneCountText }
+    private enum CodingKeys: String, CodingKey { case mode, engineChoice, countText, systemCountText, microphoneCountText, transcriptionEngine }
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         mode = try values.decodeIfPresent(MeetingProcessingMode.self, forKey: .mode) ?? .automatic
+        transcriptionEngine = try values.decodeIfPresent(TranscriptionEngine.self, forKey: .transcriptionEngine) ?? .moss
         engineChoice = try values.decodeIfPresent(MeetingEngineChoice.self, forKey: .engineChoice) ?? .automatic
         countText = try values.decodeIfPresent(String.self, forKey: .countText) ?? ""
         systemCountText = try values.decodeIfPresent(String.self, forKey: .systemCountText) ?? ""
@@ -73,6 +77,7 @@ struct MeetingSpeakerOptions: Codable, Equatable {
     }
 
     init(configuration: InferenceConfiguration?, channels: [String: InferenceConfiguration]? = nil) {
+        transcriptionEngine = configuration?.transcriptionEngine ?? .moss
         mode = .init(configuration: configuration)
         if let preference = configuration?.diarizationPreference {
             engineChoice = MeetingEngineChoice(rawValue: preference.rawValue) ?? .automatic
@@ -90,12 +95,18 @@ struct MeetingSpeakerOptions: Codable, Equatable {
     }
 
     var summary: String {
+        if transcriptionEngine == .apple { return "Mac 기본 전사" }
         guard mode == .manualCount else { return mode.label }
-        if let count = try? Self.parseCount(countText) { return "\(count)명 지정" }
+        if let count = try? Self.parseCount(countText) {
+            return engineChoice == .community1 || (engineChoice == .automatic && count > 8) ? "\(count)명 지정" : "\(count)명 (참고)"
+        }
         return "인원 입력 필요"
     }
 
     func plan(isDual: Bool) throws -> MeetingInferencePlan {
+        if transcriptionEngine == .apple {
+            return MeetingInferencePlan(configuration: .init(diarizationPreference: .none, transcriptionEngine: .apple))
+        }
         if mode == .manualCount, isDual {
             let system = try engineChoice.configuration(mode: mode, count: Self.parseCount(systemCountText))
             let microphone = try engineChoice.configuration(mode: mode, count: Self.parseCount(microphoneCountText))

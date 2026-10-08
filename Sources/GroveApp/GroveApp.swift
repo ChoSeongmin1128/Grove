@@ -12,6 +12,7 @@ struct GroveApp: App {
         WindowGroup {
             RootView(store: store)
                 .frame(minWidth: 980, minHeight: 640)
+                .task { store.calendarSchedule.start(); await store.applePreparation.refresh() }
         }
         .defaultSize(width: 1260, height: 780)
         .commands {
@@ -20,13 +21,13 @@ struct GroveApp: App {
                     store.isPresentingNewMeeting = true
                 }
                 .keyboardShortcut("n")
-                .disabled(store.isBusy)
+                .disabled(store.isBusy || store.needsModelSetup)
 
                 Button("파일 가져오기…") {
                     store.isPresentingImporter = true
                 }
                 .keyboardShortcut("o")
-                .disabled(store.isBusy)
+                .disabled(store.isBusy || store.needsModelSetup)
             }
             CommandGroup(replacing: .appTermination) {
                 Button("Grove 종료") {
@@ -39,7 +40,7 @@ struct GroveApp: App {
 
         Settings {
             SettingsView(store: store)
-                .frame(width: 520, height: 460)
+                .frame(width: 620, height: 600)
         }
     }
 }

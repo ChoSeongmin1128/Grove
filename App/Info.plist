@@ -19,11 +19,11 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-	<string>0.3.0</string>
+	<string>0.4.0</string>
     <key>GroveReleaseChannel</key>
-    <string>local-beta.11</string>
+    <string>local-beta.12</string>
     <key>CFBundleVersion</key>
-	<string>13</string>
+	<string>14</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>
@@ -32,6 +32,8 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>회의 음성을 이 Mac에 녹음하고 한국어로 전사하기 위해 마이크 접근이 필요합니다.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>선택한 캘린더에서 회의 일정과 제목을 읽고 녹음 알림을 표시합니다. 일정을 수정하거나 삭제하지 않습니다.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>UTExportedTypeDeclarations</key>

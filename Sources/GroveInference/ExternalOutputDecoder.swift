@@ -109,12 +109,18 @@ public enum ExternalOutputDecoder {
     public static func diarization(_ data: Data, engine: DiarizationEngine, duration: Double) throws -> [DiarizationTurn] {
         let turns: [DiarizationTurn]
         switch engine {
+        case .none: turns = []
         case .sortformerStreaming:
             let decoded = try JSONDecoder().decode(SortformerEnvelope.self, from: data)
             turns = decoded.segments.map { .init(start: $0.startTimeSeconds, end: $0.endTimeSeconds, clusterID: $0.speaker.value) }
-        case .community1:
+        case .community1, .nemotron3:
             let decoded = try JSONDecoder().decode(CommunityEnvelope.self, from: data)
             turns = decoded.segments.map { .init(start: $0.start, end: $0.end, clusterID: $0.speaker.value) }
+            if engine == .nemotron3 {
+                guard decoded.segments.allSatisfy({ (1...8).contains(Int($0.speaker.value) ?? 0) }) else {
+                    throw InferenceError.invalidOutput("화자 분리 모델의 화자 번호가 올바르지 않습니다.")
+                }
+            }
         case .ultra8:
             let decoded = try JSONDecoder().decode(UltraEnvelope.self, from: data)
             guard decoded.schemaVersion == 1, decoded.engine == "ultra8", decoded.maxSpeakers == 8,

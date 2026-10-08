@@ -7,6 +7,7 @@ struct MeetingDetailView: View {
     @State private var speakerOptions = MeetingSpeakerOptions()
     @State private var reviewOnly = false
     @State private var showsSpeakers = false
+    @State private var showsNotionExport = false
     private var isDual: Bool { meeting.audioPath == nil && meeting.systemAudioPath != nil && meeting.microphoneAudioPath != nil }
     private var document: TranscriptDocument? { store.transcriptDocuments[meeting.id] }
     private var presentation: MeetingPresentationStatus { .init(meeting: meeting, document: document) }
@@ -34,6 +35,9 @@ struct MeetingDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle(meeting.title)
         .onChange(of: meeting.id) { _, _ in reviewOnly = false; showsSpeakers = false }
+        .sheet(isPresented: $showsNotionExport) {
+            if let document { NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter) }
+        }
         .sheet(isPresented: $showsTranscriptionOptions) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("다시 전사").font(GroveTypography.title)
@@ -78,7 +82,7 @@ struct MeetingDetailView: View {
                 Text(store.folderName(meeting.folderID))
                 Label(presentation.label, systemImage: presentation.symbol)
                 if let engines = store.transcriptDocuments[meeting.id]?.sourceDiarizationEngines, !engines.isEmpty {
-                    Text(Set(engines.values.map { $0 == .ultra8 ? "Ultra8" : $0 == .sortformerStreaming ? "Sortformer" : "Community-1" }).sorted().joined(separator: ", "))
+                    Text(Set(engines.values.map { $0 == .none ? "Mac 기본 전사" : $0 == .nemotron3 ? "Nemotron 3" : $0 == .ultra8 ? "Ultra8" : $0 == .sortformerStreaming ? "Sortformer" : "Community-1" }).sorted().joined(separator: ", "))
                 }
                 Text(meeting.startedAt, format: .dateTime.year().month().day().hour().minute())
                 if meeting.duration > 0 { Text(meeting.duration.clockString).monospacedDigit() }
@@ -87,7 +91,9 @@ struct MeetingDetailView: View {
             .foregroundStyle(.secondary)
             if let document {
                 HStack(spacing: 12) {
-                    Button("배정된 화자 \(Set(document.utterances.compactMap(\.speakerID)).count)명") { showsSpeakers = true }
+                    if document.sourceDiarizationEngines?.values.allSatisfy({ $0 == .none }) != true {
+                        Button("배정된 화자 \(Set(document.utterances.compactMap(\.speakerID)).count)명") { showsSpeakers = true }
+                    } else { Text("화자 구분 없음").foregroundStyle(.secondary) }
                     ForEach(currentCounts.filter(\.isMismatch)) { count in
                         Button(count.label) { showsSpeakers = true }
                             .help("이번 전사의 입력 인원과 모델 감지 인원입니다. 화자 목록에서 확인할 수 있습니다.")
@@ -95,6 +101,8 @@ struct MeetingDetailView: View {
                     if document.speakerReviewCount > 0 {
                         Button("화자 확인 \(document.speakerReviewCount)곳") { reviewOnly = true }
                     }
+                    Spacer()
+                    Button("Notion 내보내기") { showsNotionExport = true }.disabled(store.isBusy)
                 }
                 .font(.callout)
                 .buttonStyle(.plain)
