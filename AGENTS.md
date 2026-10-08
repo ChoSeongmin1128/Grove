@@ -33,6 +33,9 @@ inference, proposals, and unverified items.
 - Use short, concrete UI labels. Remove descriptions that repeat a heading or button,
   promotional taglines and routine implementation explanations. Keep information needed
   to choose a transcription mode, grant permissions, understand a limit or recover from errors.
+- Meeting actions use legible adaptive text, native bordered controls and visible hover
+  feedback. Preserve native keyboard / disabled behavior. Align the detail header and
+  transcript to the same content margin; show an empty-result error in one place.
 
 ## Private data
 

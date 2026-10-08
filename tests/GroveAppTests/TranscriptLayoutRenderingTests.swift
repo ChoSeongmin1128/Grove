@@ -7,6 +7,38 @@ import Testing
 @MainActor
 struct TranscriptLayoutRenderingTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"] != nil))
+    func renderMeetingDetailStates() throws {
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"]))
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        _ = NSApplication.shared
+        GroveTypography.registerFonts()
+        let store = GroveStore(baseDirectory: base)
+        var meeting = MeetingRecord(title: "제품 검토 회의", startedAt: Date(), duration: 3, status: .failed,
+            audioPath: base.appendingPathComponent("recording.m4a").path, glossaryProfile: "", transcript: [], claims: [],
+            errorMessage: "전사를 중단했습니다. 원본 녹음은 보존됩니다.")
+        meeting.processingOutcome = .init(kind: .cancelled, message: meeting.errorMessage)
+        store.meetings = [meeting]
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        for (name, scheme, width) in [("dark", ColorScheme.dark, 960.0), ("light", .light, 960.0), ("compact", .dark, 700.0)] {
+            let host = NSHostingView(rootView: MeetingDetailView(store: store, meeting: meeting)
+                .environment(\.colorScheme, scheme).tint(GroveTheme.grove)
+                .frame(width: width, height: 680).background(GroveTheme.canvas))
+            host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: width, height: 680), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 680)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let normal = try #require(bitmap.representation(using: .png, properties: [:]))
+            try normal.write(to: output.appendingPathComponent("detail-\(name).png"))
+            window.contentView = nil
+        }
+    }
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"] != nil))
     func renderIntegrationSurfaces() throws {
         let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["GROVE_LAYOUT_OUTPUT"]))
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

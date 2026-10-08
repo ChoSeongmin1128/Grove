@@ -1,9 +1,18 @@
 # Transcript and library UX
 
-Updated 2026-09-03. AI-assisted implementation notes; current code and runtime checks
+Updated 2026-10-08. AI-assisted implementation notes; current code and runtime checks
 take precedence. Installation/test evidence is recorded in `handoff.md`.
 
 ## Transcript reading
+
+- Detail titles, metadata and actions occupy separate rows. A shared 24pt margin aligns
+  the header and transcript controls. Metadata uses the 13pt medium label font.
+- Ordinary actions use native bordered controls and adaptive foreground text. Hover
+  adds a capsule outline and a light overlay; native press, keyboard and disabled
+  behavior remain. Input overlays never intercept clicks.
+- An empty-result failure/cancellation appears once above the content area's midpoint,
+  with a retry action. Cancellation uses a pause symbol. A preserved prior transcript
+  keeps its processing warning above the existing content.
 
 - Metadata occupies a fixed left gutter: speaker name and start–end time. Text is
   aligned in a separate right column, with a quiet per-utterance menu at the edge.

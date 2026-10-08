@@ -8,7 +8,7 @@ the private installation and evaluation receipts.
 
 ## Current source
 
-The source targets version0.4.0 / local-beta.13. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.14. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -17,6 +17,10 @@ build identifier and local receipts for actual installation state.
   (148pt for hour-long timestamps), with a12pt gap before transcript text.
 - Thin horizontal separators are lighter between continuous same-speaker turns.
   The first visible row remains unruled; lines add no height or interaction targets.
+- Detail titles, metadata and actions have separate rows with a shared content margin.
+  Ordinary action buttons use native bordered controls, adaptive text and hover outlines.
+  Empty-result failure / cancellation appears once with an explicit retry action; retained
+  transcripts still show the processing warning above the prior result.
 - General-purpose microphone recording, pause/resume and file import are supported.
   System-output capture is removed; older dual-channel files remain read-compatible.
 - First-run precision mode uses bundled MOSS + Nemotron 3 and verified model downloads.

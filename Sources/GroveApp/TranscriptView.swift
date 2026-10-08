@@ -6,6 +6,7 @@ struct TranscriptView: View {
     let meeting: MeetingRecord
     @Binding var reviewOnly: Bool
     @Binding var showsSpeakers: Bool
+    var retryTranscription: (() -> Void)? = nil
     @Environment(\.displayScale) private var displayScale
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @StateObject private var player = AudioPlayerController()
@@ -58,8 +59,25 @@ struct TranscriptView: View {
                 }
                 .background(GroveTheme.surface)
             } else {
-                ContentUnavailableView(emptyTitle, systemImage: meeting.status == .failed ? "exclamationmark.triangle" : "waveform",
-                                       description: Text(meeting.errorMessage ?? emptyDescription))
+                ContentUnavailableView {
+                    Label(emptyTitle, systemImage: emptySymbol)
+                        .foregroundStyle(GroveTheme.ink)
+                } description: {
+                    Text(meeting.errorMessage ?? emptyDescription)
+                        .font(GroveTypography.body)
+                        .foregroundStyle(GroveTheme.ink)
+                } actions: {
+                    if let retryTranscription, MeetingPresentationStatus(meeting: meeting, document: nil).canRetry {
+                        Button("전사 다시 시도…", action: retryTranscription)
+                            .modifier(GroveActionAppearance())
+                            .disabled(store.isBusy)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 600)
+                .padding(.horizontal, 24)
+                .padding(.top, 48)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -204,6 +222,7 @@ struct TranscriptView: View {
             .font(.caption)
         }
         .padding(.horizontal, 24).padding(.vertical, 12)
+        .tint(.primary)
     }
 
     private func transcript(_ document: TranscriptDocument) -> some View {
@@ -503,12 +522,19 @@ struct TranscriptView: View {
     }
 
     private var emptyTitle: String {
+        if meeting.processingOutcome?.kind == .cancelled { return "전사 중단" }
+        if meeting.processingOutcome?.kind == .interrupted { return "처리 중단" }
         switch meeting.status {
-        case .recording: "녹음 중입니다"
-        case .processing: "대화를 정리하고 있습니다"
-        case .failed: "전사를 완료하지 못했습니다"
-        default: "대화가 아직 없습니다"
+        case .recording: return "녹음 중"
+        case .processing: return "전사 중"
+        case .failed: return "전사 실패"
+        default: return "전사문이 없습니다"
         }
+    }
+
+    private var emptySymbol: String {
+        if meeting.processingOutcome?.kind == .cancelled || meeting.processingOutcome?.kind == .interrupted { return "pause.circle" }
+        return meeting.status == .failed ? "exclamationmark.triangle" : "waveform"
     }
 
     private var emptyDescription: String {

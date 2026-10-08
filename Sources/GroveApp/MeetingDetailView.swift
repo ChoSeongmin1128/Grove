@@ -24,12 +24,13 @@ struct MeetingDetailView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28).padding(.bottom, 10)
             }
-            if let detail = presentation.detail {
-                Text(detail).font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28).padding(.bottom, 10)
+            if let detail = presentation.detail, document != nil || !meeting.transcript.isEmpty {
+                Text(detail).font(GroveTypography.bodySmall).foregroundStyle(GroveTheme.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 16)
             }
             Divider()
-            TranscriptView(store: store, meeting: meeting, reviewOnly: $reviewOnly, showsSpeakers: $showsSpeakers)
+            TranscriptView(store: store, meeting: meeting, reviewOnly: $reviewOnly, showsSpeakers: $showsSpeakers,
+                           retryTranscription: presentTranscriptionOptions)
                 .id(meeting.id)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -59,7 +60,7 @@ struct MeetingDetailView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .center, spacing: 14) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(meeting.title)
@@ -69,16 +70,13 @@ struct MeetingDetailView: View {
                     Button { store.meetingToRename = meeting } label: {
                         Image(systemName: "pencil").font(.body)
                     }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .modifier(GroveActionAppearance())
                     .accessibilityLabel("녹음 이름 변경")
                     .help("녹음 이름 변경")
                 }
                 Spacer(minLength: 8)
-                Button("원본 파일…") { store.meetingForOriginalFiles = meeting }
-                MeetingMoveMenu(store: store, meeting: meeting)
-                processingControls
             }
-            HStack(spacing: 10) {
+            HStack(spacing: 14) {
                 Text(store.folderName(meeting.folderID))
                 Label(presentation.label, systemImage: presentation.symbol)
                 if let engines = store.transcriptDocuments[meeting.id]?.sourceDiarizationEngines, !engines.isEmpty {
@@ -87,8 +85,16 @@ struct MeetingDetailView: View {
                 Text(meeting.startedAt, format: .dateTime.year().month().day().hour().minute())
                 if meeting.duration > 0 { Text(meeting.duration.clockString).monospacedDigit() }
             }
-            .font(.caption)
+            .font(GroveTypography.label)
             .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button("원본 파일…") { store.meetingForOriginalFiles = meeting }
+                    .modifier(GroveActionAppearance())
+                MeetingMoveMenu(store: store, meeting: meeting)
+                    .modifier(GroveActionAppearance())
+                Spacer(minLength: 12)
+                processingControls
+            }
             if let document {
                 HStack(spacing: 12) {
                     if document.sourceDiarizationEngines?.values.allSatisfy({ $0 == .none }) != true {
@@ -104,12 +110,12 @@ struct MeetingDetailView: View {
                     Spacer()
                     Button("Notion 내보내기") { showsNotionExport = true }.disabled(store.isBusy)
                 }
-                .font(.callout)
-                .buttonStyle(.plain)
+                .font(GroveTypography.label)
+                .buttonStyle(.bordered)
+                .tint(.primary)
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 18)
+        .padding(24)
         .background(GroveTheme.surface)
     }
 
@@ -122,12 +128,18 @@ struct MeetingDetailView: View {
                     Text(store.processingStage ?? "처리 중").font(.caption)
                 }
                 Button("처리 중단") { store.cancelProcessing() }
+                    .modifier(GroveActionAppearance())
             }
-        } else if meeting.audioPath != nil || meeting.systemAudioPath != nil || meeting.microphoneAudioPath != nil {
+        } else if (meeting.audioPath != nil || meeting.systemAudioPath != nil || meeting.microphoneAudioPath != nil)
+            && (document != nil || !presentation.canRetry || store.transcriptDocumentErrors[meeting.id] != nil) {
             Button(presentation.canRetry ? "전사 다시 시도…" : "다시 전사…") {
-                speakerOptions = .init(configuration: meeting.inferenceConfiguration, channels: meeting.channelInferenceConfigurations)
-                showsTranscriptionOptions = true
-            }.disabled(store.isBusy)
+                presentTranscriptionOptions()
+            }.modifier(GroveActionAppearance()).disabled(store.isBusy)
         }
+    }
+
+    private func presentTranscriptionOptions() {
+        speakerOptions = .init(configuration: meeting.inferenceConfiguration, channels: meeting.channelInferenceConfigurations)
+        showsTranscriptionOptions = true
     }
 }

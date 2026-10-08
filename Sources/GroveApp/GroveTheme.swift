@@ -19,6 +19,30 @@ enum GroveTheme {
     static let divider = Color.primary.opacity(0.10)
 }
 
+struct GroveActionAppearance: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .tint(.primary)
+            .font(GroveTypography.label)
+            .foregroundStyle(GroveTheme.ink)
+            .overlay {
+                Capsule()
+                    .fill(GroveTheme.ink.opacity(isHovering && isEnabled ? 0.08 : 0))
+                    .overlay {
+                        Capsule()
+                            .stroke(GroveTheme.ink.opacity(isHovering && isEnabled ? 0.45 : 0))
+                    }
+                    .allowsHitTesting(false)
+            }
+            .onHover { isHovering = $0 }
+    }
+}
+
 private extension Color {
     init(light: NSColor, dark: NSColor) {
         self.init(nsColor: NSColor(name: nil) { appearance in
