@@ -1,3 +1,4 @@
+import AuthenticationServices
 import CryptoKit
 import Foundation
 import Testing
@@ -72,6 +73,26 @@ private final class OAuthFixtureBrowser: NotionBrowserAuthorizing {
 }
 
 @MainActor
+private final class BackgroundOAuthSession: NotionAuthenticationSession {
+    let completion: @Sendable (URL?, (any Error)?) -> Void
+    let response: URL?
+    let error: (any Error)?
+    var cancelled = false
+
+    init(completion: @escaping @Sendable (URL?, (any Error)?) -> Void, response: URL?, error: (any Error)? = nil) {
+        self.completion = completion; self.response = response; self.error = error
+    }
+
+    func start(presenting context: any ASWebAuthenticationPresentationContextProviding) -> Bool {
+        let completion = completion, response = response, error = error
+        DispatchQueue.global(qos: .utility).async { completion(response, error) }
+        return true
+    }
+
+    func cancel() { cancelled = true }
+}
+
+@MainActor
 private final class FailingOAuthStore: NotionConnectionStoring {
     var value: NotionStoredConnection?
     func read() throws -> NotionStoredConnection? { value }
@@ -93,6 +114,29 @@ struct NotionOAuthTests {
             accessToken: "expired-access", refreshToken: "old-refresh", expiresAt: Date(timeIntervalSince1970: 0), workspaceID: "workspace-one", userID: "authorized-user")
     }
     private func defaults() -> UserDefaults { UserDefaults(suiteName: "Grove.OAuth.Tests.\(UUID().uuidString)")! }
+
+    @Test func browserCompletionCanArriveOnABackgroundQueueAndBeRetried() async throws {
+        let callback = URL(string: NotionOAuthConfiguration.redirect.absoluteString + "?state=state&code=code")!
+        let browser = NotionBrowserAuthorization { _, completion in BackgroundOAuthSession(completion: completion, response: callback) }
+        for _ in 0..<2 { #expect(try await browser.authorize(url: URL(string: "https://mcp.notion.com/authorize")!) == callback) }
+    }
+
+    @Test func backgroundBrowserCancellationAndOtherErrorsRemainDistinct() async throws {
+        let cancelled = NSError(domain: ASWebAuthenticationSessionErrorDomain, code: ASWebAuthenticationSessionError.canceledLogin.rawValue)
+        let cancellation = NotionBrowserAuthorization { _, completion in BackgroundOAuthSession(completion: completion, response: nil, error: cancelled) }
+        do {
+            _ = try await cancellation.authorize(url: URL(string: "https://mcp.notion.com/authorize")!)
+            Issue.record("Cancellation did not fail")
+        } catch {
+            guard case NotionConnectionError.cancelled = error else { Issue.record("Unexpected cancellation error"); return }
+        }
+        let failure = NSError(domain: "Browser.Fixture", code: 42)
+        let browser = NotionBrowserAuthorization { _, completion in BackgroundOAuthSession(completion: completion, response: nil, error: failure) }
+        do {
+            _ = try await browser.authorize(url: URL(string: "https://mcp.notion.com/authorize")!)
+            Issue.record("Browser error did not fail")
+        } catch { #expect((error as NSError).domain == failure.domain && (error as NSError).code == failure.code) }
+    }
 
     @Test func pkceMatchesTheRFCVectorAndDoesNotIncludeTheVerifierInTheBrowserURL() throws {
         let attempt = try NotionOAuthAttempt(state: "state", verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")

@@ -122,10 +122,40 @@ protocol NotionBrowserAuthorizing {
 }
 
 @MainActor
+protocol NotionAuthenticationSession {
+    func start(presenting context: any ASWebAuthenticationPresentationContextProviding) -> Bool
+    func cancel()
+}
+
+@MainActor
+private final class SystemNotionAuthenticationSession: NotionAuthenticationSession {
+    private let session: ASWebAuthenticationSession
+
+    init(url: URL, completion: @escaping @Sendable (URL?, (any Error)?) -> Void) {
+        session = ASWebAuthenticationSession(url: url, callbackURLScheme: NotionOAuthConfiguration.redirect.scheme, completionHandler: completion)
+    }
+
+    func start(presenting context: any ASWebAuthenticationPresentationContextProviding) -> Bool {
+        session.presentationContextProvider = context
+        return session.start()
+    }
+
+    func cancel() { session.cancel() }
+}
+
+@MainActor
 final class NotionBrowserAuthorization: NSObject, NotionBrowserAuthorizing, ASWebAuthenticationPresentationContextProviding {
-    private var session: ASWebAuthenticationSession?
+    private let makeSession: (URL, @escaping @Sendable (URL?, (any Error)?) -> Void) -> any NotionAuthenticationSession
+    private var session: (any NotionAuthenticationSession)?
     private var continuation: CheckedContinuation<URL, any Error>?
     private var attemptID: UUID?
+
+    init(makeSession: @escaping (URL, @escaping @Sendable (URL?, (any Error)?) -> Void) -> any NotionAuthenticationSession = {
+        SystemNotionAuthenticationSession(url: $0, completion: $1)
+    }) {
+        self.makeSession = makeSession
+        super.init()
+    }
 
     func authorize(url: URL) async throws -> URL {
         let id = UUID()
@@ -133,12 +163,22 @@ final class NotionBrowserAuthorization: NSObject, NotionBrowserAuthorizing, ASWe
             try await withCheckedThrowingContinuation { continuation in
                 self.attemptID = id
                 self.continuation = continuation
-                let session = ASWebAuthenticationSession(url: url, callbackURLScheme: NotionOAuthConfiguration.redirect.scheme) { [weak self] callback, _ in
-                    Task { @MainActor in self?.finish(callback.map(Result.success) ?? .failure(NotionConnectionError.cancelled), id: id) }
+                // AuthenticationServices can invoke this on its XPC queue, outside MainActor.
+                let completion: @Sendable (URL?, (any Error)?) -> Void = { [weak self] callback, error in
+                    Task { @MainActor in
+                        let result: Result<URL, any Error>
+                        if let callback { result = .success(callback) }
+                        else if let error {
+                            let cancelled = (error as NSError).domain == ASWebAuthenticationSessionErrorDomain
+                                && (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue
+                            result = .failure(cancelled ? NotionConnectionError.cancelled : error)
+                        } else { result = .failure(NotionConnectionError.invalidResponse) }
+                        self?.finish(result, id: id)
+                    }
                 }
-                session.presentationContextProvider = self
+                let session = makeSession(url, completion)
                 self.session = session
-                if !session.start() { finish(.failure(NotionConnectionError.unavailable), id: id) }
+                if !session.start(presenting: self) { finish(.failure(NotionConnectionError.unavailable), id: id) }
             }
         } onCancel: { Task { @MainActor in self.cancel(id: id) } }
     }

@@ -27,6 +27,9 @@ inference, proposals, and unverified items.
   registration; do not require a Grove authentication server or a separate CLI. Do not
   add workspace, organization or email allowlists. Obtain identities from authorization
   and destinations from user selection. If REST public OAuth is added, use Any workspace.
+- AuthenticationServices completion callbacks may arrive on an XPC queue. Keep the
+  callback explicitly Sendable and move state changes to MainActor inside it. Exercise
+  that same callback from a background queue; a mock browser alone does not verify it.
 - User glossaries are optional machine-local profiles and never public defaults.
 - Preserve original audio and raw transcripts. Store corrections, speaker assignments,
   and summaries as separate revisions.
