@@ -140,8 +140,8 @@ final class CalendarSchedule: ObservableObject {
     private func show(_ meeting: ScheduledMeeting, preview: Bool = false) {
         guard shownID != meeting.id else { return }
         hidePanel()
-        let width = min(680, (NSScreen.main?.visibleFrame.width ?? 980) - 40)
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 76),
+        let width = min(440, (NSScreen.main?.visibleFrame.width ?? 980) - 40)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 40),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
@@ -154,7 +154,7 @@ final class CalendarSchedule: ObservableObject {
             snooze: { [weak self] in self?.dismiss(meeting, snooze: true) },
             close: { [weak self] in self?.dismiss(meeting) }))
         if let screen = NSScreen.main {
-            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.maxY - 94))
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.maxY - 48))
         }
         shownID = meeting.id
         self.panel = panel
@@ -174,25 +174,29 @@ struct MeetingReminderBanner: View {
     let snooze: () -> Void
     let close: () -> Void
     var body: some View {
-        HStack(spacing: 16) {
-            Image(systemName: "waveform").font(.title2).foregroundStyle(.white)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(meeting.title).font(GroveTypography.heading).lineLimit(1)
-                Text(meeting.start > Date() ? "\(meeting.start.formatted(date: .omitted, time: .shortened)) 시작" : "지금 시작")
-                    .font(GroveTypography.bodySmall).foregroundStyle(.white.opacity(0.75))
-            }.foregroundStyle(.white)
+        HStack(spacing: 8) {
+            Image(systemName: "waveform").font(.system(size: 14)).foregroundStyle(.white)
+            Text(meeting.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).foregroundStyle(.white)
+                .help(meeting.title).layoutPriority(-1)
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                let minutes = max(0, Int(ceil(meeting.start.timeIntervalSince(context.date) / 60)))
+                Text(minutes > 0 ? "\(minutes)분 후" : "지금")
+                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.65)).fixedSize()
+            }
             Spacer(minLength: 4)
             Button(action: record) {
-                Text("녹음 시작").font(GroveTypography.label).foregroundStyle(.black)
-                    .padding(.horizontal, 18).padding(.vertical, 11)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 10))
-            }.buttonStyle(.plain)
+                Text("녹음 시작").font(.system(size: 12, weight: .medium)).foregroundStyle(.black)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 7))
+            }.buttonStyle(.plain).fixedSize(horizontal: true, vertical: false)
             Menu { Button("5분 뒤 알림", action: snooze); Button("이 일정 알림 닫기", action: close) } label: {
                 Image(systemName: "chevron.down")
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().foregroundStyle(.white)
-            Button(action: close) { Image(systemName: "xmark") }.buttonStyle(.plain).foregroundStyle(.white)
+                .accessibilityLabel("일정 알림 옵션")
+            Button(action: close) { Image(systemName: "xmark").frame(width: 20, height: 24) }
+                .buttonStyle(.plain).foregroundStyle(.white)
                 .accessibilityLabel("일정 알림 닫기")
-        }.padding(.horizontal, 24).frame(height: 76)
+        }.padding(.horizontal, 12).frame(height: 40)
             .background(Color(nsColor: NSColor(calibratedWhite: 0.09, alpha: 0.98)), in: Capsule())
     }
 }

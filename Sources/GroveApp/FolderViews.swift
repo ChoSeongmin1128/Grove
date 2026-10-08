@@ -129,20 +129,24 @@ struct FolderSpeakerLibraryView: View {
     @State private var removingVoice: SavedSpeakerProfile?
     @State private var deletingVoice = false
     @State private var error: String?
+    @State private var addingMember = false
+    @State private var renamingMember: SavedSpeakerProfile?
+    @State private var enrollingMember: SavedSpeakerProfile?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("저장한 화자").font(GroveTypography.heading)
-            if !store.voiceIdentificationAvailable { VoiceIdentityAvailabilityNotice() }
+            HStack {
+                Text("팀원").font(GroveTypography.heading)
+                Spacer()
+                Button("팀원 추가") { addingMember = true }.modifier(GroveActionAppearance()).disabled(store.isBusy)
+            }
             let profiles = store.speakerProfiles(in: folderID)
             let hasVoices = profiles.contains { store.voiceProfileIsRegistered($0.id) }
             if profiles.isEmpty {
-                Text(store.voiceIdentificationAvailable
-                     ? "녹음의 화자 목록에서 이름을 저장하거나 목소리를 등록할 수 있습니다. 등록한 목소리는 같은 폴더에서만 비교합니다."
-                     : "녹음의 화자 목록에서 이름을 저장하고, 같은 폴더의 다음 녹음에 직접 연결할 수 있습니다.")
+                Text("팀원을 추가하고 목소리를 등록할 수 있습니다.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                Toggle("새 녹음에서 화자 자동 식별", isOn: Binding(
+                Toggle("새 녹음에서 이름 자동 연결", isOn: Binding(
                     get: { store.automaticSpeakerIdentificationEnabled(folderID: folderID) },
                     set: { enabled in
                         if !store.setAutomaticSpeakerIdentification(folderID: folderID, enabled: enabled) {
@@ -153,11 +157,8 @@ struct FolderSpeakerLibraryView: View {
                 ))
                 .toggleStyle(.checkbox).font(GroveTypography.bodySmall)
                 .disabled(store.isBusy || deletingVoice || !hasVoices || !store.voiceIdentificationAvailable)
-                if store.voiceIdentificationAvailable {
-                    Text(hasVoices
-                         ? "등록한 목소리와 일치할 때 이름을 제안합니다. 끄더라도 등록한 목소리는 삭제되지 않습니다."
-                         : "아직 이름만 저장되어 있습니다. 녹음의 화자 목록에서 목소리를 등록하면 자동 식별을 사용할 수 있습니다.")
-                        .font(.caption).foregroundStyle(.secondary)
+                if !store.voiceIdentificationAvailable {
+                    Text("자동 이름 연결은 정확도 검증 중입니다.").font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(profiles) { profile in
                     let hasVoiceStorage = store.voiceProfileHasStorage(profile.id)
@@ -171,7 +172,10 @@ struct FolderSpeakerLibraryView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        Button(store.voiceProfileIsRegistered(profile.id) ? "다시 등록" : "목소리 등록") { enrollingMember = profile }
+                            .modifier(GroveActionAppearance()).controlSize(.regular).disabled(store.isBusy || deletingVoice)
                         Menu {
+                            Button("이름 변경...") { renamingMember = profile }
                             if hasVoiceStorage {
                                 Button("등록한 목소리만 삭제…", role: .destructive) { removingVoice = profile }
                             } else {
@@ -195,6 +199,9 @@ struct FolderSpeakerLibraryView: View {
         }
         .padding(20)
         .background(GroveTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .sheet(isPresented: $addingMember) { TeamMemberNameSheet(store: store, folderID: folderID) }
+        .sheet(item: $renamingMember) { TeamMemberNameSheet(store: store, folderID: folderID, profile: $0) }
+        .sheet(item: $enrollingMember) { RecordedVoiceEnrollmentSheet(store: store, profile: $0) }
         .alert("저장한 이름을 삭제할까요?", isPresented: Binding(get: { removingProfile != nil }, set: { if !$0 { removingProfile = nil } })) {
             Button("취소", role: .cancel) { removingProfile = nil }
             Button("이름 삭제", role: .destructive) {

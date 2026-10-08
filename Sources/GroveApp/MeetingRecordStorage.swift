@@ -9,13 +9,13 @@ struct MeetingRecordStorage {
         decoder.dateDecodingStrategy = .iso8601
         let records = try decoder.decode([MeetingRecord].self, from: Data(contentsOf: url))
         guard Set(records.map(\.id)).count == records.count else { throw TranscriptEditError.invalidDocument }
-        try records.forEach { try $0.validateProcessingMetadata() }
+        try records.forEach { try $0.validateProcessingMetadata(); try $0.attendance?.validate() }
         return records
     }
 
     func save(_ records: [MeetingRecord]) throws {
         guard Set(records.map(\.id)).count == records.count else { throw TranscriptEditError.invalidDocument }
-        try records.forEach { try $0.validateProcessingMetadata() }
+        try records.forEach { try $0.validateProcessingMetadata(); try $0.attendance?.validate() }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

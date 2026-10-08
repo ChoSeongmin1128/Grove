@@ -82,6 +82,9 @@ inference, proposals, and unverified items.
 - Keep pinned model versions and hashes in `ModelCatalog`. Download weights only after
   the user chooses precision transcription and starts preparation. Preserve partial
   downloads, verify completed bytes and run the readiness check before claiming ready.
+- Team voice enrollment is microphone-only and explicit. Keep automatic naming gated until
+  independent-day known/unknown evaluation; neither attendance counts nor synthetic model
+  checks establish identity accuracy. Do not append inferred matches to registered voices.
 - Mac basic transcription uses Apple-managed language assets and has no diarization.
   Store this as an explicit no-diarization result, not an invented speaker or confirmation.
 - Calendar uses accounts already connected to Mac Calendar. No Meet capture or Google
@@ -116,8 +119,8 @@ codesign --verify --deep --strict .work/dist/Grove.app
 ## Document index
 
 - [`docs/automatic-speaker-identification.md`](docs/automatic-speaker-identification.md):
-  implemented, release-gated voice identity foundation: explicit enrollment, encrypted
-  registry, cleanup, folder scope and proposal confirmation; product activation blocked.
+  microphone enrollment, optional pinned voice model, attendance candidates and encrypted
+  registry; automatic naming remains blocked pending independent-session qualification.
 - [`docs/speaker-logic-experiments.md`](docs/speaker-logic-experiments.md): offline-only
   alignment/projection and limited-postprocessing ablations, identity checks, separate
   text/activity metrics and no production integration.

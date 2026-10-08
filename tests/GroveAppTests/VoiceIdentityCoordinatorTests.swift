@@ -1,8 +1,23 @@
+@preconcurrency import AVFoundation
 import Foundation
 import Darwin
 import GroveInference
 import Testing
 @testable import GroveApp
+
+
+@MainActor
+private final class EnrollmentRecordingDevice: AudioRecordingDevice {
+    var isRecording = false
+    var currentTime: TimeInterval = 0
+    var isMeteringEnabled = false
+    func prepareToRecord() -> Bool { true }
+    func record() -> Bool { isRecording = true; return true }
+    func pause() { isRecording = false }
+    func stop() { isRecording = false }
+    func updateMeters() {}
+    func averagePower(forChannel channelNumber: Int) -> Float { -20 }
+}
 
 private enum CoordinatorVoiceFailure: Error { case injected }
 
@@ -480,7 +495,7 @@ struct VoiceIdentityCoordinatorTests {
         #expect(!fixture.store.isBusy)
     }
 
-    @Test func duplicateClusterClaimsForOneRegisteredPersonAreAllRejected() async throws {
+    @Test func separatedClustersCanBothIdentifyTheSameRegisteredPerson() async throws {
         let fixture = try VoiceCoordinatorFixture()
         defer { fixture.clean() }
         _ = try await fixture.enroll(fixture.addMeeting())
@@ -495,11 +510,74 @@ struct VoiceIdentityCoordinatorTests {
         let result = try InferenceResult(duration: 36, configuration: .init(expectedSpeakerCount: 2),
             transcription: RawTranscription(utterances: utterances), rawDiarization: turns)
         try fixture.store.acceptInferenceResult(result, meetingID: query.id, sourceChannelID: "recording")
-        let original = try fixture.document(query)
         await fixture.store.identifySpeakers(meetingID: query.id)
         #expect(await fixture.extractor.calls == 3)
-        #expect(try fixture.document(query) == original)
-        #expect(try fixture.document(query).speakers.allSatisfy { $0.profileMatch == nil })
+        let identified = try fixture.document(query)
+        #expect(identified.speakers.count == 2)
+        #expect(identified.speakers.allSatisfy { $0.profileMatch != nil && $0.profileMatch?.isConfirmed == false })
+        #expect(Set(identified.speakers.compactMap { $0.profileMatch?.profileID }).count == 1)
+    }
+
+    @Test func explicitEmptyAttendanceNeverSearchesUnselectedTeamMembers() async throws {
+        let fixture = try VoiceCoordinatorFixture()
+        defer { fixture.clean() }
+        _ = try await fixture.enroll(fixture.addMeeting())
+        var query = try fixture.addMeeting()
+        query.attendance = MeetingAttendance()
+        fixture.store.meetings = fixture.store.meetings.map { $0.id == query.id ? query : $0 }
+        let before = try fixture.document(query)
+        await fixture.store.identifySpeakers(meetingID: query.id)
+        #expect(await fixture.extractor.calls == 1)
+        #expect(try fixture.document(query) == before)
+    }
+
+    @Test func dedicatedRecordingEnrollsWithoutEnablingAutomaticNames() async throws {
+        let canonicalTemporary = try #require(realpath(FileManager.default.temporaryDirectory.path, nil))
+        defer { free(canonicalTemporary) }
+        let root = URL(fileURLWithPath: String(cString: canonicalTemporary), isDirectory: true).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let device = EnrollmentRecordingDevice()
+        let recorder = AudioRecorder(makeRecorder: { url, _ in
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000 * 32)!
+            buffer.frameLength = 48_000 * 32
+            for index in 0..<Int(buffer.frameLength) { buffer.floatChannelData![0][index] = Float(sin(Double(index) * 0.07) * 0.1) }
+            let file = try AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 128_000],
+                commonFormat: .pcmFormatFloat32, interleaved: false)
+            try file.write(from: buffer)
+            return device
+        })
+        let session = VoiceEnrollmentSession(directory: root.appendingPathComponent("Capture"), recorder: recorder, requestPermission: { true })
+        let keys = CoordinatorVoiceKeys()
+        let vault = SpeakerVoiceVault(directory: root.appendingPathComponent("VoiceRegistry"), keyStore: keys)
+        let store = GroveStore(baseDirectory: root, voiceVault: vault, voiceExtractor: CoordinatorVoiceExtractor(), voiceEnrollmentSession: session)
+        let folder = try #require(store.createFolder(name: "팀 회의"))
+        let person = try #require(store.addTeamMember(folderID: folder, name: "등록할 팀원"))
+        await session.start()
+        #expect(store.isBusy)
+        device.currentTime = 16
+        recorder.pause()
+        session.beginNaturalSpeech()
+        try recorder.resume()
+        device.currentTime = 32
+        let source = try #require(session.source)
+        await session.finish()
+        #expect(session.review?.canExtract == true)
+        #expect(!(await store.enrollRecordedVoice(profileID: person, permissionConfirmed: false)))
+        #expect(await store.enrollRecordedVoice(profileID: person, permissionConfirmed: true))
+        #expect(store.voiceProfileIsRegistered(person))
+        #expect(!store.voiceIdentificationAvailable)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(store.meetings.isEmpty)
+        let stored = try #require(await vault.load(profileID: person, folderID: folder))
+        #expect(stored.samples.count >= 3)
+        #expect(stored.samples.allSatisfy { $0.sourceMeetingID == nil && $0.sourceRevisionID == nil })
+        let index = String(decoding: try Data(contentsOf: root.appendingPathComponent("library.json")), as: UTF8.self)
+        #expect(!index.contains("embedding"))
+        #expect(await store.removeVoiceEnrollment(profileID: person))
+        #expect(!store.voiceProfileIsRegistered(person))
     }
 
     private func waitForCalls(_ count: Int, on extractor: CoordinatorVoiceExtractor) async throws {

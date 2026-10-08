@@ -8,7 +8,16 @@ the private installation and evaluation receipts.
 
 ## Current source
 
-The source targets version0.4.0 / local-beta.15. This is a personal local beta, a
+- Team voice enrollment records prompt reading and free speech, checks amplitude / clipping,
+  supports preview and stores encrypted per-span features. The optional 15.3 MB voice
+  model has pinned hashes and its own CoreML readiness check. Automatic naming remains
+  gated; independent other-day five-person evaluation data is still required.
+- Optional attendance is remembered per folder and stored separately from speaker-count
+  options. Calendar recording opens the same meeting setup. Anonymous split clusters
+  can share an identity if no retained overlap evidence conflicts.
+- Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
+
+The source targets version0.4.0 / local-beta.16. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 

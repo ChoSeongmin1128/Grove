@@ -2,9 +2,9 @@ import Foundation
 import GroveInference
 
 enum ModelGroup: String, CaseIterable, Identifiable, Sendable {
-    case moss, nemotron3, ultra8
+    case moss, nemotron3, ultra8, voiceIdentity
     var id: String { rawValue }
-    var label: String { switch self { case .moss: "한국어 전사 (MOSS)"; case .nemotron3: "화자 분리 (Nemotron 3)"; case .ultra8: "화자 분리 (Ultra8, 선택 사항)" } }
+    var label: String { switch self { case .voiceIdentity: "목소리 등록"; case .moss: "한국어 전사 (MOSS)"; case .nemotron3: "화자 분리 (Nemotron 3)"; case .ultra8: "화자 분리 (Ultra8, 선택 사항)" } }
 }
 
 struct ModelAsset: Sendable {
@@ -17,6 +17,7 @@ struct ModelAsset: Sendable {
     var remoteURL: URL { URL(string: "https://huggingface.co/\(repository)/resolve/\(revision)/\(name)")! }
     func destination(in base: URL) -> URL {
         switch group {
+        case .voiceIdentity: base.appendingPathComponent("Models/VoiceIdentity/\(name)")
         case .moss: base.appendingPathComponent("Models/hub/models--OpenMOSS-Team--MOSS-Transcribe-Diarize/snapshots/\(revision)/\(name)")
         case .nemotron3: NemotronModel.url(in: base)
         case .ultra8: Ultra8Model.url(in: base)
@@ -26,6 +27,16 @@ struct ModelAsset: Sendable {
 
 enum ModelCatalog {
     static let assets: [ModelAsset] = [
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "Embedding.mlmodelc/analytics/coremldata.bin", bytes: 243, sha256: "8d6706436639b53830b4dbe8aaf9c9a843f7f582d63e16f3cb8bb7c6ccd58682"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "Embedding.mlmodelc/coremldata.bin", bytes: 704, sha256: "4a705bac27d151d9642f37609296042a15602a42253039e0921dc9e75da7e004"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "Embedding.mlmodelc/metadata.json", bytes: 2818, sha256: "1854371eb6b438fb8aeac96afb45c999af7902581c06afdfcd7ff3cb1ce66be5"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "Embedding.mlmodelc/model.mil", bytes: 78432, sha256: "22fa958aef72a561c21f874a07cbdcd30fdf40ee961c0bc2fb67c119273b46d3"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "Embedding.mlmodelc/weights/weight.bin", bytes: 13412288, sha256: "99356b2985b8d43880a657024d941d450b38820451ccff903f76ed4e52d1868b"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "FBank.mlmodelc/analytics/coremldata.bin", bytes: 243, sha256: "0e8bd3a8b82ac123580989f490e4d9245127c535857630b543311268accc3f0a"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "FBank.mlmodelc/coremldata.bin", bytes: 853, sha256: "57ac436bb0671cbb5527a339134d695f752eb77f7a18966b93c6835335595759"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "FBank.mlmodelc/metadata.json", bytes: 3409, sha256: "2623785f5d186893b82d01e84aa33a7704ef763c3309e02055f22dc9d871ce9a"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "FBank.mlmodelc/model.mil", bytes: 15667, sha256: "27aaeb21569e81bdbe2eef87789f50a37cfea800039bd134448a9417de2f30ed"),
+        .init(group: .voiceIdentity, repository: "FluidInference/speaker-diarization-coreml", revision: "df2625ac79a7ac6b65ad868fee6d80f320da4232", name: "FBank.mlmodelc/weights/weight.bin", bytes: 1776896, sha256: "9e83fdd3ea78064b078069e4d9141603c61c47a27fd19e7e3142ff7476f8db36"),
         .init(group: .moss, repository: "OpenMOSS-Team/MOSS-Transcribe-Diarize", revision: "704aa4a9c304e8520be88901e0d1960158ef5b15", name: "added_tokens.json", bytes: 707, sha256: "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"),
         .init(group: .moss, repository: "OpenMOSS-Team/MOSS-Transcribe-Diarize", revision: "704aa4a9c304e8520be88901e0d1960158ef5b15", name: "config.json", bytes: 2335, sha256: "2b2b7a6e61334152bdd7ecf8a4da3073b4940a097e193d1d2b22093e77535234"),
         .init(group: .moss, repository: "OpenMOSS-Team/MOSS-Transcribe-Diarize", revision: "704aa4a9c304e8520be88901e0d1960158ef5b15", name: "generation_config.json", bytes: 107, sha256: "e53a4b3ce4f944230cf1ca8fed0c42f4ff0d8c1443eaf98b5315d987334dd9e4"),

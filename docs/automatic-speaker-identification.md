@@ -1,126 +1,157 @@
-# Automatic speaker identification: implemented foundation, release blocked
+# Voice enrollment and automatic names
 
-2026-09-03. AI-assisted notes. Verify these contracts in code and tests. Source
-integration is not evidence that automatic recognition works accurately. Private
-measurements and recordings stay in ignored results, never this document.
+2026-10-08. Source behavior and evaluation requirements. Automatic naming remains
+unqualified; successful storage, rendering or model execution does not establish
+recognition accuracy.
 
-## Meaning of the requested feature
+## Available flow
 
-[NAVER WORKS' official introduction](https://naver.worksmobile.com/blog/clovanote-speaker-identification/)
-describes linking a clear voice to an address-book person once, then recognizing
-that person in later meetings. The article permits correcting an association and
-notes sensitivity to noise, overlap and short/unclear speech. It does not disclose
-the recognition model, retraining procedure or a local-only implementation.
+A folder's Team section supports adding and renaming people, recording their voice,
+replacing a registration and deleting its encrypted voice features independently of
+the saved name. Name changes affect future uses; existing transcript edits remain
+unchanged.
 
-Distinguish three independent tasks:
+Microphone enrollment:
 
-- Diarization: determine which anonymous speaker is active at each time.
-- Text projection: assign recognized words/utterances to activity.
-- Identification: associate voice characteristics with a previously registered person.
+1. Prepare the optional voice model when the user requests it.
+2. Read the displayed casual Korean prompts in a normal meeting voice.
+3. Switch to free speech about recent work or an ordinary experience.
+4. Inspect recording duration, sufficiently loud intervals and clipping; listen back.
+5. Confirm the recording was authorized and contains only that person's voice.
+6. Extract several independent spans and save their encrypted features. Delete the
+   temporary recording on success or cancellation.
 
-A failed word-alignment experiment is not proof that cross-meeting identification
-is impossible. Naming a mixed cluster does not separate people the diarizer already
-merged. Never infer identity from attendance count or transcript mentions alone.
+The prompts and roughly 60–90 seconds total / 20–30 seconds free speech are starting
+points for evaluation, not validated optimums or mandatory recording times. The
+amplitude check is not VAD, speaker separation, a noise classifier or proof that one
+person is present. Failed consistency checks require another recording; they never
+average conflicting speakers into a profile. Capture is limited to two minutes.
+Interrupted enrollment captures from terminated processes are removed at next launch;
+files belonging to a live process and unrelated files are left alone.
 
-## Current Grove behavior
+The natural-speech design is motivated by mismatch between read and spontaneous
+speech, not proof that mixing both during enrollment improves accuracy:
+[Interspeech 2025](https://www.isca-archive.org/interspeech_2025/martinek25_interspeech.html).
 
-`VoiceIdentityReleaseGate.isEnabled` is **false**. The installed-source default rejects
-new voice enrollment, manual voice search and post-transcription automatic matching
-before extraction. UI says validation is pending; it must not look like an available
-feature or collect voices while matching is blocked. No command-line or environment
-override enables the product feature. Tests can explicitly inject availability with
-synthetic extractors, isolated storage and fake keys.
+## Models and storage
 
-`saveSpeakerProfile` remains names-only. Applying saved names is manual. Existing
-voice cleanup is available even while enrollment/matching is blocked. The old
-`SpeakerProfileMatcher`/`VoiceProfileSelection` are legacy research helpers, not the
-new production integration. Do not enable the release gate merely because tests pass.
+The optional voice feature assets are approximately 15.3 MB from the pinned
+[FluidInference model repository](https://huggingface.co/FluidInference/speaker-diarization-coreml).
+`ModelCatalog` contains individual file sizes and SHA256 hashes. Download, resume,
+capacity checks and verification reuse the existing model manager. A separate
+readiness receipt follows a synthetic CoreML execution check. Default MOSS / Nemotron
+readiness does not depend on this optional model.
 
-## Implemented, gated flow
+`LocalSpeakerVoiceService` reads Grove-managed `Models/VoiceIdentity`, using the
+versioned active-frame-centered feature recipe. Models and preprocessing participate
+in the fingerprint; older recipes cannot silently compare against new registrations.
+This recipe can collect registrations but is not yet qualified for automatic names.
+FluidAudio's `SpeakerManager` is a streaming-diarizer API, not an attachment to
+Nemotron's anonymous outputs. Grove uses a separate feature/matching step:
+[official API](https://github.com/FluidInference/FluidAudio/blob/main/Documentation/Diarization/SpeakerManager.md).
 
-Keep MOSS and the selected diarizer. Add a separate identification stage:
+Each selected span retains its own 256-dimensional vector, range and source hash in
+`SpeakerVoiceVault`. Features use AES-GCM; separate generation keys remain in Keychain.
+The public names index contains no voice vectors. New registrations from microphone
+capture have no fictitious meeting, transcript revision or speaker identifier. Those
+optional identifiers remain compatible with older meeting-derived records.
 
-1. The user explicitly chooses **remember this voice** for a named person in a folder.
-   Select several clean, sufficiently long, non-overlapping, human-confirmed spans.
-   Reject inconsistent samples instead of averaging two people into one identity.
-2. Extract versioned local voice characteristics. Compare new meeting clusters only
-   with that folder's registered people, unless the user explicitly broadens scope.
-3. Evaluate match strength, runner-up separation and agreement across multiple spans.
-   Unknown people and ambiguous matches remain unnamed. Similarity is not a calibrated
-   probability, and there is no universal production threshold.
-4. Initially suggest a name while preserving the anonymous source cluster. Permit
-   confirm, correct, disconnect and undo. Automatic display can later be an explicit
-   option after separate-session validation; inferred names stay distinguishable.
-5. Never absorb automatic matches into enrollment samples. Confirmation only confirms
-   the displayed name; adding/replacing voice samples requires a separate explicit
-   registration. Neither action approves transcript text or training data.
+The existing transaction contract remains: publish addressable metadata before a
+Keychain write, atomically publish encrypted data, persist cleanup obligations, then
+remove old keys. Interrupted or failed writes stay addressable for cleanup. Never
+remove a name before its voice storage is cleaned up. Missing keys or corrupt ciphertext
+fail without overwriting a registration. Names-only backups strip legacy plaintext
+voice fields. Automatically inferred matches never augment enrollment data.
 
-Enrollment requires three to five distinct clean utterances, at least ten seconds
-after boundary trimming, and explicit same-person/permission confirmation. Raw activity
-must cover the utterance sufficiently without a competing cluster. Do not hide mixed
-enrollment by averaging vectors: compare individual samples and reject inconsistency.
-Query requires multiple clean spans and agreement, an absolute similarity guard and
-separation from the runner-up. Thresholds are versioned beta guardrails, not calibrated
-probabilities. A single registered person is a particularly important unknown-person
-test, not permission to always choose that person.
+## Attendance
 
-Same recording ID or identical audio bytes exclude self-enrollment comparisons.
-Re-encoded copies with different IDs are not reliably detected; byte hashes do not
-prove independent sessions. Folder opt-in defaults off. Existing human names,
-assignments and identity undo/redo history prevent automatic overwrites. Duplicate
-claims by separate clusters for one profile are all deferred. A suggestion stores its
-model/policy, registration timestamp and query IDs without embedding vectors.
+New-meeting setup supports optional registered people, named guests and unnamed guests.
+It displays the total and remembers the latest selection per folder. Calendar recording
+opens this same setup with the event title. Changing folders restores that folder's
+selection; unavailable profiles are removed from the draft.
 
-Async work binds the document, folder/library and source audio; changes before apply
-discard the proposal. Save before publishing UI state. Cancellation before the commit
-point publishes nothing; during encrypted commit the cancel button is disabled.
-An identification failure does not turn successful transcription into failure.
+Attendance is stored separately from inference options. Five attendees with three
+actual speakers is valid. Attendance never sets a diarizer's required speaker count.
+Unregistered names and guest counts are not voice identity evidence. The explicit
+selected registered profiles form the matching candidates; an empty selection does
+not search the whole team. Legacy/imported records without attendance preserve the
+previous folder-based candidate scope. Mac basic transcription has no diarization,
+so it does not gain automatic speaker names through attendance.
 
-## Storage, failure and deletion contracts
+## Automatic naming remains gated
 
-- `SpeakerVoiceVault` stores only AES-GCM ciphertext. Folder/profile/key generation are
-  authenticated. Keys are stored separately in OS Keychain, never a local plaintext key.
-- Each replacement gets a fresh key. Publish ciphertext atomically before removing
-  old keys. Surface post-publication cleanup failure separately from failed publication.
-- Persist the profile's cleanup reference before touching Keychain. A failed first
-  enrollment remains addressable after restart even if no live ciphertext was published.
-  Delete voice storage successfully before deleting its name or folder metadata.
-- New `library.json` saves and backups strip legacy embedding fields. Do not silently
-  migrate legacy embeddings into the vault. A names-only save cannot replace a profile
-  ID that might still own keys. Voice deletion retains historical names/text/undo.
-- Missing keys, tampering, unsafe paths and oversized files fail closed. No automatic
-  reset, plaintext fallback, cloud upload or inclusion in ordinary JSON backup/export.
-- Local ad-hoc beta uses the login Keychain explicitly; Data Protection Keychain needs
-  signing/entitlements not provided by an ad-hoc beta. A new ad-hoc app signature can
-  lose access to older keys. This is a release gate, not an automatic recovery path.
-- Key deletion cannot guarantee erasure of Keychain backups, memory copies or original
-  audio. Do not claim forensic deletion. Interrupted private audio preparation can
-  leave temporary audio; it contains no plaintext voice vectors and needs scoped cleanup.
-- Optional fields remain decodable with older documents. Do not roll back to an older
-  app to modify voice-linked names: it cannot preserve the new cleanup contract.
+`VoiceIdentityReleaseGate.isEnabled` remains false. Voice search, post-transcription
+naming and legacy meeting-derived enrollment remain disabled. Dedicated microphone
+registration and manual name linking are available. There is no product CLI or
+environment override for automatic naming.
 
-## Implementation evidence and verification gates
+After qualification, the intended flow is MOSS transcription and existing diarization,
+followed by independent feature extraction and direct application of sufficiently
+consistent names. Ambiguous or unknown voices stay anonymous. No repeated confirmation
+prompt is required. `isConfirmed` remains distinct from an inferred name; source
+clusters and manual assignments remain intact. User name/assignment edits and identity
+undo/redo history prevent automatic overwrites. Recognition failure never fails ASR.
 
-- [FluidAudio known-speaker documentation](https://github.com/FluidInference/FluidAudio/blob/main/Documentation/Diarization/GettingStarted.md)
-  demonstrates embedding extraction and initialization with named speaker profiles.
-- [sherpa-onnx speaker-identification example](https://github.com/k2-fsa/sherpa-onnx/blob/master/python-api-examples/speaker-identification.py)
-  demonstrates explicit embedding registration, thresholded search and unknown output.
+Current thresholds (similarity 0.85, runner-up margin 0.15, inter-span consistency 0.80)
+are uncalibrated guardrails, not probabilities or production accuracy guarantees.
+Registration currently requires 3–5 spans and at least 10 seconds in total; query
+matching requires 2–5 consistent spans. New microphone recordings select spans from
+both prompt reading and free speech. These limits also require evaluation.
 
-These are implementation candidates, not measured Grove accuracy. Inspect the pinned
-API/model/export before adoption; replacing the existing diarizer is not necessary
-just to add a separate identity layer.
+Several non-overlapping clusters may receive the same registered identity after each
+passes matching. If their transcript intervals or retained activity evidence overlap,
+those identity assignments are deferred. Naming cannot repair two people merged into
+one cluster. Same-recording IDs or identical source bytes exclude self-comparisons;
+file hashes cannot detect every re-encoded copy.
 
-## Conditions before enabling the release gate
+## Independent evaluation
 
-Enroll from one session and evaluate different sessions, microphones and distances.
-Include similar voices, missing registered participants and genuinely new people.
-Measure wrong-name assignments separately from unrecognized speakers and DER. Do not
-evaluate enrollment against the same spans used to create it. Keep raw audio, voice
-features, labels and all private evaluation evidence out of public Git.
+`VoiceIdentityQualificationTests.evaluateIndependentRecordings` consumes explicit
+private enrollment/query manifests. Different session IDs and audio hashes are required
+between enrollment and evaluation. Use different days in the supplied data, not two
+segments from the same meeting. Conditions are researcher-supplied labels, not measured
+proof of microphone variation or similar voices.
 
-Test registration acceptance and useful known-person recall alongside wrong-name
-assignments. Rejecting everyone is not a successful identification feature. Changes
-to preprocessing require a distinct model fingerprint; never compare their vectors
-with registrations from another recipe. The active-frame-centering recipe in source
-is diagnostic, not a qualified default. Qualify Keychain add/read/forget, interrupted
-commit and signed-app replacement with synthetic keys before enabling collection.
+The output includes model fingerprint, extraction time, audio hashes and separate
+counts for correct known names, wrong known names, missed known names and unknown
+false accepts. It compares a small threshold grid without re-running inference and
+never enables the release gate. Rejecting every known person is not success.
+
+Manifest entries:
+
+```json
+{
+  "enrollments": [{
+    "id": "registration-a", "personID": "person-a", "sessionID": "registration-day",
+    "audioPath": "audio/registration-a.wav",
+    "ranges": [{"start": 1, "end": 6}, {"start": 8, "end": 13}, {"start": 15, "end": 20}]
+  }],
+  "queries": [{
+    "id": "meeting-a", "personID": "person-a", "sessionID": "another-day",
+    "audioPath": "audio/another-meeting.wav",
+    "ranges": [{"start": 10, "end": 15}, {"start": 30, "end": 35}],
+    "candidates": ["person-a"], "conditions": ["different-microphone"]
+  }]
+}
+```
+
+`personID: null` denotes an unknown person. Add all five registered people, other-day
+queries, absent-person/candidate exclusion, unknown guests, similar voices and
+microphone/distance changes before assessing release readiness. A single-person example
+is a format example, not adequate qualification. Use ground-truth single-speaker spans
+to isolate identity errors, then separately evaluate diarizer-produced spans.
+
+Developer-only execution, with an output directory that does not already exist:
+
+```bash
+GROVE_VOICE_IDENTITY_MANIFEST=.work/voice-evaluation/manifest.json \
+GROVE_VOICE_IDENTITY_OUTPUT=.work/voice-evaluation/run-1 \
+GROVE_VOICE_IDENTITY_MODELS=.work/voice-models/Models/VoiceIdentity \
+taskpolicy -b swift test --jobs 2 --scratch-path .work/swift \
+  --filter VoiceIdentityQualificationTests
+```
+
+The developer evaluation needs Swift; distributed app users do not. Keep all recordings,
+labels, voice vectors, paths and evaluation outputs outside public Git. Select thresholds
+on development data and confirm them on separate holdout sessions. Measure additional
+processing time and memory before describing the feature as lightweight.

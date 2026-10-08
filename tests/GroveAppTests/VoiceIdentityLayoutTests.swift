@@ -54,6 +54,29 @@ struct VoiceIdentityLayoutTests {
         try render(FolderSpeakerLibraryView(store: gatedStore, folderID: folderID).environment(\.colorScheme, .dark),
                    size: CGSize(width: 540, height: 360),
                    destination: output.appendingPathComponent("voice-library-production-gate.png"))
+        let profileID = try #require(gatedStore.addTeamMember(folderID: folderID, name: "등록할 팀원"))
+        let profile = try #require(gatedStore.speakerProfiles(in: folderID).first { $0.id == profileID })
+        if let modelPath = ProcessInfo.processInfo.environment["GROVE_VOICE_IDENTITY_MODELS"] {
+            let destination = base.appendingPathComponent("Models/VoiceIdentity")
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: modelPath), to: destination)
+            gatedStore.modelManager.install(groups: [.voiceIdentity])
+            while gatedStore.modelManager.isInstalling { try await Task.sleep(for: .milliseconds(50)) }
+            #expect(gatedStore.modelManager.isVoiceModelReady)
+        }
+        for scheme in [ColorScheme.light, .dark] {
+            try render(RecordedVoiceEnrollmentSheet(store: gatedStore, profile: profile).environment(\.colorScheme, scheme),
+                       size: CGSize(width: 560, height: 520),
+                       destination: output.appendingPathComponent("voice-reading-\(scheme == .dark ? "dark" : "light").png"))
+        }
+        var attendance = MeetingAttendance(profileIDs: [profileID], names: ["이번 회의 참석자"], guestCount: 3)
+        try render(MeetingAttendanceView(store: gatedStore, folderID: folderID, attendance: Binding(get: { attendance }, set: { attendance = $0 }))
+            .environment(\.colorScheme, .dark), size: CGSize(width: 500, height: 230),
+            destination: output.appendingPathComponent("attendance.png"))
+        let event = ScheduledMeeting(id: "preview", calendarID: "preview", title: "함께하는 회의", start: Date().addingTimeInterval(120),
+            end: Date().addingTimeInterval(3600), calendarName: "일정")
+        try render(MeetingReminderBanner(meeting: event, record: {}, snooze: {}, close: {}),
+                   size: CGSize(width: 440, height: 40), destination: output.appendingPathComponent("calendar-pill.png"))
     }
 
     private func render(_ view: some View, size: CGSize, destination: URL) throws {

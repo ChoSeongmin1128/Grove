@@ -9,8 +9,8 @@ struct VoiceEnrollmentSample: Codable, Equatable, Sendable {
     let start: Double
     let end: Double
     let voice: SpeakerVoicePrint
-    let sourceMeetingID: UUID
-    let sourceRevisionID: UUID
+    let sourceMeetingID: UUID?
+    let sourceRevisionID: UUID?
     let audioSHA256: String
 }
 

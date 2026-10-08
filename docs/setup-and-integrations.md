@@ -84,3 +84,12 @@ OS의 전체 캘린더 접근 권한을 요청하지만, Grove 코드는 일정�
 공식 계약: [Apple SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer),
 [EventKit 접근](https://developer.apple.com/documentation/eventkit/accessing-the-event-store),
 [Notion Markdown API](https://developers.notion.com/guides/data-apis/working-with-markdown-content).
+
+## 팀원 목소리와 참석자
+
+- 폴더의 팀원에서 이름 추가 / 변경, 예문과 자유 발화 녹음, 등록 / 삭제 지원
+- 목소리 모델은 등록 요청 때 약 15.3 MB를 별도로 준비. 기본 전사 모델 준비와 분리
+- 녹음 전 참석자 선택은 선택 사항. 이름이나 게스트 인원도 추가 가능
+- 참석 인원은 화자 수 옵션을 바꾸지 않음. Calendar 녹음도 같은 준비 화면 사용
+- 자동 이름 연결은 다른 날의 실제 팀원 / 미등록 화자 평가 전까지 비활성
+- 상세 계약과 개발용 검증 입력: [목소리 등록과 이름 연결](automatic-speaker-identification.md)

@@ -114,7 +114,7 @@ struct ModelSettingsView: View {
             Section("전사 모델") {
                 ForEach(ModelGroup.allCases) { group in
                     LabeledContent(group.label) {
-                        Text(models.readyGroups.contains(group) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
+                        Text((group == .voiceIdentity ? models.isVoiceModelReady : models.readyGroups.contains(group)) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
                     }
                 }
                 Text("다운로드 약 1.9 GB. 설치 후에는 인터넷 없이 전사할 수 있습니다.")
@@ -126,6 +126,7 @@ struct ModelSettingsView: View {
                     HStack {
                         Button(models.isReadyForUse ? "모델 확인" : "모델 설치") { models.install() }.disabled(isBusy)
                         Button("Ultra8 준비") { models.install(groups: [.ultra8]) }.disabled(isBusy)
+                        Button("목소리 모델 준비") { models.install(groups: [.voiceIdentity]) }.disabled(isBusy)
                     }
                 }
                 if let message = models.message { Text(message).font(.caption).foregroundStyle(.secondary) }

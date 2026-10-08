@@ -15,6 +15,7 @@ struct ModelReadinessReceipt: Codable {
 final class ModelManager: ObservableObject {
     @Published private(set) var readyGroups: Set<ModelGroup> = []
     @Published private(set) var isReadyForUse = false
+    @Published private(set) var isVoiceModelReady = false
     @Published private(set) var isInstalling = false
     @Published private(set) var message: String?
     @Published private(set) var fraction: Double = 0
@@ -25,6 +26,10 @@ final class ModelManager: ObservableObject {
     private let runtimeID = "moss-704aa4a9-mlx-audio-0.1.3-nemotron-f667ed73-nemo-speech-0.2.0"
     private var downloads: URL { baseDirectory.appendingPathComponent("Downloads", isDirectory: true) }
     private var receiptURL: URL { baseDirectory.appendingPathComponent("Models/readiness.json") }
+    private var voiceReceiptURL: URL { baseDirectory.appendingPathComponent("Models/voice-readiness.json") }
+    private let voiceRuntimeID = "voice-df2625ac-active-centered-v2"
+    var voiceModelDirectory: URL { baseDirectory.appendingPathComponent("Models/VoiceIdentity", isDirectory: true) }
+    var voiceDownloadBytes: Int64 { ModelCatalog.assets.filter { $0.group == .voiceIdentity }.reduce(0) { $0 + $1.bytes } }
 
     init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
@@ -42,12 +47,19 @@ final class ModelManager: ObservableObject {
            receipt.runtime == runtimeID, readyGroups.isSuperset(of: [.moss, .nemotron3]) {
             isReadyForUse = defaultAssets.allSatisfy { receipt.files[$0.sha256] == stamp($0) }
         }
+        isVoiceModelReady = false
+        if let data = try? Data(contentsOf: voiceReceiptURL),
+           let receipt = try? JSONDecoder().decode(ModelReadinessReceipt.self, from: data),
+           receipt.runtime == voiceRuntimeID, readyGroups.contains(.voiceIdentity) {
+            isVoiceModelReady = voiceAssets.allSatisfy { receipt.files[$0.sha256] == stamp($0) }
+        }
     }
 
     var hasPartialDownloads: Bool {
         ModelCatalog.assets.contains { FileManager.default.fileExists(atPath: partialURL($0).path) }
     }
-    private var defaultAssets: [ModelAsset] { ModelCatalog.assets.filter { $0.group != .ultra8 } }
+    private var defaultAssets: [ModelAsset] { ModelCatalog.assets.filter { [.moss, .nemotron3].contains($0.group) } }
+    private var voiceAssets: [ModelAsset] { ModelCatalog.assets.filter { $0.group == .voiceIdentity } }
 
     func install(groups: Set<ModelGroup> = [.moss, .nemotron3]) {
         guard !isInstalling else { return }
@@ -98,7 +110,17 @@ final class ModelManager: ObservableObject {
                     fraction = Double(completed) / Double(totalBytes)
                 }
                 refresh()
-                if readyGroups.isSuperset(of: [.moss, .nemotron3]) {
+                if groups.contains(.voiceIdentity) {
+                    message = "목소리 모델 실행 검사 중"
+                    try await VoiceModelCheck.run(directory: voiceModelDirectory)
+                    try Task.checkCancellation()
+                    let files = Dictionary(uniqueKeysWithValues: voiceAssets.compactMap { asset in stamp(asset).map { (asset.sha256, $0) } })
+                    guard files.count == voiceAssets.count else { throw ModelPreparationError.integrity }
+                    try JSONEncoder().encode(ModelReadinessReceipt(runtime: voiceRuntimeID, files: files))
+                        .write(to: voiceReceiptURL, options: .atomic)
+                    message = "목소리 등록 준비 완료"
+                }
+                if !groups.isDisjoint(with: [.moss, .nemotron3]), readyGroups.isSuperset(of: [.moss, .nemotron3]) {
                     message = "전사 / 화자 분리 실행 검사 중"
                     try await ModelSmokeCheck.run(appBundle: Bundle.main.bundleURL, applicationSupport: baseDirectory)
                     try Task.checkCancellation()
@@ -107,7 +129,7 @@ final class ModelManager: ObservableObject {
                     let receipt = ModelReadinessReceipt(runtime: runtimeID, files: files)
                     try JSONEncoder().encode(receipt).write(to: receiptURL, options: .atomic)
                     message = "사용 준비 완료"
-                } else { message = "선택한 모델 준비가 끝났습니다." }
+                } else if !groups.contains(.voiceIdentity) { message = "선택한 모델 준비가 끝났습니다." }
             } catch is CancellationError { message = "준비를 중단했습니다. 이어받기를 누르면 받은 부분부터 확인해 계속합니다." }
             catch { message = error.localizedDescription }
         }

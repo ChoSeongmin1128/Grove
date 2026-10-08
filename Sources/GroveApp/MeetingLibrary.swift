@@ -11,8 +11,10 @@ struct MeetingLibrary: Codable, Equatable {
     var folders: [MeetingFolder] = []
     var defaultSpeakerOptions = MeetingSpeakerOptions()
     var speakerProfiles: [SavedSpeakerProfile]? = nil
+    var recentAttendance: [String: MeetingAttendance]? = nil
 
     func validate() throws {
+        try recentAttendance?.values.forEach { try $0.validate() }
         guard schemaVersion == 1, Set(folders.map(\.id)).count == folders.count,
               folders.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else { throw TranscriptEditError.invalidDocument }

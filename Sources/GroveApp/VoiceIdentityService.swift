@@ -4,10 +4,10 @@ import GroveInference
 
 enum VoiceIdentityReleaseGate {
     // Integration and synthetic safety tests are not evidence of open-set accuracy.
-    // Keep enrollment and automatic naming off until a versioned recipe passes
+    // Keep meeting-derived enrollment and automatic naming off until a recipe passes
     // independent-session known/unknown validation and its storage release gates.
     static let isEnabled = false
-    static let message = "목소리 자동 식별은 정확도 검증 중입니다. 이름 저장·직접 연결은 사용할 수 있습니다."
+    static let message = "자동 이름 연결은 정확도 검증 중입니다."
 }
 
 protocol SpeakerVoiceExtracting: Sendable {
@@ -16,6 +16,7 @@ protocol SpeakerVoiceExtracting: Sendable {
 
 struct LocalSpeakerVoiceService: SpeakerVoiceExtracting {
     let modelDirectory: URL
+    var recipe: VoiceEmbeddingRecipe = .activeFrameCenteredV2
 
     static func defaultModelDirectory() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -28,7 +29,7 @@ struct LocalSpeakerVoiceService: SpeakerVoiceExtracting {
                 throw VoiceIdentityError.modelsUnavailable
             }
         }
-        return try await VoiceEmbeddingExtractor(modelDirectory: modelDirectory)
+        return try await VoiceEmbeddingExtractor(modelDirectory: modelDirectory, recipe: recipe)
             .extractSamples(source: source, ranges: ranges, workingDirectory: workingDirectory)
     }
 }
@@ -102,6 +103,28 @@ enum VoiceIdentitySelection {
             }
         }
         return true
+    }
+
+    static func conflictingAssignments(_ assignments: [UUID: UUID], in document: TranscriptDocument) -> Set<UUID> {
+        var rejected = Set<UUID>()
+        for group in Dictionary(grouping: assignments.keys, by: { assignments[$0]! }).values where group.count > 1 {
+            let ids = Set(group)
+            let utterances = document.utterances.filter { $0.speakerID.map(ids.contains) == true }
+            let clusters = Set(utterances.compactMap(\.engineClusterID))
+            let activityConflict = utterances.contains { utterance in
+                utterance.assignmentEvidence?.overlapSecondsByCluster.contains(where: {
+                    $0.key != utterance.engineClusterID && clusters.contains($0.key) && $0.value > 0
+                }) == true
+            }
+            let timeConflict = utterances.contains { first in
+                utterances.contains { second in
+                    first.speakerID != second.speakerID && first.sourceChannelID == second.sourceChannelID
+                        && first.startTime < second.endTime && second.startTime < first.endTime
+                }
+            }
+            if activityConflict || timeConflict { rejected.formUnion(ids) }
+        }
+        return rejected
     }
 
     static func audioHash(_ url: URL) async throws -> String {

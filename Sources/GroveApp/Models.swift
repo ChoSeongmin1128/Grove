@@ -81,6 +81,7 @@ struct MeetingRecord: Identifiable, Codable, Hashable, Sendable {
     var completedResult: MeetingCompletedResult? = nil
     var folderID: UUID? = nil
     var calendarEvent: ScheduledMeeting? = nil
+    var attendance: MeetingAttendance? = nil
     var glossaryProfile: String
     var transcript: [TranscriptSegment]
     var claims: [EvidenceClaim]

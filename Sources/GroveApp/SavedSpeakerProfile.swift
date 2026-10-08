@@ -9,9 +9,9 @@ struct SavedSpeakerProfile: Identifiable, Codable, Hashable, Sendable {
     // Written before touching Keychain. A failed first registration still has an
     // addressable cleanup action after restart, even if no ciphertext was published.
     var voiceStorageReferenced: Bool? = nil
-    let sourceMeetingID: UUID
-    let sourceRevisionID: UUID
-    let sourceSpeakerID: UUID
+    let sourceMeetingID: UUID?
+    let sourceRevisionID: UUID?
+    let sourceSpeakerID: UUID?
     let createdAt: Date
 }
 

@@ -13,6 +13,16 @@ enum VoiceRecognitionPolicy {
     static let minimumSimilarity: Float = 0.85
     static let minimumMargin: Float = 0.15
 
+    struct Thresholds: Codable, Equatable, Sendable {
+        var similarity: Float = minimumSimilarity
+        var margin: Float = minimumMargin
+        var consistency: Float = minimumPairwiseSimilarity
+
+        var isValid: Bool {
+            [similarity, margin, consistency].allSatisfy { $0.isFinite && (0...1).contains($0) }
+        }
+    }
+
     enum Reason: String, Codable, Equatable, Sendable {
         case insufficientSamples, insufficientDuration, invalidSample, mixedModels
         case duplicateOrOverlappingSamples, inconsistentSamples
@@ -83,11 +93,12 @@ enum VoiceRecognitionPolicy {
 
     /// The caller must supply independent clean spans and remove any candidate's
     /// enrollment audio from these queries. This pure policy never enrolls samples.
-    static func evaluate(samples: [SpeakerVoicePrint], enrollments: [VoiceEnrollmentRecord]) -> Decision {
+    static func evaluate(samples: [SpeakerVoicePrint], enrollments: [VoiceEnrollmentRecord], thresholds: Thresholds = .init()) -> Decision {
+        guard thresholds.isValid else { return .unknown(.invalidSample) }
         guard (minimumQuerySamples...5).contains(samples.count) else { return .unknown(.insufficientSamples) }
         do {
             try validateVoices(samples)
-            guard try isConsistent(samples) else { return .unknown(.inconsistentSamples) }
+            guard try isConsistent(samples, minimum: thresholds.consistency) else { return .unknown(.inconsistentSamples) }
         } catch let error as PolicyError { return .unknown(error.reason) }
         catch { return .unknown(.invalidSample) }
         let model = samples[0].modelIdentifier
@@ -117,12 +128,12 @@ enum VoiceRecognitionPolicy {
                 if left.1 == right.1 { return left.0.uuidString < right.0.uuidString }
                 return left.1 > right.1
             }
-            guard let winner = scored.first, winner.1.isFinite, winner.1 >= minimumSimilarity else {
+            guard let winner = scored.first, winner.1.isFinite, winner.1 >= thresholds.similarity else {
                 return .unknown(.belowSimilarity)
             }
             if scored.count > 1 {
                 let margin = winner.1 - scored[1].1
-                guard margin >= minimumMargin else { return .unknown(.ambiguousProfiles) }
+                guard margin >= thresholds.margin else { return .unknown(.ambiguousProfiles) }
                 narrowestMargin = min(narrowestMargin ?? margin, margin)
             }
             guard selected == nil || selected == winner.0 else { return .unknown(.conflictingVotes) }
@@ -160,10 +171,10 @@ enum VoiceRecognitionPolicy {
         }
     }
 
-    private static func isConsistent(_ samples: [SpeakerVoicePrint]) throws -> Bool {
+    private static func isConsistent(_ samples: [SpeakerVoicePrint], minimum: Float = minimumPairwiseSimilarity) throws -> Bool {
         for left in samples.indices {
             for right in samples.indices where right > left {
-                guard try samples[left].cosineSimilarity(to: samples[right]) >= Double(minimumPairwiseSimilarity) else { return false }
+                guard try samples[left].cosineSimilarity(to: samples[right]) >= Double(minimum) else { return false }
             }
         }
         return true
