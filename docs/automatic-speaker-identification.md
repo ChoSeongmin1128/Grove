@@ -54,7 +54,10 @@ Each selected span retains its own 256-dimensional vector, range and source hash
 `SpeakerVoiceVault`. Features use AES-GCM; separate generation keys remain in Keychain.
 The public names index contains no voice vectors. New registrations from microphone
 capture have no fictitious meeting, transcript revision or speaker identifier. Those
-optional identifiers remain compatible with older meeting-derived records.
+optional identifiers remain compatible with older meeting-derived records when read
+by this version. Earlier beta readers requiring meeting source IDs cannot read new
+standalone profiles. Keep a compatible reader; never invent source IDs or discard
+registry metadata to make an older beta load the library.
 
 The existing transaction contract remains: publish addressable metadata before a
 Keychain write, atomically publish encrypted data, persist cleanup obligations, then

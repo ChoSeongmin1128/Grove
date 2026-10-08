@@ -24,4 +24,5 @@ concurrent editing, and first download / actual transcription on a separate Mac 
 developer tools. Mock service success does not establish live Calendar or Notion success.
 
 Do not downgrade new Apple-mode records to a reader that does not understand the new
-transcription / no-diarization values. Original recordings and prior revisions remain intact.
+transcription / no-diarization values. New standalone team profiles also require a reader supporting optional source identifiers.
+Original recordings and prior revisions remain intact.
