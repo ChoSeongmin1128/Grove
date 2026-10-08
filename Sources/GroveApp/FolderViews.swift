@@ -142,10 +142,7 @@ struct FolderSpeakerLibraryView: View {
             }
             let profiles = store.speakerProfiles(in: folderID)
             let hasVoices = profiles.contains { store.voiceProfileIsRegistered($0.id) }
-            if profiles.isEmpty {
-                Text("팀원을 추가하고 목소리를 등록할 수 있습니다.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
+            if !profiles.isEmpty {
                 Toggle("새 녹음에서 이름 자동 연결", isOn: Binding(
                     get: { store.automaticSpeakerIdentificationEnabled(folderID: folderID) },
                     set: { enabled in

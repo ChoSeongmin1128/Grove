@@ -1,6 +1,6 @@
 # Release readiness
 
-Current source: 0.4.0 / local-beta.16. Actual installed bundle, signing, notarization,
+Current source: 0.4.0 / local-beta.17. Actual installed bundle, signing, notarization,
 model qualification and test receipts belong in the private `HANDOFF.md` entry point.
 Do not reuse an older installed-beta statement as proof of current runtime state.
 

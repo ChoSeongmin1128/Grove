@@ -17,7 +17,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.16. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.17. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 

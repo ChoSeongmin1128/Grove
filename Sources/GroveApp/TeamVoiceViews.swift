@@ -174,12 +174,9 @@ struct RecordedVoiceEnrollmentSheet: View {
             if store.voiceProfileIsRegistered(profile.id) {
                 Text("등록하면 이전 목소리가 교체됩니다.").font(.caption).foregroundStyle(.secondary)
             }
-            if !store.voiceIdentificationAvailable {
-                Text("자동 이름 연결은 정확도 검증 중입니다.").font(.caption).foregroundStyle(.secondary)
-            }
             Divider()
             HStack {
-                Text("등록 후 녹음은 삭제하고 목소리 정보만 암호화해 저장합니다.")
+                Text("등록 후 녹음 파일은 저장되지 않습니다.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("취소") { session.discard(); dismiss() }.keyboardShortcut(.cancelAction).disabled(submitting)
