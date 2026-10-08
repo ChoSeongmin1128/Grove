@@ -23,6 +23,9 @@ inference, proposals, and unverified items.
 - New recording is microphone-only. Do not reintroduce computer/system-output capture;
   file import and read-only compatibility with existing recordings remain supported.
 - Do not hardcode organization names, project terms, people, or private meeting examples.
+- Notion OAuth must use the Any workspace installation scope. Do not add workspace,
+  organization or email allowlists. Obtain workspace / user identities from authorization
+  and storage destinations from user selection, never fixed team-specific defaults.
 - User glossaries are optional machine-local profiles and never public defaults.
 - Preserve original audio and raw transcripts. Store corrections, speaker assignments,
   and summaries as separate revisions.

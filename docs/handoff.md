@@ -130,6 +130,9 @@ licenses and private evidence before scoped cleanup.
 
 ## Research boundaries and next work
 
+- Notion OAuth is planned, not implemented. Its installation scope is Any workspace;
+  use authorization metadata and user-selected destinations, with no team / workspace /
+  email allowlist or fixed parent page. See `setup-and-integrations.md` for the contract.
 - [Automatic speaker identification](automatic-speaker-identification.md) has implemented
   microphone enrollment and attendance selection. **Automatic naming remains gated**.
   A new embedding recipe needs independent-session known/unknown calibration and
