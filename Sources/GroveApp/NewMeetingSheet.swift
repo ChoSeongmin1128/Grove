@@ -15,12 +15,8 @@ struct NewMeetingSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("새 회의")
-                    .font(GroveTypography.title)
-                Text("녹음 파일을 먼저 안전하게 저장한 뒤 전사를 시작합니다.")
-                    .foregroundStyle(.secondary)
-            }
+            Text("새 회의")
+                .font(GroveTypography.title)
 
             Form {
                 TextField("회의 제목", text: $title, prompt: Text("회의 제목 입력"))
@@ -29,13 +25,12 @@ struct NewMeetingSheet: View {
                 DisclosureGroup("전사 옵션", isExpanded: $showsOptions) {
                     MeetingSpeakerOptionsView(options: $options)
                 }
-                LabeledContent("저장", value: "이 Mac에 녹음 파일 보관")
             }
             .formStyle(.grouped)
 
             HStack(spacing: 8) {
                 Image(systemName: "info.circle")
-                Text("마이크만 녹음하고 회의 종료 후 한국어로 전사합니다.")
+                Text("녹음을 마치면 전사가 시작됩니다.")
             }
             .font(.caption)
             .foregroundStyle(.secondary)

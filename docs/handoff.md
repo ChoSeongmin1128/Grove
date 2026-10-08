@@ -8,7 +8,7 @@ the private installation and evaluation receipts.
 
 ## Current source
 
-The source targets version0.4.0 / local-beta.12. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.13. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 

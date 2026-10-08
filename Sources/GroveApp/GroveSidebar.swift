@@ -11,7 +11,6 @@ struct GroveSidebar: View {
             Section {
                 RecordingLocationRow(title: "모든 녹음", symbol: "waveform", count: store.meetings.count)
                     .tag(SidebarDestination.library)
-                    .help("보관 위치와 관계없이 모든 녹음을 모아 봅니다.")
             }
 
             Section {
@@ -74,18 +73,6 @@ struct GroveSidebar: View {
             }
         } message: {
             Text("녹음과 전사는 삭제하지 않고 ‘미분류’로 옮깁니다. 폴더에 저장한 화자 정보는 삭제합니다.")
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 8) {
-                Image(systemName: "lock.shield.fill")
-                    .foregroundStyle(GroveTheme.grove)
-                Text("이 Mac에서 처리")
-                    .font(.caption)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.bar)
         }
     }
 

@@ -12,13 +12,13 @@ struct CalendarHomeSection: View {
                 HStack(spacing: 14) {
                     Image(systemName: "arrow.down.circle").font(.title2).foregroundStyle(GroveTheme.grove)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("첫 전사를 위한 모델 준비").font(GroveTypography.heading)
-                        Text(models.message ?? "약 1.9 GB를 한 번 받은 뒤 이 Mac에서 처리합니다.")
+                        Text("전사 모델 설치").font(GroveTypography.heading)
+                        Text(models.message ?? "다운로드 약 1.9 GB. 설치 후 오프라인 전사 가능.")
                             .font(GroveTypography.bodySmall).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if models.isInstalling { ProgressView().controlSize(.small) }
-                    else { Button("모델 준비") { models.install() }.disabled(isBusy) }
+                    else { Button("모델 설치") { models.install() }.disabled(isBusy) }
                 }.padding(18).background(GroveTheme.grove.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
             }
             VStack(alignment: .leading, spacing: 12) {
@@ -30,7 +30,7 @@ struct CalendarHomeSection: View {
                 }
                 if !schedule.enabled {
                     HStack {
-                        Text("Mac 캘린더의 일정에 맞춰 녹음 알림을 받으세요.").foregroundStyle(.secondary)
+                        Text("Mac 캘린더에서 회의 일정을 가져옵니다.").foregroundStyle(.secondary)
                         Spacer()
                         Button("캘린더 연결") { Task { await schedule.setEnabled(true) } }
                     }
@@ -65,7 +65,7 @@ struct CalendarSettingsView: View {
         Form {
             Section("회의 일정 알림") {
                 Toggle("캘린더 일정 알림 사용", isOn: Binding(get: { schedule.enabled }, set: { value in Task { await schedule.setEnabled(value) } }))
-                Text("Mac 기본 캘린더에 연결된 Google 계정의 일정을 사용합니다. 알림에서 녹음 시작을 누르면 마이크 녹음이 시작됩니다.")
+                Text("Mac 캘린더에 등록된 일정을 사용합니다.")
                     .font(.callout).foregroundStyle(.secondary)
                 Picker("미리 알림", selection: $schedule.leadMinutes) {
                     Text("시작 시각").tag(0); Text("5분 전").tag(5); Text("10분 전").tag(10)
@@ -100,20 +100,20 @@ struct ModelSettingsView: View {
     let isBusy: Bool
     var body: some View {
         Form {
-            Section("이 Mac에서 처리") {
+            Section("전사 모델") {
                 ForEach(ModelGroup.allCases) { group in
                     LabeledContent(group.label) {
                         Text(models.readyGroups.contains(group) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
                     }
                 }
-                Text("기본 모델은 MOSS와 Nemotron 3입니다. 처음 약 1.9 GB를 받고 이후에는 인터넷 없이 전사할 수 있습니다.")
+                Text("다운로드 약 1.9 GB. 설치 후에는 인터넷 없이 전사할 수 있습니다.")
                     .font(.callout).foregroundStyle(.secondary)
                 if models.isInstalling {
                     ProgressView(value: models.fraction)
                     Button("준비 중단") { models.cancel() }
                 } else {
                     HStack {
-                        Button("기본 모델 준비 / 확인") { models.install() }.disabled(isBusy)
+                        Button(models.isReadyForUse ? "모델 확인" : "모델 설치") { models.install() }.disabled(isBusy)
                         Button("Ultra8 준비") { models.install(groups: [.ultra8]) }.disabled(isBusy)
                     }
                 }

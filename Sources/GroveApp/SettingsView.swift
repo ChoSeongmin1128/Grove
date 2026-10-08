@@ -21,7 +21,7 @@ struct SettingsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             .formStyle(.grouped)
-            .tabItem { Label("처리", systemImage: "waveform") }
+            .tabItem { Label("전사", systemImage: "waveform") }
             .tag("processing")
 
             ModelSettingsView(models: store.modelManager, isBusy: store.isBusy)
@@ -35,7 +35,7 @@ struct SettingsView: View {
                 .tag("notion")
 
             Form {
-                Label("음성과 전사는 기본적으로 이 Mac에만 저장됩니다.", systemImage: "lock.shield")
+                Label("녹음 파일과 전사문은 Mac에 저장됩니다.", systemImage: "lock.shield")
                 LabeledContent("저장 위치", value: "Application Support/Grove")
                 Text("Notion 내보내기에서 적용을 누르면 선택한 전사문이 Notion에 전송됩니다. 음성 파일은 전송하지 않습니다.")
                     .font(.caption)

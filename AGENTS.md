@@ -30,6 +30,9 @@ inference, proposals, and unverified items.
 - Do not use ScreenCaptureKit or request screen-recording permission for an audio-only
   capture route.
 - Do not expose internal implementation terms as the default user-facing language.
+- Use short, concrete UI labels. Remove descriptions that repeat a heading or button,
+  promotional taglines and routine implementation explanations. Keep information needed
+  to choose a transcription mode, grant permissions, understand a limit or recover from errors.
 
 ## Private data
 

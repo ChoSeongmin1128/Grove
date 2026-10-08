@@ -40,13 +40,9 @@ struct LibraryHomeView: View {
 
     private var header: some View {
         HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title)
-                    .font(GroveTypography.title)
-                    .foregroundStyle(GroveTheme.ink)
-                Text(isFolderLocation ? "녹음을 끌어 옮기거나 ‘폴더로 이동’ 메뉴를 사용하세요." : "모든 폴더의 녹음을 모아 봅니다.")
-                    .foregroundStyle(.secondary)
-            }
+            Text(title)
+                .font(GroveTypography.title)
+                .foregroundStyle(GroveTheme.ink)
             Spacer()
             Button("녹음 시작") {
                 store.isPresentingNewMeeting = true
@@ -79,11 +75,12 @@ struct LibraryHomeView: View {
             Text(isSearching ? "검색 결과가 없습니다" : (isFolderLocation ? "이 위치에 녹음이 없습니다" : "저장한 녹음이 없습니다"))
                 .font(GroveTypography.heading)
             if isSearching {
-                Text("다른 제목으로 검색하거나 검색어를 지워 보세요.").foregroundStyle(.secondary)
                 Button("검색어 지우기") { searchText = "" }
             } else {
-                Text(isFolderLocation ? "최근 녹음을 이곳으로 끌어오거나 새 녹음을 저장할 수 있습니다." : "마이크로 녹음하거나 기존 음성·영상 파일을 가져오세요.")
-                    .foregroundStyle(.secondary)
+                if isFolderLocation {
+                    Text(showsUnfiled ? "녹음을 끌어와 폴더에서 꺼낼 수 있습니다." : "녹음을 끌어와 이 폴더로 옮길 수 있습니다.")
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     Button("녹음 시작") { store.isPresentingNewMeeting = true }.buttonStyle(.borderedProminent)
                     Button("파일 가져오기") { store.isPresentingImporter = true }
