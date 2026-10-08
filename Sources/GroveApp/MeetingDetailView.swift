@@ -36,7 +36,7 @@ struct MeetingDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onChange(of: meeting.id) { _, _ in reviewOnly = false; showsSpeakers = false }
         .sheet(isPresented: $showsNotionExport) {
-            if let document { NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter) }
+            if let document { NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter, connection: store.notionConnection) }
         }
         .sheet(isPresented: $showsTranscriptionOptions) {
             VStack(alignment: .leading, spacing: 18) {

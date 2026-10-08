@@ -18,12 +18,21 @@
     <string>Grove</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Grove Notion</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>io.github.choseongmin1128.grove</string></array>
+        </dict>
+    </array>
     <key>CFBundleShortVersionString</key>
 	<string>0.4.0</string>
     <key>GroveReleaseChannel</key>
-    <string>local-beta.18</string>
+    <string>local-beta.19</string>
     <key>CFBundleVersion</key>
-	<string>20</string>
+	<string>21</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>

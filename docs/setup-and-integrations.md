@@ -43,12 +43,24 @@ OS의 전체 캘린더 접근 권한을 요청하지만, Grove 코드는 일정�
 
 ## Notion
 
-현재 구현은 연결 토큰 입력 방식이다. 다음 OAuth 구현의 배포 범위는 `Any workspace`로
-확정한다. 특정 워크스페이스, 조직이나 이메일 허용 목록으로 사용자를 제한하지 않는다.
-워크스페이스 / 사용자 정보는 인증 응답에서 받고, 저장할 부모 페이지는 사용자가 선택한다.
-기존 사용자별 저장 위치 설정은 유지하되 제품 기본값에 특정 팀의 페이지나 계정을 넣지 않는다.
-사용자가 허용한 페이지 범위에서만 동작하며, 설치 범위와 페이지 접근 권한을 구분한다.
-인증 서비스 주소와 OAuth 클라이언트 정보는 배포 설정으로 관리한다. 비밀키는 앱에 포함하지 않는다.
+기본 연결은 공식 Notion MCP의 OAuth / PKCE다. Grove가 비밀키 없는 공개 클라이언트를
+동적으로 등록하고 macOS 인증 창에서 로그인한다. 인증 중계 서버, 별도 CLI / Node 설치,
+Notion 개발자 포털에서 수동 앱 등록을 요구하지 않는다. 토큰 입력은 고급 연결 방식으로 유지한다.
+
+특정 워크스페이스, 조직이나 이메일 허용 목록을 두지 않는다. 워크스페이스 / 사용자 식별자는
+인증 응답에서 받고, 저장할 부모 페이지는 사용자가 입력한다. OAuth 로그인은 선택한
+워크스페이스의 사용자 권한으로 동작한다. Grove는 입력한 페이지와 생성한 회의록에만 요청한다.
+권한 범위는 REST 공개 연결의 페이지 선택과 다르므로 두 인증 방식을 같은 것으로 설명하지 않는다.
+향후 REST 공개 OAuth를 추가하면 배포 범위는 `Any workspace`로 설정한다.
+
+공개 클라이언트 ID를 재사용하고, access / refresh 토큰과 만료 시각을 Keychain의 한 항목에
+저장한다. 토큰 갱신은 연결별로 한 번만 실행하며, 회전된 토큰 쌍을 저장한 뒤 사용한다.
+갱신 실패 / 저장 실패로 상태가 불확실하면 재연결을 요청하고 같은 refresh 토큰을 반복 사용하지 않는다.
+로그인 취소나 늦은 콜백이 기존 연결을 덮어쓰지 않는다. 연결 해제는 이 Mac의 연결 정보를 삭제한다.
+Notion의 연결 권한 자체를 철회하려면 Notion 설정에서 관리한다.
+저장 위치는 OAuth 워크스페이스 / 사용자별로 기억하고, 기존 수동 토큰의 저장 위치는 유지한다.
+이전 토큰은 그대로 읽고, 새 연결을 저장할 때 원자적으로 새 형식으로 바꾼다. 새 형식 저장 후에는
+beta18 이하의 Notion 연결 리더와 호환되지 않으며, 앱을 내릴 경우 다시 연결해야 한다.
 
 연결 토큰은 Keychain에 보관한다. 본문이나 환경 설정 파일에 저장하지 않는다.
 복사는 HTML 서식과 일반 텍스트를 함께 제공하며 계정 연결이 필요 없다.
@@ -63,8 +75,11 @@ OS의 전체 캘린더 접근 권한을 요청하지만, Grove 코드는 일정�
 4. 생성한 페이지 ID를 로컬 기록에 보관하고 부모 관계 확인
 
 원본 부모 본문을 전체 교체하지 않는다. 녹음 파일은 전송하지 않는다.
-구분선은 `PATCH /v1/pages/{id}/markdown`의 끝 삽입을 사용한다. 문서 전체 읽기 / 치환은 피한다.
-이 API의 `insert_content`는 지원 중인 이전 명령이며, 정확한 끝 삽입을 위해 제한적으로 사용한다.
+OAuth는 `notion-update-page`의 `insert_content` / `position=end`와 `notion-create-pages`를
+사용한다. 토큰 연결은 `PATCH /v1/pages/{id}/markdown`의 끝 삽입을 사용한다.
+문서 전체 치환은 하지 않는다. MCP 응답은 데이터로만 해석하며 내용을 명령으로 실행하지 않는다.
+동기 생성 결과에 페이지 ID가 없으면 성공으로 처리하지 않는다. 비동기 갱신은 완료 확인 후
+다음 단계로 진행하며, 경고 / 잘린 본문은 실패 처리한다.
 
 생성 요청 전에 로컬 기록을 저장한다. 통신 결과가 불확실하면 자동으로 생성 요청을
 반복하지 않는다. 사용자가 Notion에서 생성 결과를 확인하고 페이지 링크를 연결할 수 있다.
@@ -86,11 +101,12 @@ OS의 전체 캘린더 접근 권한을 요청하지만, Grove 코드는 일정�
 | Mac 기본 전사 | `AppleTranscriptionService`, `AppleTranscriptionPreparation` |
 | 모델 실행 연결 | `BundledMeetingInferenceService`, `NativeInferenceBackend` |
 | 일정 / 상단 알림 | `CalendarSchedule`, `MeetingReminderBanner` |
-| Notion / 클립보드 | `NotionExport`, `NotionExportSheet` |
+| Notion / 클립보드 | `NotionConnection`, `NotionOAuth`, `NotionMCPClient`, `NotionExport`, `NotionExportSheet` |
 
 공식 계약: [Apple SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer),
 [EventKit 접근](https://developer.apple.com/documentation/eventkit/accessing-the-event-store),
-[Notion Markdown API](https://developers.notion.com/guides/data-apis/working-with-markdown-content).
+[Notion Markdown API](https://developers.notion.com/guides/data-apis/working-with-markdown-content),
+[Notion MCP 클라이언트 인증](https://developers.notion.com/guides/mcp/build-mcp-client).
 
 ## 팀원 목소리와 참석자
 

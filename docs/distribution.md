@@ -53,3 +53,12 @@ Calendar 권한과 실제 계정 일정, Notion 토큰과 실제 부모 페이�
 
 Apple 공식 안내: [Developer ID](https://developer.apple.com/developer-id/),
 [macOS 공증](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+## Notion OAuth
+
+공식 Notion MCP의 공개 클라이언트 등록과 PKCE를 앱에서 처리한다. 앱 복귀 URL scheme은
+Info.plist에 선언하고, 인증 창의 state / issuer / 주소 / 만료 검증을 유지한다.
+Grove용 OAuth 비밀키나 별도 서버 설정을 배포본에 넣지 않는다.
+MCP와 REST의 토큰을 서로 바꿔 사용하지 않는다. 공개 클라이언트 등록 정보와 토큰 쌍은
+해당 Mac의 Keychain에 보관하며, 앱 업데이트로 재등록하거나 삭제하지 않는다.
+외부 Notion 권한 승인과 실제 페이지 변경은 UI에서 사용자가 선택한 경우에만 실행한다.

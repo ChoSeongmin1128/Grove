@@ -27,7 +27,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.18. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.19. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -130,9 +130,13 @@ licenses and private evidence before scoped cleanup.
 
 ## Research boundaries and next work
 
-- Notion OAuth is planned, not implemented. Its installation scope is Any workspace;
-  use authorization metadata and user-selected destinations, with no team / workspace /
-  email allowlist or fixed parent page. See `setup-and-integrations.md` for the contract.
+- Notion OAuth uses public-client PKCE / dynamic registration with the official hosted
+  MCP endpoint. No Grove auth server, app secret or user-installed CLI is needed. Grant
+  metadata and user-selected destinations replace team / workspace / email allowlists.
+  Native browser consent and a live parent-page export require user-run qualification;
+  synthetic protocol / storage checks do not establish live workspace write success.
+  Manual tokens remain available under advanced connection settings.
+  See `setup-and-integrations.md` for lifecycle and compatibility.
 - [Automatic speaker identification](automatic-speaker-identification.md) has implemented
   microphone enrollment and attendance selection. **Automatic naming remains gated**.
   A new embedding recipe needs independent-session known/unknown calibration and

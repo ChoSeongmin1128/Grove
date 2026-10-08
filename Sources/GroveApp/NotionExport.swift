@@ -59,41 +59,16 @@ enum MeetingExportContent {
     }
 }
 
-struct NotionTokenStore {
-    private let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "io.github.ChoSeongmin1128.Grove.Notion", kSecAttrAccount as String: "connection"]
-    func read() throws -> String? {
-        var values = query
-        values[kSecReturnData as String] = true
-        values[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(values as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data, let token = String(data: data, encoding: .utf8) else {
-            throw NotionExportError.keychain
-        }
-        return token
-    }
-    func save(_ token: String) throws {
-        let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty, !cleaned.contains(where: \.isWhitespace) else { throw NotionExportError.missingToken }
-        let data = Data(cleaned.utf8)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var values = query
-            values[kSecValueData as String] = data
-            values[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            guard SecItemAdd(values as CFDictionary, nil) == errSecSuccess else { throw NotionExportError.keychain }
-        } else if status != errSecSuccess { throw NotionExportError.keychain }
-    }
-    func delete() throws {
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw NotionExportError.keychain }
-    }
+@MainActor
+protocol NotionPageClient {
+    func parentTitle(id: String) async throws -> String
+    func create(parent: String, title: String, markdown: String) async throws -> String
+    func ensureDividerAtEnd(parent: String) async throws
+    func verifyChild(id: String, parent: String) async throws
 }
 
 @MainActor
-struct NotionClient {
+struct NotionClient: NotionPageClient {
     let token: String
     var session: URLSession = .shared
     func parentTitle(id: String) async throws -> String {
@@ -169,7 +144,7 @@ final class NotionExporter: ObservableObject {
         return try JSONDecoder().decode(NotionExportReceipt.self, from: Data(contentsOf: url))
     }
     func save(meeting: MeetingRecord, document: TranscriptDocument, parentLink: String, original: Bool,
-              client: NotionClient) async throws -> URL {
+              client: any NotionPageClient) async throws -> URL {
         guard !isSaving else { throw NotionExportError.busy }
         isSaving = true
         defer { isSaving = false }
@@ -201,7 +176,7 @@ final class NotionExporter: ObservableObject {
         try persist(receipt)
         return NotionPageLink.url(for: id)
     }
-    func connectCreatedPage(meetingID: UUID, link: String, client: NotionClient) async throws -> URL {
+    func connectCreatedPage(meetingID: UUID, link: String, client: any NotionPageClient) async throws -> URL {
         guard !isSaving, var receipt = try receipt(meetingID: meetingID), receipt.pageID == nil else { throw NotionExportError.invalidParent }
         isSaving = true
         defer { isSaving = false }
@@ -224,14 +199,14 @@ enum NotionExportError: Error, LocalizedError {
         switch self {
         case .invalidLink: "Notion 페이지 링크를 입력해 주세요. 데이터베이스 링크는 지원하지 않습니다."
         case .invalidParent: "저장할 일반 페이지와 접근 권한을 확인해 주세요."
-        case .missingToken: "설정의 Notion 화면에서 연결 토큰을 저장해 주세요."
+        case .missingToken: "설정에서 Notion에 연결해 주세요."
         case .keychain: "Notion 연결 정보를 Keychain에서 읽거나 저장하지 못했습니다."
         case .unknownResult: "저장 결과를 확인하지 못했습니다. 중복 생성을 막기 위해 다시 만들지 않습니다. Notion에서 생성된 페이지를 확인하고 아래에 링크를 연결해 주세요."
         case .changedExport: "이 녹음의 회의록은 이미 추가되었습니다. 추가된 회의록을 열거나 새 내용을 복사해 붙여넣어 주세요."
         case .busy: "다른 회의록을 저장하고 있습니다."
         case .dividerFailed: "구분선 추가 결과를 확인하지 못했습니다. 다시 적용하면 페이지 하단을 확인한 뒤 이어서 처리합니다."
         case .http(let status): switch status {
-            case 401: "Notion 연결 토큰을 확인해 주세요."
+            case 401: "Notion에 다시 연결해 주세요."
             case 403, 404: "이 페이지에 접근할 수 없습니다. Notion 페이지의 연결 설정과 쓰기 권한을 확인해 주세요."
             case 429: "Notion 요청이 잠시 제한되었습니다. 잠시 후 다시 시도해 주세요."
             default: "Notion 저장 요청에 실패했습니다 (\(status)). 원문은 Grove에 보존됩니다."

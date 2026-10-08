@@ -30,7 +30,7 @@ struct SettingsView: View {
             CalendarSettingsView(schedule: store.calendarSchedule)
                 .tabItem { Label("일정", systemImage: "calendar") }
                 .tag("calendar")
-            NotionSettingsView()
+            NotionSettingsView(connection: store.notionConnection, isBusy: store.notionExporter.isSaving)
                 .tabItem { Label("Notion", systemImage: "square.and.arrow.up") }
                 .tag("notion")
 

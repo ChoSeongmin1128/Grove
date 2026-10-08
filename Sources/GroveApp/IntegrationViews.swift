@@ -143,34 +143,56 @@ struct ModelSettingsView: View {
 }
 
 struct NotionSettingsView: View {
+    @ObservedObject var connection: NotionConnection
+    var isBusy = false
     @State private var token = ""
     @State private var message: String?
-    @AppStorage("notionParentLink") private var parentLink = ""
+    @State private var parentLink = ""
     var body: some View {
         Form {
             Section("Notion 연결") {
-                SecureField("연결 토큰", text: $token)
-                HStack {
-                    Button("연결 정보 저장") {
-                        do { try NotionTokenStore().save(token); token = ""; message = "연결 정보를 저장했습니다." }
-                        catch { message = error.localizedDescription }
-                    }.disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button("연결 정보 삭제") {
-                        do { try NotionTokenStore().delete(); message = "연결 정보를 삭제했습니다." }
-                        catch { message = error.localizedDescription }
+                if connection.isConnected {
+                    Label(connection.isOAuth ? "Notion 연결됨" : "토큰으로 연결됨", systemImage: "checkmark.circle")
+                }
+                HStack(spacing: 12) {
+                    if connection.isConnecting {
+                        ProgressView().controlSize(.small)
+                        Text("연결 중")
+                        Button("취소") { connection.cancelConnect() }
+                    } else {
+                        Button(connection.isConnected ? "다시 연결" : "Notion 연결") {
+                            message = nil
+                            Task { await connection.connect() }
+                        }.buttonStyle(.borderedProminent)
+                            .disabled(isBusy || connection.isRefreshing)
+                        if connection.isConnected || connection.requiresReconnect {
+                            Button("연결 해제") {
+                                do { try connection.disconnect() }
+                                catch { message = error.localizedDescription }
+                            }.disabled(isBusy || connection.isRefreshing)
+                        }
                     }
                 }
-                Text("Notion에서 연결 토큰을 만들고 저장할 부모 페이지에 접근을 허용해 주세요. 회의록은 내보내기에서 적용을 눌렀을 때 전송됩니다.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Link("Notion 연결 설정 열기", destination: URL(string: "https://www.notion.so/profile/integrations")!)
-                if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                if let message = message ?? connection.message { Text(message).font(.callout).foregroundStyle(.secondary) }
+                DisclosureGroup("토큰으로 연결") {
+                    SecureField("연결 토큰", text: $token)
+                    Button("토큰으로 연결") {
+                        do { try connection.saveManualToken(token); token = ""; message = nil }
+                        catch { message = error.localizedDescription }
+                    }.disabled(isBusy || connection.isConnecting || connection.isRefreshing || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Link("Notion 연결 설정 열기", destination: URL(string: "https://www.notion.so/profile/integrations")!)
+                }
             }
             Section("기본 저장 위치") {
                 TextField("추가할 페이지 링크", text: $parentLink, prompt: Text("https://www.notion.so/..."))
+                    .disabled(isBusy || connection.isConnecting)
                 Text("기존 본문 맨 아래에 구분선과 회의록 하위 페이지를 추가합니다. 데이터베이스 저장은 이 버전에서 지원하지 않습니다.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
+            .onAppear { parentLink = connection.parentLink }
+            .onChange(of: connection.destinationKey) { _, _ in parentLink = connection.parentLink }
+            .onChange(of: parentLink) { _, value in connection.parentLink = value }
     }
 }
 
@@ -178,7 +200,7 @@ struct NotionExportSheet: View {
     let meeting: MeetingRecord
     let document: TranscriptDocument
     @ObservedObject var exporter: NotionExporter
-    @AppStorage("notionParentLink") private var defaultParent = ""
+    @ObservedObject var connection: NotionConnection
     @State private var parentLink = ""
     @State private var original = false
     @State private var message: String?
@@ -234,7 +256,7 @@ struct NotionExportSheet: View {
                         do { message = "저장 위치: " + (try await client().parentTitle(id: NotionPageLink.id(from: parentLink))) }
                         catch { message = error.localizedDescription }
                     }
-                }.disabled(checkingParent || exporter.isSaving || (try? NotionPageLink.id(from: parentLink)) == nil)
+                }.disabled(!connection.isConnected || connection.isConnecting || checkingParent || exporter.isSaving || (try? NotionPageLink.id(from: parentLink)) == nil)
             }
             if let message { Text(message).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if uncertain {
@@ -257,7 +279,7 @@ struct NotionExportSheet: View {
                     Task {
                         do {
                             savedURL = try await exporter.save(meeting: meeting, document: document, parentLink: parentLink, original: original, client: client())
-                            defaultParent = parentLink
+                            connection.parentLink = parentLink
                             message = "페이지 하단에 회의록을 추가했습니다."
                         } catch {
                             message = error.localizedDescription
@@ -265,17 +287,19 @@ struct NotionExportSheet: View {
                         }
                     }
                 }.buttonStyle(.borderedProminent)
-                    .disabled(exporter.isSaving || checkingParent || uncertain || (try? NotionPageLink.id(from: parentLink)) == nil)
+                    .disabled(!connection.isConnected || connection.isConnecting || exporter.isSaving || checkingParent || uncertain || (try? NotionPageLink.id(from: parentLink)) == nil)
             }
         }.padding(26).frame(width: 640)
             .interactiveDismissDisabled(exporter.isSaving)
             .onAppear {
-                parentLink = defaultParent
+                parentLink = connection.parentLink
                 if let receipt = try? exporter.receipt(meetingID: meeting.id), let id = receipt.pageID { savedURL = NotionPageLink.url(for: id) }
             }
+            .onChange(of: connection.destinationKey) { _, _ in
+                if !exporter.isSaving { parentLink = connection.parentLink }
+            }
     }
-    private func client() throws -> NotionClient {
-        guard let token = try NotionTokenStore().read(), !token.isEmpty else { throw NotionExportError.missingToken }
-        return NotionClient(token: token)
+    private func client() throws -> any NotionPageClient {
+        try connection.client()
     }
 }

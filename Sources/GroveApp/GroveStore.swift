@@ -33,6 +33,7 @@ final class GroveStore: ObservableObject {
     let modelManager: ModelManager
     let voiceEnrollmentSession: VoiceEnrollmentSession
     let notionExporter: NotionExporter
+    let notionConnection: NotionConnection
     let applePreparation = AppleTranscriptionPreparation()
     let voiceIdentificationAvailable: Bool
 
@@ -69,6 +70,7 @@ final class GroveStore: ObservableObject {
         modelManager = ModelManager(baseDirectory: base)
         self.voiceEnrollmentSession = voiceEnrollmentSession ?? VoiceEnrollmentSession(directory: base.appendingPathComponent("VoiceWork/Capture", isDirectory: true))
         notionExporter = NotionExporter(directory: base.appendingPathComponent("Exports/Notion"))
+        notionConnection = baseDirectory == nil ? NotionConnection() : NotionConnection(storage: MemoryNotionConnectionStore(), defaults: UserDefaults(suiteName: "Grove.Notion.QA.\(UUID().uuidString)")!)
         libraryStorage = MeetingLibraryStorage(url: base.appendingPathComponent("library.json"))
         audioDirectory = base.appendingPathComponent("Audio", isDirectory: true)
         transcriptStorage = TranscriptDocumentStorage(directory: base.appendingPathComponent("Documents", isDirectory: true))
@@ -108,6 +110,8 @@ final class GroveStore: ObservableObject {
         modelManager.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         self.voiceEnrollmentSession.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         applePreparation.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
+        notionConnection.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
+        notionExporter.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         Task { [weak self] in await self?.refreshVoiceEnrollmentStatus() }
     }
 
@@ -123,7 +127,7 @@ final class GroveStore: ObservableObject {
     var isProcessing: Bool { processingMeetingID != nil }
     var isStartingCapture: Bool { captureStartID != nil }
     var isExportingOriginal: Bool { exportingOriginalMeetingID != nil }
-    var isBusy: Bool { pendingWorkspaceStart != nil || isRecording || isProcessing || isStartingCapture || isImportingRecording || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit || modelManager.isInstalling || applePreparation.isPreparing || voiceEnrollmentSession.isActive }
+    var isBusy: Bool { notionConnection.isConnecting || pendingWorkspaceStart != nil || isRecording || isProcessing || isStartingCapture || isImportingRecording || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit || modelManager.isInstalling || applePreparation.isPreparing || voiceEnrollmentSession.isActive }
     var needsModelSetup: Bool { defaultSpeakerOptions.transcriptionEngine == .apple ? !applePreparation.isReady : !modelManager.isReadyForUse }
     var canPresentNewMeeting: Bool { !isBusy && !needsModelSetup && workspaceSheet == nil && !isPresentingImporter }
 
@@ -814,6 +818,7 @@ final class GroveStore: ObservableObject {
 
     func prepareToQuit() async -> Bool {
         guard !isPreparingToQuit else { return false }
+        notionConnection.cancelConnect()
         guard !notionExporter.isSaving else {
             alertMessage = "Notion 저장 결과를 확인한 뒤 앱을 닫아 주세요."
             return false
