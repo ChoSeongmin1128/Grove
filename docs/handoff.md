@@ -27,7 +27,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.22. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.23. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -52,6 +52,8 @@ build identifier and local receipts for actual installation state.
 - Notion rich-text copy / parent-end divider and child-page export are explicit actions.
   Destination lookup accepts explicit blank-page MCP responses and rejects missing /
   truncated bodies, conflicting body markers and mismatched page identities.
+  MCP insertion uses the `content` field; request validation rejections remain distinct
+  from uncertain writes, so a rejected create does not leave an uncertain receipt.
   First-run downloads support byte progress, pause / resume, capacity and runtime checks.
 - Per-recording options are local drafts; persistent defaults live in Settings.
 - Recording names are editable. **원본 파일…** provides path access, Finder reveal and

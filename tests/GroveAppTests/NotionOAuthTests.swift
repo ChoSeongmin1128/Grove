@@ -10,6 +10,7 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var workspace = "workspace-one"
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var tools: [(Int, [String: Any])] = []
+    nonisolated(unsafe) static var rawToolResults = false
     static var metadata: [String: Any] { ["issuer": "https://mcp.notion.com", "authorization_endpoint": "https://mcp.notion.com/authorize",
         "token_endpoint": "https://mcp.notion.com/token", "registration_endpoint": "https://mcp.notion.com/register",
         "code_challenge_methods_supported": ["S256"], "token_endpoint_auth_methods_supported": ["none"]] }
@@ -44,8 +45,18 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
                 guard let method = body["method"] as? String else { return (400, [:]) }
                 if method == "initialize" { return (200, ["jsonrpc": "2.0", "id": body["id"]!, "result": ["protocolVersion": "2025-11-25", "capabilities": ["tools": [:]]]]) }
                 if method == "notifications/initialized" { return (202, [:]) }
+                if method == "tools/call", let params = body["params"] as? [String: Any],
+                   params["name"] as? String == "notion-update-page",
+                   let arguments = params["arguments"] as? [String: Any], arguments["command"] as? String == "insert_content",
+                   (arguments["content"] as? String == nil || arguments["new_str"] != nil) {
+                    return (200, ["jsonrpc": "2.0", "id": body["id"]!, "error": ["code": -32602, "message": "insert_content requires content"]])
+                }
                 let next = Self.tools.isEmpty ? (500, [:]) : Self.tools.removeFirst()
-                return (next.0, next.0 == 200 ? ["jsonrpc": "2.0", "id": body["id"]!, "result": ["structuredContent": next.1]] : next.1)
+                if next.0 != 200 { return next }
+                let toolResult: [String: Any]
+                if Self.rawToolResults { toolResult = next.1 }
+                else { toolResult = ["structuredContent": next.1] }
+                return (next.0, ["jsonrpc": "2.0", "id": body["id"]!, "result": toolResult])
             default: return (404, [:])
             }
         }
@@ -55,7 +66,7 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
-    static func reset() { lock.withLock { requests = []; invalidRefresh = false; workspace = "workspace-one"; tools = [] } }
+    static func reset() { lock.withLock { requests = []; invalidRefresh = false; workspace = "workspace-one"; tools = []; rawToolResults = false } }
 }
 
 @MainActor
@@ -221,6 +232,51 @@ struct NotionOAuthTests {
         #expect(throws: (any Error).self) { try NotionMCPTransport.result(data: Data(sse.utf8), contentType: "text/event-stream", id: "different") }
     }
 
+    @Test func invalidInsertArgumentsAreRejectedByTheProtocolFixture() async throws {
+        OAuthFixtureProtocol.reset()
+        let storage = MemoryNotionConnectionStore(); let grant = try grant(); storage.value = .oauth(grant)
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), browser: OAuthFixtureBrowser(), defaults: defaults())
+        let transport = NotionMCPTransport(connection: connection, grantID: grant.id, session: session())
+        do {
+            _ = try await transport.call("notion-update-page", arguments: ["page_id": "01234567-89ab-cdef-0123-456789abcdef",
+                "command": "insert_content", "new_str": "\n---\n", "position": ["type": "end"]], writes: true)
+            Issue.record("Invalid insert_content request was accepted")
+        } catch { if case NotionExportError.requestRejected = error {} else { Issue.record("Unexpected error: \(error)") } }
+    }
+
+    @Test func rpcValidationRejectionAndAnUnknownServerFailureAreDistinct() throws {
+        for code in [-32601, -32602, -32000] {
+            let data = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": "request", "error": ["code": code, "message": "failure"]])
+            do {
+                _ = try NotionMCPTransport.result(data: data, contentType: "application/json", id: "request")
+                Issue.record("RPC error was accepted")
+            } catch {
+                if code == -32000 { if case NotionExportError.unknownResult = error {} else { Issue.record("Unexpected error: \(error)") } }
+                else { if case NotionExportError.requestRejected = error {} else { Issue.record("Unexpected error: \(error)") } }
+            }
+        }
+    }
+
+    @Test(arguments: ["validation_error", "internal_error"], [false, true])
+    func toolValidationErrorsDoNotHideAnUncertainWrite(_ code: String, structured: Bool) async throws {
+        OAuthFixtureProtocol.reset(); OAuthFixtureProtocol.rawToolResults = true
+        let error = try JSONSerialization.data(withJSONObject: ["object": "error", "code": code, "message": "error"])
+        let result: [String: Any] = structured
+            ? ["isError": true, "structuredContent": ["error": ["code": code]]]
+            : ["isError": true, "content": [["type": "text", "text": String(decoding: error, as: UTF8.self)]]]
+        OAuthFixtureProtocol.tools = [(200, result)]
+        let storage = MemoryNotionConnectionStore(); let grant = try grant(); storage.value = .oauth(grant)
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), browser: OAuthFixtureBrowser(), defaults: defaults())
+        let transport = NotionMCPTransport(connection: connection, grantID: grant.id, session: session())
+        do {
+            _ = try await transport.call("notion-create-pages", arguments: [:], writes: true)
+            Issue.record("Tool error was accepted")
+        } catch {
+            if code == "validation_error" { if case NotionExportError.requestRejected = error {} else { Issue.record("Unexpected error: \(error)") } }
+            else { if case NotionExportError.unknownResult = error {} else { Issue.record("Unexpected error: \(error)") } }
+        }
+    }
+
     private func page(_ id: String, parent: String? = nil, content: String = "기존 원문") -> [String: Any] {
         let ancestors = parent.map { "<ancestor-path><parent-page url=\"\(NotionPageLink.url(for: $0))\" title=\"부모\"/></ancestor-path>" } ?? "<ancestor-path></ancestor-path>"
         return ["text": "<page url=\"\(NotionPageLink.url(for: id))\">\(ancestors)<properties>{\"title\":\"검증 페이지\"}</properties><content>\n\(content)\n</content></page>"]
@@ -229,7 +285,7 @@ struct NotionOAuthTests {
     @Test func oauthExportAppendsADividerCreatesOneChildAndVerifiesItsParent() async throws {
         OAuthFixtureProtocol.reset()
         let parent = "01234567-89ab-cdef-0123-456789abcdef", child = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        OAuthFixtureProtocol.tools = [(200, page(parent)), (200, page(parent)), (200, ["page_id": parent]),
+        OAuthFixtureProtocol.tools = [(200, page(parent)), (200, page(parent)), (200, ["page_id": parent.replacingOccurrences(of: "-", with: "")]),
             (200, ["pages": [["id": child]]]), (200, page(child, parent: parent))]
         let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
         let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), browser: OAuthFixtureBrowser(), defaults: defaults())
@@ -246,6 +302,8 @@ struct NotionOAuthTests {
         #expect(tools.compactMap { $0["name"] as? String } == ["notion-fetch", "notion-fetch", "notion-update-page", "notion-create-pages", "notion-fetch"])
         let update = tools[2]["arguments"] as? [String: Any]
         #expect(update?["command"] as? String == "insert_content")
+        #expect(update?["content"] as? String == "\n---\n")
+        #expect(update?["new_str"] == nil)
         #expect((update?["position"] as? [String: Any])?["type"] as? String == "end")
         #expect(OAuthFixtureProtocol.requests.filter { $0.url?.path == "/mcp" }.dropFirst().allSatisfy { $0.value(forHTTPHeaderField: "Mcp-Session-Id") == "fixture-session" })
     }

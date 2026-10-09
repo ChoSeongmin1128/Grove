@@ -42,6 +42,7 @@ protocol NotionPageClient {
     func parentTitle(id: String) async throws -> String
     func create(parent: String, title: String, markdown: String) async throws -> String
     func ensureDividerAtEnd(parent: String) async throws
+    func hasDividerAtEnd(parent: String) async throws -> Bool
     func verifyChild(id: String, parent: String) async throws
 }
 
@@ -67,15 +68,19 @@ struct NotionClient: NotionPageClient {
         return id
     }
     func ensureDividerAtEnd(parent: String) async throws {
+        if try await hasDividerAtEnd(parent: parent) { return }
+        do {
+            _ = try await request("pages/\(parent)/markdown", method: "PATCH",
+                body: ["type": "insert_content", "insert_content": ["content": "\n---\n", "position": ["type": "end"]]])
+        } catch NotionExportError.http(let status) { throw NotionExportError.http(status) }
+        catch { throw NotionExportError.dividerFailed }
+    }
+    func hasDividerAtEnd(parent: String) async throws -> Bool {
         let page = try await request("pages/\(parent)/markdown")
         guard page["truncated"] as? Bool != true, let markdown = page["markdown"] as? String else {
             throw NotionExportError.invalidParent
         }
-        if markdown.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last == "---" { return }
-        do {
-            _ = try await request("pages/\(parent)/markdown", method: "PATCH",
-                body: ["type": "insert_content", "insert_content": ["content": "\n---\n", "position": ["type": "end"]]])
-        } catch { throw NotionExportError.dividerFailed }
+        return markdown.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last == "---"
     }
     func verifyChild(id: String, parent: String) async throws {
         let page = try await request("pages/\(id)")
@@ -105,11 +110,13 @@ struct NotionClient: NotionPageClient {
 }
 
 struct NotionExportReceipt: Codable {
+    enum Phase: String, Codable { case dividerPending, creationPending }
     let meetingID: UUID
     let parentID: String
     let contentHash: String
     var pageID: String?
     var verified = false
+    var phase: Phase? = nil
 }
 
 @MainActor
@@ -132,19 +139,34 @@ final class NotionExporter: ObservableObject {
         let markdown = MeetingExportContent.markdown(meeting: meeting, document: document, original: original)
         let hash = SHA256.hash(data: Data(markdown.utf8)).map { String(format: "%02x", $0) }.joined()
         _ = try await client.parentTitle(id: parent)
-        if let previous = try receipt(meetingID: meeting.id) {
+        var receipt: NotionExportReceipt
+        if let previous = try self.receipt(meetingID: meeting.id) {
             guard previous.parentID == parent, previous.contentHash == hash else { throw NotionExportError.changedExport }
-            guard let page = previous.pageID else { throw NotionExportError.unknownResult }
-            try await client.verifyChild(id: page, parent: parent)
-            return NotionPageLink.url(for: page)
+            if let page = previous.pageID {
+                try await client.verifyChild(id: page, parent: parent)
+                return NotionPageLink.url(for: page)
+            }
+            guard previous.phase == .dividerPending else { throw NotionExportError.unknownResult }
+            guard try await client.hasDividerAtEnd(parent: parent) else { throw NotionExportError.dividerPending }
+            receipt = previous
+        } else {
+            receipt = NotionExportReceipt(meetingID: meeting.id, parentID: parent, contentHash: hash, phase: .dividerPending)
+            try persist(receipt)
+            do { try await client.ensureDividerAtEnd(parent: parent) }
+            catch {
+                if Self.isDefinitiveRejection(error) {
+                    try? FileManager.default.removeItem(at: directory.appendingPathComponent(meeting.id.uuidString + ".json"))
+                    throw error
+                }
+                throw NotionExportError.dividerPending
+            }
         }
-        try await client.ensureDividerAtEnd(parent: parent)
-        var receipt = NotionExportReceipt(meetingID: meeting.id, parentID: parent, contentHash: hash)
+        receipt.phase = .creationPending
         try persist(receipt)
         let id: String
         do { id = try await client.create(parent: parent, title: MeetingExportContent.title(meeting), markdown: markdown) }
         catch {
-            if case NotionExportError.http = error {
+            if Self.isDefinitiveRejection(error) {
                 try? FileManager.default.removeItem(at: directory.appendingPathComponent(meeting.id.uuidString + ".json"))
             }
             throw error
@@ -157,7 +179,8 @@ final class NotionExporter: ObservableObject {
         return NotionPageLink.url(for: id)
     }
     func connectCreatedPage(meetingID: UUID, link: String, client: any NotionPageClient) async throws -> URL {
-        guard !isSaving, var receipt = try receipt(meetingID: meetingID), receipt.pageID == nil else { throw NotionExportError.invalidParent }
+        guard !isSaving, var receipt = try receipt(meetingID: meetingID), receipt.pageID == nil,
+              receipt.phase != .dividerPending else { throw NotionExportError.invalidParent }
         isSaving = true
         defer { isSaving = false }
         let page = try NotionPageLink.id(from: link)
@@ -171,10 +194,15 @@ final class NotionExporter: ObservableObject {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(receipt).write(to: directory.appendingPathComponent(receipt.meetingID.uuidString + ".json"), options: .atomic)
     }
+    private static func isDefinitiveRejection(_ error: any Error) -> Bool {
+        if case NotionExportError.requestRejected = error { return true }
+        if case NotionExportError.http(let status) = error { return (400..<500).contains(status) }
+        return false
+    }
 }
 
 enum NotionExportError: Error, LocalizedError {
-    case invalidLink, pageLinkRequired, ambiguousLink, unsupportedParent, invalidParent, missingToken, keychain, unknownResult, changedExport, busy, dividerFailed, http(Int)
+    case invalidLink, pageLinkRequired, ambiguousLink, unsupportedParent, invalidParent, missingToken, keychain, unknownResult, changedExport, busy, dividerFailed, dividerPending, requestRejected, http(Int)
     var errorDescription: String? {
         switch self {
         case .invalidLink: "Notion 페이지의 공유 링크를 입력해 주세요."
@@ -188,6 +216,8 @@ enum NotionExportError: Error, LocalizedError {
         case .changedExport: "이 녹음의 회의록은 이미 추가되었습니다. 추가된 회의록을 열거나 새 내용을 복사해 붙여넣어 주세요."
         case .busy: "다른 회의록을 저장하고 있습니다."
         case .dividerFailed: "구분선 추가 결과를 확인하지 못했습니다. 다시 적용하면 페이지 하단을 확인한 뒤 이어서 처리합니다."
+        case .requestRejected: "Notion이 요청 형식을 거부했습니다. Grove 업데이트 후 다시 시도해 주세요."
+        case .dividerPending: "구분선 추가 결과를 아직 확인하지 못했습니다. '결과 확인'으로 기존 요청의 결과를 확인해 주세요."
         case .http(let status): switch status {
             case 401: "Notion에 다시 연결해 주세요."
             case 403, 404: "이 페이지에 접근할 수 없습니다. Notion 페이지의 연결 설정과 쓰기 권한을 확인해 주세요."

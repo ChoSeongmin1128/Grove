@@ -60,6 +60,55 @@ struct NotionExportTests {
         #expect(NotionProtocol.methods.filter { $0 == "POST" }.count == 1)
         #expect(try exporter.receipt(meetingID: meeting.id)?.verified == true)
     }
+    @Test func aDefinitivelyRejectedCreationDoesNotLeaveAnUncertainReceipt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory)
+        let (meeting, document) = try fixture()
+        let client = RejectedCreationClient(child: child)
+        do {
+            _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+            Issue.record("Rejected creation was accepted")
+        } catch { if case NotionExportError.requestRejected = error {} else { Issue.record("Unexpected error: \(error)") } }
+        #expect(try exporter.receipt(meetingID: meeting.id) == nil)
+        #expect(try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client) == NotionPageLink.url(for: child))
+        #expect(client.attempts == 2)
+    }
+    @Test func uncertainDividerSurvivesRestartAndRetryNeverAppendsAgain() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory)
+        let (meeting, document) = try fixture()
+        let client = PendingDividerClient(child: child)
+        do {
+            _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+            Issue.record("Uncertain divider was accepted")
+        } catch { if case NotionExportError.dividerPending = error {} else { Issue.record("Unexpected error: \(error)") } }
+        #expect(try exporter.receipt(meetingID: meeting.id)?.phase == .dividerPending)
+        let reopened = NotionExporter(directory: directory)
+        do {
+            _ = try await reopened.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+            Issue.record("Pending divider was resubmitted")
+        } catch { if case NotionExportError.dividerPending = error {} else { Issue.record("Unexpected error: \(error)") } }
+        #expect(client.appendCount == 1 && client.createCount == 0)
+        client.dividerExists = true
+        #expect(try await reopened.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client) == NotionPageLink.url(for: child))
+        #expect(client.appendCount == 1 && client.createCount == 1)
+        #expect(try reopened.receipt(meetingID: meeting.id)?.verified == true)
+    }
+
+    @Test func anUnwritableReceiptPreventsTheFirstRemoteMutation() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let blocked = base.appendingPathComponent("blocked")
+        try Data().write(to: blocked)
+        let exporter = NotionExporter(directory: blocked)
+        let (meeting, document) = try fixture()
+        let client = PendingDividerClient(child: child)
+        await #expect(throws: (any Error).self) { try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client) }
+        #expect(client.appendCount == 0 && client.createCount == 0)
+    }
     @Test func uncertainCreationSurvivesRestartAndDoesNotCreateAgain() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -109,6 +158,39 @@ struct NotionExportTests {
         #expect(NotionProtocol.methods == ["GET"])
         #expect(try exporter.receipt(meetingID: meeting.id) == nil)
     }
+}
+
+@MainActor
+private final class RejectedCreationClient: NotionPageClient {
+    let child: String
+    var attempts = 0
+    init(child: String) { self.child = child }
+    func parentTitle(id: String) async throws -> String { "부모 페이지" }
+    func ensureDividerAtEnd(parent: String) async throws {}
+    func hasDividerAtEnd(parent: String) async throws -> Bool { true }
+    func verifyChild(id: String, parent: String) async throws {}
+    func create(parent: String, title: String, markdown: String) async throws -> String {
+        attempts += 1
+        if attempts == 1 { throw NotionExportError.requestRejected }
+        return child
+    }
+}
+
+@MainActor
+private final class PendingDividerClient: NotionPageClient {
+    let child: String
+    var appendCount = 0
+    var createCount = 0
+    var dividerExists = false
+    init(child: String) { self.child = child }
+    func parentTitle(id: String) async throws -> String { "부모 페이지" }
+    func hasDividerAtEnd(parent: String) async throws -> Bool { dividerExists }
+    func ensureDividerAtEnd(parent: String) async throws {
+        appendCount += 1
+        throw NotionExportError.dividerFailed
+    }
+    func verifyChild(id: String, parent: String) async throws {}
+    func create(parent: String, title: String, markdown: String) async throws -> String { createCount += 1; return child }
 }
 
 @MainActor

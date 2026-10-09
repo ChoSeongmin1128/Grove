@@ -17,7 +17,17 @@ final class NotionMCPTransport {
     func call(_ name: String, arguments: [String: Any], writes: Bool = false) async throws -> [String: Any] {
         try await initialize()
         let result = try await rpc("tools/call", params: ["name": name, "arguments": arguments], writes: writes)
-        guard result["isError"] as? Bool != true else { throw NotionConnectionError.unavailable }
+        if result["isError"] as? Bool == true {
+            let envelope = result["structuredContent"] as? [String: Any]
+                ?? (result["content"] as? [[String: Any]])?.compactMap { block -> [String: Any]? in
+                    guard let text = block["text"] as? String, let data = text.data(using: .utf8) else { return nil }
+                    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                }.first
+            let error = envelope?["error"] as? [String: Any] ?? envelope
+            if error?["code"] as? String == "validation_error" { throw NotionExportError.requestRejected }
+            if writes { throw NotionExportError.unknownResult }
+            throw NotionConnectionError.unavailable
+        }
         if let structured = result["structuredContent"] as? [String: Any] { return structured }
         let texts = (result["content"] as? [[String: Any]] ?? []).compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
         guard texts.count == 1 else { throw NotionExportError.unknownResult }
@@ -90,7 +100,12 @@ final class NotionMCPTransport {
             messages = [value]
         }
         let replies = messages.filter { $0["id"] as? String == id && $0["jsonrpc"] as? String == "2.0" }
-        guard replies.count == 1, replies[0]["error"] == nil,
+        guard replies.count == 1 else { throw NotionExportError.unknownResult }
+        if let error = replies[0]["error"] as? [String: Any],
+           let code = error["code"] as? Int, [-32601, -32602].contains(code) {
+            throw NotionExportError.requestRejected
+        }
+        guard replies[0]["error"] == nil,
               let result = replies[0]["result"] as? [String: Any] else { throw NotionExportError.unknownResult }
         return result
     }
@@ -156,13 +171,18 @@ final class NotionMCPPageClient: NotionPageClient {
     func parentTitle(id: String) async throws -> String { try await fetch(id).title }
 
     func ensureDividerAtEnd(parent: String) async throws {
-        let page = try await fetch(parent)
-        if page.content.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last == "---" { return }
+        if try await hasDividerAtEnd(parent: parent) { return }
         do {
             let result = try await transport.call("notion-update-page", arguments: ["page_id": parent,
-                "command": "insert_content", "new_str": "\n---\n", "position": ["type": "end"], "allow_async": false], writes: true)
+                "command": "insert_content", "content": "\n---\n", "position": ["type": "end"], "allow_async": false], writes: true)
             try await completeUpdate(result, expectedID: parent)
-        } catch { throw NotionExportError.dividerFailed }
+        } catch NotionExportError.requestRejected { throw NotionExportError.requestRejected }
+        catch NotionExportError.http(let status) { throw NotionExportError.http(status) }
+        catch { throw NotionExportError.dividerFailed }
+    }
+    func hasDividerAtEnd(parent: String) async throws -> Bool {
+        let page = try await fetch(parent)
+        return page.content.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last == "---"
     }
 
     func create(parent: String, title: String, markdown: String) async throws -> String {
@@ -190,7 +210,7 @@ final class NotionMCPPageClient: NotionPageClient {
                 if progress["status"] as? String == "failed" { throw NotionExportError.dividerFailed }
             }
         }
-        guard result["page_id"] as? String == expectedID,
+        guard let pageID = result["page_id"] as? String, (try? NotionPageLink.id(from: pageID)) == expectedID,
               Self.hasNoWarnings(result) else { throw NotionExportError.unknownResult }
     }
     private static func hasNoWarnings(_ value: [String: Any]) -> Bool {

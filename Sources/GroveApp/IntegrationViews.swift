@@ -208,6 +208,7 @@ struct NotionExportSheet: View {
     @State private var savedURL: URL?
     @State private var recoveryLink = ""
     @State private var uncertain = false
+    @State private var dividerPending = false
     @State private var checkingParent = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openSettings) private var openSettings
@@ -282,14 +283,16 @@ struct NotionExportSheet: View {
                 Spacer()
                 if let savedURL { Link("추가된 회의록 열기", destination: savedURL) }
                 if exporter.isSaving { ProgressView().controlSize(.small) }
-                Button("적용") {
+                Button(dividerPending ? "결과 확인" : "적용") {
                     Task {
                         do {
                             savedURL = try await exporter.save(meeting: meeting, document: document, parentLink: parentLink, original: original, client: client())
                             connection.parentLink = parentLink
                             message = "페이지 하단에 회의록을 추가했습니다."
+                            dividerPending = false
                         } catch {
                             message = error.localizedDescription
+                            dividerPending = (try? exporter.receipt(meetingID: meeting.id))?.phase == .dividerPending
                             if case NotionExportError.unknownResult = error { uncertain = true }
                         }
                     }
@@ -300,7 +303,10 @@ struct NotionExportSheet: View {
             .interactiveDismissDisabled(exporter.isSaving)
             .onAppear {
                 parentLink = connection.parentLink
-                if let receipt = try? exporter.receipt(meetingID: meeting.id), let id = receipt.pageID { savedURL = NotionPageLink.url(for: id) }
+                if let receipt = try? exporter.receipt(meetingID: meeting.id) {
+                    dividerPending = receipt.phase == .dividerPending && receipt.pageID == nil
+                    if let id = receipt.pageID { savedURL = NotionPageLink.url(for: id) }
+                }
             }
             .onChange(of: connection.destinationKey) { _, _ in
                 if !exporter.isSaving { parentLink = connection.parentLink }
