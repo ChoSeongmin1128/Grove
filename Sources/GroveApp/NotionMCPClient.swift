@@ -120,10 +120,19 @@ struct NotionFetchedPage {
               let properties = Self.capture(#"(?s)<properties>\s*(.*?)\s*</properties>"#, in: page),
               let data = properties.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let title = response["title"] as? String ?? values["title"] as? String,
-              let content = Self.capture(#"(?s)<content>\n?(.*?)\n?</content>"#, in: page) else { throw NotionExportError.invalidParent }
+              page.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("</page>"),
+              let content = Self.pageContent(in: page) else { throw NotionExportError.invalidParent }
         self.id = id; self.title = title; self.content = content
         let ancestors = Self.capture(#"(?s)<ancestor-path>(.*?)</ancestor-path>"#, in: page) ?? ""
         parentID = Self.capture(#"<parent-page\s[^>]*url="([^"]+)"[^>]*>"#, in: ancestors).flatMap { try? NotionPageLink.id(from: $0) }
+    }
+
+    private static func pageContent(in page: String) -> String? {
+        let content = capture(#"(?s)<content>\n?(.*?)\n?</content>"#, in: page)
+        let blank = capture(#"(?s)<blank-page>(.*?)</blank-page>"#, in: page)
+        if let content { return blank == nil ? content : nil }
+        guard blank != nil, !page.contains("<content>") else { return nil }
+        return ""
     }
 
     private static func capture(_ pattern: String, in text: String) -> String? {

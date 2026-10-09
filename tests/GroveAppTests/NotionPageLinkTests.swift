@@ -78,6 +78,26 @@ struct NotionPageLinkTests {
         #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: response, expectedID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") }
     }
 
+    @Test func explicitBlankPagesHaveAnEmptyBody() throws {
+        let text = "Here is the result of fetch:\n<page url=\"https://app.notion.com/p/0123456789abcdef0123456789abcdef\"><properties>{\"title\":\"빈 페이지\"}</properties><blank-page>This page is blank and has no content.</blank-page></page>"
+        let page = try NotionFetchedPage(response: ["text": text], expectedID: id)
+        #expect(page.id == id && page.title == "빈 페이지" && page.content.isEmpty)
+        #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: ["text": text, "truncated": true], expectedID: id) }
+        #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: ["text": text, "unknown_block_count": 1], expectedID: id) }
+        #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: ["text": text], expectedID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") }
+        #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: ["text": String(text.dropLast(7))], expectedID: id) }
+    }
+
+    @Test(arguments: [
+        "", "<blank-page>Unclosed", "<content>Unclosed",
+        "<content>Unclosed<blank-page>Empty</blank-page>",
+        "<content>Body</content><blank-page>Empty</blank-page>"
+    ])
+    func missingOrConflictingBodiesAreNotTreatedAsBlank(_ body: String) {
+        let text = "<page url=\"https://app.notion.com/p/0123456789abcdef0123456789abcdef\"><properties>{\"title\":\"제목\"}</properties>\(body)</page>"
+        #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: ["text": text], expectedID: id) }
+    }
+
     @Test func serverEntityKindsAreValidatedSeparatelyFromTheURL() {
         for kind in ["database", "data_source", "view", "folder"] {
             #expect(throws: NotionExportError.self) { try NotionFetchedPage(response: ["metadata": ["type": kind], "text": ""], expectedID: id) }
