@@ -14,6 +14,17 @@ the private installation and evaluation receipts.
 - Pending microphone permission and file-copy work have explicit ownership. Cancelling
   an earlier setup cannot start or clear a newer attempt. Failed index writes restore the
   previous selection and keep source audio.
+- Recording-device completion and encoding-error callbacks are bridged from background
+  queues to MainActor and bound to the current capture ID. Unexpected stops finalize the
+  recorded file, clear active capture and persist an interrupted meeting without starting
+  transcription. Enrollment failures discard their temporary capture and allow retry.
+- Playback observes the original file's finalized state and source paths. A recording
+  remaining open through completion gets a prepared player without navigating away;
+  transcript edits do not reset playback position or rate.
+- Per-meeting recording, import and retranscription validate the selected plan before
+  microphone permission, file copying or changing prior result metadata. Setup shows
+  required preparation and links to Settings; default options do not stand in for the draft.
+- Calendar permission responses are owned by the latest enable/disable request.
 - Enrollment inspection uses at most the first120 seconds, allowing timer-stop latency
   without rejecting an otherwise valid recording. Rich-text export preserves inferred
   speaker labels, and an asynchronous Notion task is not a confirmed created page.
@@ -27,7 +38,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.23. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.24. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 

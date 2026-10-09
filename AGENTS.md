@@ -36,6 +36,13 @@ inference, proposals, and unverified items.
 - User glossaries are optional machine-local profiles and never public defaults.
 - Preserve original audio and raw transcripts. Store corrections, speaker assignments,
   and summaries as separate revisions.
+- Unexpected recording completion and encoding failures terminate only their own capture,
+  preserve meeting audio and publish an interrupted state. Pausing is not completion.
+- Prepare playback after the recording file is finalized, including the same detail view
+  remaining open through transcription. Do not cache an actively written recording.
+- Validate the selected per-meeting inference plan before microphone permission, import
+  copying or replacing processing metadata. Preserve prior results on preparation failure.
+- Calendar permission replies apply only to the latest enable/disable request.
 - Keep source channel, anonymous speaker cluster, and confirmed human profile separate.
 - Do not use ScreenCaptureKit or request screen-recording permission for an audio-only
   capture route.

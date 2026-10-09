@@ -74,6 +74,8 @@ struct ImportRecordingOptionsSheet: View {
     @State private var options: MeetingSpeakerOptions
     @State private var folderID: UUID?
     @Environment(\.dismiss) private var dismiss
+    private var plan: MeetingInferencePlan? { try? options.plan(isDual: false) }
+    private var preparationMessage: String? { plan.flatMap { store.preparationMessage(for: $0) } }
 
     init(store: GroveStore, source: URL) {
         self.store = store
@@ -88,6 +90,7 @@ struct ImportRecordingOptionsSheet: View {
             Text(source.lastPathComponent).lineLimit(2).foregroundStyle(.secondary)
             RecordingFolderPicker(store: store, folderID: $folderID)
             MeetingSpeakerOptionsView(options: $options)
+            if let preparationMessage { MeetingPreparationNotice(message: preparationMessage) { dismiss() } }
             HStack {
                 Spacer()
                 Button("취소") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -95,8 +98,24 @@ struct ImportRecordingOptionsSheet: View {
                     guard let plan = try? options.plan(isDual: false) else { return }
                     store.startAfterDismissingSheet(.importing(source: source, plan: plan, folderID: folderID))
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(store.isBusy || (try? options.plan(isDual: false)) == nil)
+                    .disabled(store.isBusy || plan == nil || preparationMessage != nil)
             }
         }.padding(24).frame(width: 460)
+    }
+}
+
+struct MeetingPreparationNotice: View {
+    let message: String
+    let dismissSetup: () -> Void
+    @Environment(\.openSettings) private var openSettings
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(message).font(.callout).foregroundStyle(.secondary)
+            Button("준비 설정") {
+                dismissSetup()
+                UserDefaults.standard.set("models", forKey: "settingsTab")
+                openSettings()
+            }
+        }
     }
 }

@@ -11,6 +11,14 @@ struct AppleTranscriptionOutput: Codable, Sendable {
 }
 
 enum AppleTranscriptionService {
+    static func validatePreparation() async throws {
+        guard SpeechTranscriber.isAvailable,
+              let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "ko-KR")) else {
+            throw TranscriptionError.unsupportedKorean
+        }
+        let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
+        guard await AssetInventory.status(forModules: [transcriber]) == .installed else { throw TranscriptionError.assetsMissing }
+    }
     static func transcribe(file: URL, contextualStrings: [String]) async throws -> AppleTranscriptionOutput {
         guard SpeechTranscriber.isAvailable,
               let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "ko-KR")) else {

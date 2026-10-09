@@ -24,7 +24,7 @@ struct SettingsView: View {
             .tabItem { Label("전사", systemImage: "waveform") }
             .tag("processing")
 
-            ModelSettingsView(models: store.modelManager, isBusy: store.isBusy)
+            ModelSettingsView(models: store.modelManager, apple: store.applePreparation, isBusy: store.isBusy)
                 .tabItem { Label("모델", systemImage: "externaldrive") }
                 .tag("models")
             CalendarSettingsView(schedule: store.calendarSchedule)

@@ -1,6 +1,21 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+struct MeetingPlaybackSource: Equatable {
+    let meetingID: UUID
+    let audioPath: String?
+    let microphoneAudioPath: String?
+    let systemAudioPath: String?
+    let isFinalized: Bool
+    init(meeting: MeetingRecord) {
+        meetingID = meeting.id
+        audioPath = meeting.audioPath
+        microphoneAudioPath = meeting.microphoneAudioPath
+        systemAudioPath = meeting.systemAudioPath
+        isFinalized = meeting.status != .recording
+    }
+}
+
 @MainActor
 final class AudioPlayerController: ObservableObject {
     @Published private(set) var playingSegmentID: UUID?
@@ -25,6 +40,11 @@ final class AudioPlayerController: ObservableObject {
     }
 
     func prepare(meeting: MeetingRecord, source: String? = nil) {
+        guard MeetingPlaybackSource(meeting: meeting).isFinalized else {
+            stop()
+            errorMessage = nil
+            return
+        }
         let path: String?
         switch source {
         case "microphone": path = meeting.microphoneAudioPath ?? meeting.audioPath
@@ -32,6 +52,7 @@ final class AudioPlayerController: ObservableObject {
         default: path = meeting.audioPath ?? meeting.systemAudioPath ?? meeting.microphoneAudioPath
         }
         guard let path else {
+            stop()
             errorMessage = "녹음 파일이 없습니다."
             return
         }
@@ -41,7 +62,10 @@ final class AudioPlayerController: ObservableObject {
             let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
             player.enableRate = true
             player.rate = rate
-            player.prepareToPlay()
+            guard player.prepareToPlay() else {
+                errorMessage = "녹음 파일을 재생할 준비를 하지 못했습니다."
+                return
+            }
             self.player = player
             loadedPath = path
             sourceChannel = path == meeting.microphoneAudioPath ? "microphone" : path == meeting.systemAudioPath ? "system" : nil
@@ -99,6 +123,7 @@ final class AudioPlayerController: ObservableObject {
         isPlaying = false
         position = 0
         duration = 0
+        sourceChannel = nil
     }
 
     private func play(meeting: MeetingRecord, id: UUID, start: TimeInterval, end: TimeInterval, source: String?) {

@@ -29,6 +29,10 @@ final class VoiceEnrollmentSession: ObservableObject {
         self.requestPermission = requestPermission ?? { await recorder.requestPermission() }
         Self.clearInterruptedCaptures(in: directory)
         subscription = recorder.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        recorder.onUnexpectedStop = { [weak self] _ in
+            self?.discard()
+            self?.error = "녹음이 중단됐습니다. 마이크 연결 상태를 확인하고 다시 녹음해 주세요."
+        }
     }
 
     func start() async {

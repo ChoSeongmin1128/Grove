@@ -80,8 +80,10 @@ struct TranscriptView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
+        .task(id: MeetingPlaybackSource(meeting: meeting)) {
             player.prepare(meeting: meeting)
+        }
+        .task {
             await store.refreshVoiceEnrollmentStatus()
         }
         .onDisappear { player.stop() }

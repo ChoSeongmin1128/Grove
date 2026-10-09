@@ -46,6 +46,7 @@ final class GroveStore: ObservableObject {
     private let libraryStorage: MeetingLibraryStorage
     private let inferenceService: any MeetingInferenceRunning
     private var processingTask: Task<Void, Never>?
+    private var preparationTask: (id: UUID, task: Task<Void, Error>)?
     @Published private var pendingWorkspaceStart: WorkspaceStartAction?
     private let voiceVault: SpeakerVoiceVault
     private let voiceExtractor: any SpeakerVoiceExtracting
@@ -103,6 +104,8 @@ final class GroveStore: ObservableObject {
             }
         }
         loadTranscriptDocuments()
+        self.recorder.onUnexpectedStop = { [weak self] duration in self?.recordingStoppedUnexpectedly(duration: duration) }
+        self.recorder.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         calendarSchedule.canRecord = { [weak self] in self?.canPresentNewMeeting == true }
         calendarSchedule.onRecord = { [weak self] event in
             self?.present(.newMeeting(event))
@@ -128,8 +131,36 @@ final class GroveStore: ObservableObject {
     var isStartingCapture: Bool { captureStartID != nil }
     var isExportingOriginal: Bool { exportingOriginalMeetingID != nil }
     var isBusy: Bool { notionConnection.isConnecting || pendingWorkspaceStart != nil || isRecording || isProcessing || isStartingCapture || isImportingRecording || isSavingSpeakerProfile || isRecognizingVoices || isPreparingToQuit || modelManager.isInstalling || applePreparation.isPreparing || voiceEnrollmentSession.isActive }
-    var needsModelSetup: Bool { defaultSpeakerOptions.transcriptionEngine == .apple ? !applePreparation.isReady : !modelManager.isReadyForUse }
+    var needsModelSetup: Bool { (try? defaultSpeakerOptions.plan(isDual: false)).map { preparationMessage(for: $0) != nil } ?? true }
     var canPresentNewMeeting: Bool { !isBusy && !needsModelSetup && workspaceSheet == nil && !isPresentingImporter }
+
+    func preparationMessage(for plan: MeetingInferencePlan, sourceIDs: [String] = ["recording"]) -> String? {
+        do {
+            let configurations = try plan.configurations(for: sourceIDs)
+            for source in sourceIDs {
+                if let configuration = configurations[source],
+                   let issue = inferenceService.preparationIssue(configuration: configuration, appleReady: applePreparation.isReady) {
+                    return issue
+                }
+            }
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
+    private func validatePreparation(_ configurations: [String: InferenceConfiguration]) async throws {
+        let id = UUID()
+        let service = inferenceService
+        let task = Task {
+            for source in configurations.keys.sorted() {
+                try Task.checkCancellation()
+                if let configuration = configurations[source] { try await service.validatePreparation(configuration: configuration) }
+                try Task.checkCancellation()
+            }
+        }
+        preparationTask = (id, task)
+        defer { if preparationTask?.id == id { preparationTask = nil } }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
 
     func present(_ sheet: WorkspaceSheet) {
         guard workspaceSheet == nil, pendingWorkspaceStart == nil, !isPreparingToQuit else { return }
@@ -146,7 +177,10 @@ final class GroveStore: ObservableObject {
         isPresentingImporter = true
     }
 
-    func cancelRecordingStart() { captureStartID = nil }
+    func cancelRecordingStart() {
+        if captureStartID != nil { preparationTask?.task.cancel() }
+        captureStartID = nil
+    }
 
     func startAfterDismissingSheet(_ action: WorkspaceStartAction) {
         guard workspaceSheet != nil, pendingWorkspaceStart == nil, !isBusy else { return }
@@ -812,6 +846,7 @@ final class GroveStore: ObservableObject {
     }
 
     func cancelProcessing() {
+        if isProcessing { preparationTask?.task.cancel() }
         processingTask?.cancel()
         if processingTask != nil { processingStage = "처리를 중단하고 있습니다" }
     }
@@ -845,9 +880,10 @@ final class GroveStore: ObservableObject {
         }
         cancelProcessing()
         cancelVoiceWork()
+        _ = try? await preparationTask?.task.value
         await processingTask?.value
         _ = await voiceTask?.value
-        guard !isExportingOriginal, !isRecording, !isStartingCapture, !isSavingSpeakerProfile, !isRecognizingVoices else {
+        guard !isExportingOriginal, !isRecording, !isStartingCapture, !isProcessing, !isSavingSpeakerProfile, !isRecognizingVoices else {
             alertMessage = "진행 중인 저장이나 녹음을 마친 뒤 앱을 닫아 주세요."
             return false
         }
@@ -992,6 +1028,12 @@ final class GroveStore: ObservableObject {
         let startID = UUID()
         captureStartID = startID
         defer { if captureStartID == startID { captureStartID = nil } }
+        do { try await validatePreparation(selectedPlan.configurations(for: ["recording"])) }
+        catch {
+            if captureStartID == startID, !Task.isCancelled { alertMessage = error.localizedDescription }
+            return
+        }
+        guard captureStartID == startID, !Task.isCancelled else { return }
         let allowed = await recorder.requestPermission()
         guard captureStartID == startID, !Task.isCancelled else { return }
         guard allowed else {
@@ -1061,6 +1103,21 @@ final class GroveStore: ObservableObject {
         await transcribeMeeting(id: id)
     }
 
+    private func recordingStoppedUnexpectedly(duration: TimeInterval) {
+        guard let id = activeMeetingID else { return }
+        activeMeetingID = nil
+        processingStage = nil
+        let message = RecordingError.unexpectedlyStopped.localizedDescription
+        if let index = meetings.firstIndex(where: { $0.id == id }) {
+            meetings[index].duration = duration
+            meetings[index].status = .failed
+            meetings[index].errorMessage = message
+            meetings[index].processingOutcome = .init(kind: .interrupted, message: message)
+            if !saveMeetings() { return }
+        }
+        alertMessage = message
+    }
+
     func importRecording(from sourceURL: URL, plan: MeetingInferencePlan? = nil, folderID: UUID? = nil) async {
         guard canModifyMeetingIndex else { return }
         guard folderID == nil || library.folders.contains(where: { $0.id == folderID }) else {
@@ -1075,6 +1132,10 @@ final class GroveStore: ObservableObject {
             selectedPlan = try plan ?? defaultSpeakerOptions.plan(isDual: false)
             _ = try selectedPlan.configurations(for: ["recording"])
         } catch { alertMessage = error.localizedDescription; return }
+        isImportingRecording = true
+        defer { isImportingRecording = false }
+        do { try await validatePreparation(selectedPlan.configurations(for: ["recording"])) }
+        catch { if !Task.isCancelled { alertMessage = error.localizedDescription }; return }
         let access = sourceURL.startAccessingSecurityScopedResource()
         defer {
             if access { sourceURL.stopAccessingSecurityScopedResource() }
@@ -1085,8 +1146,6 @@ final class GroveStore: ObservableObject {
         let target = audioDirectory.appendingPathComponent("\(id.uuidString).\(ext)")
         let previousSelection = selection
         let previousTab = selectedTab
-        isImportingRecording = true
-        defer { isImportingRecording = false }
         do {
             try await Task.detached(priority: .utility) {
                 try FileManager.default.copyItem(at: sourceURL, to: target)
@@ -1158,8 +1217,8 @@ final class GroveStore: ObservableObject {
 
     func transcribeMeeting(id: UUID, plan: MeetingInferencePlan? = nil) async {
         guard canModifyMeetingIndex, !isBusy,
-              let index = meetings.firstIndex(where: { $0.id == id }) else { return }
-        let meeting = meetings[index]
+              let initialIndex = meetings.firstIndex(where: { $0.id == id }) else { return }
+        let meeting = meetings[initialIndex]
         let sources: [(String, URL)]
         if let path = meeting.audioPath {
             sources = [("recording", URL(fileURLWithPath: path))]
@@ -1177,12 +1236,30 @@ final class GroveStore: ObservableObject {
             } else { selectedPlan = try defaultSpeakerOptions.plan(isDual: sources.count > 1) }
             configurations = try selectedPlan.configurations(for: sources.map(\.0))
         } catch { alertMessage = error.localizedDescription; return }
+        processingMeetingID = id
+        do { try await validatePreparation(configurations) }
+        catch {
+            processingMeetingID = nil
+            processingStage = nil
+            if meeting.status == .processing, let current = meetings.firstIndex(where: { $0.id == id }) {
+                let message = error is CancellationError ? "전사를 중단했습니다. 원본 녹음은 보존됩니다." : error.localizedDescription
+                meetings[current].status = .failed
+                meetings[current].errorMessage = message
+                meetings[current].processingOutcome = .init(kind: error is CancellationError ? .cancelled : .failed, message: message)
+                _ = saveMeetings()
+            }
+            if !(error is CancellationError), !Task.isCancelled { alertMessage = error.localizedDescription }
+            return
+        }
+        processingMeetingID = nil
+        guard !Task.isCancelled, let index = meetings.firstIndex(where: { $0.id == id }) else { return }
+        let previousRecord = meetings[index]
         meetings[index].inferenceConfiguration = selectedPlan.configuration
         meetings[index].channelInferenceConfigurations = selectedPlan.channelConfigurations
         meetings[index].status = .processing
         meetings[index].errorMessage = nil
         meetings[index].processingOutcome = nil
-        guard saveMeetings() else { meetings[index] = meeting; return }
+        guard saveMeetings() else { meetings[index] = previousRecord; return }
         processingMeetingID = id
         processingStage = "녹음 파일을 준비하고 있습니다"
         let job = storageURL.deletingLastPathComponent().appendingPathComponent("Jobs/\(id.uuidString)/\(UUID().uuidString)", isDirectory: true)

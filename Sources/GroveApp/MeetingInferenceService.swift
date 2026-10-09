@@ -2,13 +2,45 @@ import Foundation
 import GroveInference
 
 protocol MeetingInferenceRunning: Sendable {
+    @MainActor func preparationIssue(configuration: InferenceConfiguration, appleReady: Bool) -> String?
+    @MainActor func validatePreparation(configuration: InferenceConfiguration) async throws
     func run(source: URL, configuration: InferenceConfiguration, directory: URL,
              progress: @Sendable (String) async -> Void) async throws -> InferenceResult
+}
+
+extension MeetingInferenceRunning {
+    @MainActor func preparationIssue(configuration: InferenceConfiguration, appleReady: Bool) -> String? { nil }
+    @MainActor func validatePreparation(configuration: InferenceConfiguration) async throws { _ = try configuration.resolvedEngine() }
 }
 
 struct BundledMeetingInferenceService: MeetingInferenceRunning {
     let appBundle: URL
     let applicationSupport: URL
+
+    @MainActor func preparationIssue(configuration: InferenceConfiguration, appleReady: Bool) -> String? {
+        if configuration.transcriptionEngine == .apple {
+            return appleReady ? nil : TranscriptionError.assetsMissing.localizedDescription
+        }
+        do {
+            let models = ModelManager(baseDirectory: applicationSupport)
+            guard models.isReadyForUse else {
+                return "설정의 모델 화면에서 정밀 전사 모델을 준비해 주세요."
+            }
+            if try configuration.resolvedEngine() == .ultra8, !models.isUltra8Ready {
+                return "설정의 모델 화면에서 Ultra8 모델을 준비해 주세요."
+            }
+            _ = try backend(configuration: configuration)
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
+    @MainActor func validatePreparation(configuration: InferenceConfiguration) async throws {
+        if configuration.transcriptionEngine == .apple {
+            try await AppleTranscriptionService.validatePreparation()
+        } else if let issue = preparationIssue(configuration: configuration, appleReady: false) {
+            throw InferenceError.invalidOutput(issue)
+        }
+    }
 
     func run(source: URL, configuration: InferenceConfiguration, directory: URL,
              progress: @Sendable (String) async -> Void) async throws -> InferenceResult {
@@ -35,6 +67,7 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
         let ultra = helpers.appendingPathComponent("grove-ultra8")
         let nemotron = helpers.appendingPathComponent("Nemotron/bin/nemo-speech")
         let engine = try configuration.resolvedEngine()
+        try LegacyDiarizationPreparation.validate(engine: engine)
         let diarizer: URL
         switch engine {
         case .none: diarizer = moss

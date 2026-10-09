@@ -20,6 +20,11 @@ actual QA; these features are separate from the planned annotation/review mode.
   error; the app does not search elsewhere and silently substitute another file.
 - A primary audioPath wins. Old dual-channel records expose each source separately;
   this does not reintroduce computer-output capture.
+- Device completion / encoding failure outside an explicit stop ends the active capture,
+  preserves its duration and audio, and saves an interrupted meeting for manual recovery.
+  Paused devices remain active. Late callbacks from an old capture cannot stop a new one.
+- Playback waits for file finalization, then prepares in the existing detail view. Transcript
+  revisions pause playback without reopening the same source or resetting its position/rate.
 
 ## Safety
 

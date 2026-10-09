@@ -70,7 +70,7 @@ struct TranscriptLayoutRenderingTests {
         let views: [(String, AnyView, Double, Double)] = [
             ("first-run", AnyView(FirstRunSetupView(store: store)), 900, 720),
             ("home", AnyView(LibraryHomeView(store: store)), 1000, 720),
-            ("models", AnyView(ModelSettingsView(models: store.modelManager, isBusy: false)), 620, 570),
+            ("models", AnyView(ModelSettingsView(models: store.modelManager, apple: store.applePreparation, isBusy: false)), 620, 700),
             ("calendar", AnyView(CalendarSettingsView(schedule: store.calendarSchedule)), 620, 570),
             ("notion-export", AnyView(NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter, connection: store.notionConnection)), 692, 650),
             ("notion-connect", AnyView(NotionSettingsView(connection: store.notionConnection)), 620, 480),

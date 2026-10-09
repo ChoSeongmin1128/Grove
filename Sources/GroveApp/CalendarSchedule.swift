@@ -31,7 +31,7 @@ final class CalendarSchedule: ObservableObject {
     @Published var leadMinutes: Int { didSet { defaults.set(leadMinutes, forKey: "calendarLeadMinutes") } }
     var onRecord: ((ScheduledMeeting) -> Void)?
     var canRecord: (() -> Bool)?
-    private let eventStore = EKEventStore()
+    private let eventStore: EKEventStore
     private let defaults: UserDefaults
     private var timer: Timer?
     private var observer: NSObjectProtocol?
@@ -39,9 +39,14 @@ final class CalendarSchedule: ObservableObject {
     private var snoozed: [String: Date] = [:]
     private var panel: NSPanel?
     private var shownID: String?
+    private var enableRequestID = UUID()
+    private let requestPermission: @MainActor () async throws -> Bool
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, requestPermission: (@MainActor () async throws -> Bool)? = nil) {
         self.defaults = defaults
+        let eventStore = EKEventStore()
+        self.eventStore = eventStore
+        self.requestPermission = requestPermission ?? { try await eventStore.requestFullAccessToEvents() }
         enabled = defaults.bool(forKey: "calendarEnabled")
         selectedCalendarIDs = Set(defaults.stringArray(forKey: "calendarIDs") ?? [])
         leadMinutes = defaults.object(forKey: "calendarLeadMinutes") == nil ? 5 : defaults.integer(forKey: "calendarLeadMinutes")
@@ -59,13 +64,21 @@ final class CalendarSchedule: ObservableObject {
     }
 
     func setEnabled(_ value: Bool) async {
+        let requestID = UUID()
+        enableRequestID = requestID
         if value {
             do {
-                guard try await eventStore.requestFullAccessToEvents() else {
+                let allowed = try await requestPermission()
+                guard enableRequestID == requestID, !Task.isCancelled else { return }
+                guard allowed else {
                     message = "캘린더 접근이 허용되지 않았습니다. 시스템 설정에서 Grove의 캘린더 접근을 허용해 주세요."
                     return
                 }
-            } catch { message = error.localizedDescription; return }
+            } catch {
+                guard enableRequestID == requestID, !Task.isCancelled else { return }
+                message = error.localizedDescription
+                return
+            }
         }
         enabled = value
         defaults.set(value, forKey: "calendarEnabled")

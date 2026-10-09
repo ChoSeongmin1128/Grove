@@ -10,6 +10,12 @@ struct MeetingDetailView: View {
     @State private var showsNotionExport = false
     private var isDual: Bool { meeting.audioPath == nil && meeting.systemAudioPath != nil && meeting.microphoneAudioPath != nil }
     private var document: TranscriptDocument? { store.transcriptDocuments[meeting.id] }
+    private var retryPlan: MeetingInferencePlan? { try? speakerOptions.plan(isDual: isDual) }
+    private var preparationMessage: String? {
+        let sources = meeting.audioPath != nil ? ["recording"] : [("system", meeting.systemAudioPath), ("microphone", meeting.microphoneAudioPath)]
+            .compactMap { $0.1 == nil ? nil : $0.0 }
+        return retryPlan.flatMap { store.preparationMessage(for: $0, sourceIDs: sources) }
+    }
     private var presentation: MeetingPresentationStatus { .init(meeting: meeting, document: document) }
     private var currentCounts: [MeetingSpeakerCount] {
         guard let result = meeting.completedResult, result.revisionID == document?.revisionID else { return [] }
@@ -44,6 +50,7 @@ struct MeetingDetailView: View {
                 Text("원본 녹음으로 새 전사를 만듭니다. 현재 수정 내용은 이전 전사에 보관됩니다.")
                     .foregroundStyle(.secondary)
                 MeetingSpeakerOptionsView(options: $speakerOptions, isDual: isDual)
+                if let preparationMessage { MeetingPreparationNotice(message: preparationMessage) { showsTranscriptionOptions = false } }
                 HStack {
                     Spacer()
                     Button("취소") { showsTranscriptionOptions = false }.keyboardShortcut(.cancelAction)
@@ -52,7 +59,7 @@ struct MeetingDetailView: View {
                         showsTranscriptionOptions = false
                         Task { await store.transcribeMeeting(id: meeting.id, plan: plan) }
                     }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                        .disabled(store.isBusy || (try? speakerOptions.plan(isDual: isDual)) == nil)
+                        .disabled(store.isBusy || retryPlan == nil || preparationMessage != nil)
                 }
             }.padding(24).frame(width: 440)
         }

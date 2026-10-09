@@ -108,13 +108,24 @@ struct CalendarSettingsView: View {
 
 struct ModelSettingsView: View {
     @ObservedObject var models: ModelManager
+    @ObservedObject var apple: AppleTranscriptionPreparation
     let isBusy: Bool
     var body: some View {
         Form {
+            Section("Mac 기본 전사") {
+                LabeledContent("한국어", value: apple.isReady ? "준비됨" : "준비 필요")
+                if apple.isPreparing {
+                    if let progress = apple.progress { ProgressView(progress) }
+                    Button("준비 중단") { apple.cancel() }
+                } else {
+                    Button("Mac 기본 전사 준비") { apple.prepare() }.disabled(isBusy)
+                }
+                if let message = apple.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            }
             Section("전사 모델") {
                 ForEach(ModelGroup.allCases) { group in
                     LabeledContent(group.label) {
-                        Text((group == .voiceIdentity ? models.isVoiceModelReady : models.readyGroups.contains(group)) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
+                        Text((group == .voiceIdentity ? models.isVoiceModelReady : group == .ultra8 ? models.isUltra8Ready : models.isReadyForUse) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
                     }
                 }
                 Text("다운로드 약 1.9 GB. 설치 후에는 인터넷 없이 전사할 수 있습니다.")
@@ -139,6 +150,7 @@ struct ModelSettingsView: View {
                 Button("모델 폴더 열기") { NSWorkspace.shared.open(models.baseDirectory.appendingPathComponent("Models")) }
             }
         }.formStyle(.grouped)
+        .task { models.refresh(); await apple.refresh() }
     }
 }
 

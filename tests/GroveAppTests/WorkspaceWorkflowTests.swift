@@ -30,7 +30,7 @@ struct WorkspaceWorkflowTests {
         defer { try? FileManager.default.removeItem(at: base) }
         let prompt = WorkflowPermissionPrompt()
         let device = WorkflowRecordingDevice()
-        let store = GroveStore(baseDirectory: base, recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() }))
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() }))
         store.present(.newMeeting())
         store.startAfterDismissingSheet(.recording(title: "대기", plan: try MeetingSpeakerOptions().plan(isDual: false),
             folderID: nil, calendarEvent: nil, attendance: .init()))
@@ -52,7 +52,7 @@ struct WorkspaceWorkflowTests {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
         let device = WorkflowRecordingDevice()
-        let store = GroveStore(baseDirectory: base, recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { true }))
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { true }))
         store.present(.newMeeting())
         store.workspaceSheet = nil
         store.workspaceSheetDidDismiss()
@@ -66,7 +66,7 @@ struct WorkspaceWorkflowTests {
         let prompt = WorkflowPermissionPrompt()
         let device = WorkflowRecordingDevice()
         let recorder = AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() })
-        let store = GroveStore(baseDirectory: base, recorder: recorder)
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: recorder)
         store.present(.newMeeting())
         let task = Task { await store.beginRecording(title: "취소할 녹음", glossaryProfile: "") }
         while prompt.responses.isEmpty { await Task.yield() }
@@ -85,7 +85,7 @@ struct WorkspaceWorkflowTests {
         defer { try? FileManager.default.removeItem(at: base) }
         let prompt = WorkflowPermissionPrompt()
         let device = WorkflowRecordingDevice()
-        let store = GroveStore(baseDirectory: base, recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() }))
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() }))
         let first = Task { await store.beginRecording(title: "이전", glossaryProfile: "") }
         while prompt.responses.isEmpty { await Task.yield() }
         store.cancelRecordingStart()
@@ -106,7 +106,7 @@ struct WorkspaceWorkflowTests {
         defer { try? FileManager.default.removeItem(at: base) }
         let index = base.appendingPathComponent("meetings.json")
         try MeetingRecordStorage(url: index).save([])
-        let store = GroveStore(baseDirectory: base)
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference())
         store.selection = .unfiled
         let source = base.appendingPathComponent("input.m4a")
         let bytes = Data([1, 2, 3, 4]); try bytes.write(to: source)
@@ -125,7 +125,7 @@ struct WorkspaceWorkflowTests {
         let index = base.appendingPathComponent("meetings.json")
         try MeetingRecordStorage(url: index).save([])
         let device = WorkflowRecordingDevice()
-        let store = GroveStore(baseDirectory: base, recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { true }))
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { true }))
         store.selection = .unfiled
         try FileManager.default.createDirectory(at: index.appendingPathExtension("backup"), withIntermediateDirectories: false)
         await store.beginRecording(title: "저장 실패", glossaryProfile: "")
@@ -138,7 +138,7 @@ struct WorkspaceWorkflowTests {
     @Test func existingSheetCannotBeReplacedByAnUnrelatedAction() {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }
-        let store = GroveStore(baseDirectory: base)
+        let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference())
         let first = WorkspaceSheet.newMeeting()
         store.present(first)
         store.present(.importRecording(base.appendingPathComponent("other.m4a")))

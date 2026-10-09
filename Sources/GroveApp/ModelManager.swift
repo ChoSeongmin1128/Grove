@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import GroveInference
 
 struct ModelFileStamp: Codable, Equatable {
     let bytes: Int
@@ -16,6 +17,7 @@ final class ModelManager: ObservableObject {
     @Published private(set) var readyGroups: Set<ModelGroup> = []
     @Published private(set) var isReadyForUse = false
     @Published private(set) var isVoiceModelReady = false
+    @Published private(set) var isUltra8Ready = false
     @Published private(set) var isInstalling = false
     @Published private(set) var message: String?
     @Published private(set) var fraction: Double = 0
@@ -27,6 +29,8 @@ final class ModelManager: ObservableObject {
     private var downloads: URL { baseDirectory.appendingPathComponent("Downloads", isDirectory: true) }
     private var receiptURL: URL { baseDirectory.appendingPathComponent("Models/readiness.json") }
     private var voiceReceiptURL: URL { baseDirectory.appendingPathComponent("Models/voice-readiness.json") }
+    private var ultraReceiptURL: URL { baseDirectory.appendingPathComponent("Models/ultra8-readiness.json") }
+    private let ultraRuntimeID = "ultra8-" + Ultra8Model.revision
     private let voiceRuntimeID = "voice-df2625ac-active-centered-v2"
     var voiceModelDirectory: URL { baseDirectory.appendingPathComponent("Models/VoiceIdentity", isDirectory: true) }
     var voiceDownloadBytes: Int64 { ModelCatalog.assets.filter { $0.group == .voiceIdentity }.reduce(0) { $0 + $1.bytes } }
@@ -52,6 +56,12 @@ final class ModelManager: ObservableObject {
            let receipt = try? JSONDecoder().decode(ModelReadinessReceipt.self, from: data),
            receipt.runtime == voiceRuntimeID, readyGroups.contains(.voiceIdentity) {
             isVoiceModelReady = voiceAssets.allSatisfy { receipt.files[$0.sha256] == stamp($0) }
+        }
+        isUltra8Ready = false
+        if let data = try? Data(contentsOf: ultraReceiptURL),
+           let receipt = try? JSONDecoder().decode(ModelReadinessReceipt.self, from: data),
+           receipt.runtime == ultraRuntimeID, readyGroups.contains(.ultra8) {
+            isUltra8Ready = ModelCatalog.assets.filter { $0.group == .ultra8 }.allSatisfy { receipt.files[$0.sha256] == stamp($0) }
         }
     }
 
@@ -110,6 +120,14 @@ final class ModelManager: ObservableObject {
                     fraction = Double(completed) / Double(totalBytes)
                 }
                 refresh()
+                if groups.contains(.ultra8) {
+                    let files = Dictionary(uniqueKeysWithValues: assets.filter { $0.group == .ultra8 }.compactMap { asset in
+                        stamp(asset).map { (asset.sha256, $0) }
+                    })
+                    guard files.count == assets.filter({ $0.group == .ultra8 }).count else { throw ModelPreparationError.integrity }
+                    try JSONEncoder().encode(ModelReadinessReceipt(runtime: ultraRuntimeID, files: files))
+                        .write(to: ultraReceiptURL, options: .atomic)
+                }
                 if groups.contains(.voiceIdentity) {
                     message = "목소리 모델 실행 검사 중"
                     try await VoiceModelCheck.run(directory: voiceModelDirectory)

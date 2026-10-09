@@ -9,6 +9,8 @@ struct NewMeetingSheet: View {
     @State private var showsOptions = false
     @State private var attendance: MeetingAttendance
     @State private var showsAttendance = false
+    private var plan: MeetingInferencePlan? { try? options.plan(isDual: false) }
+    private var preparationMessage: String? { plan.flatMap { store.preparationMessage(for: $0) } }
 
     init(store: GroveStore, calendarEvent: ScheduledMeeting? = nil) {
         self.store = store
@@ -37,12 +39,7 @@ struct NewMeetingSheet: View {
             }
             .formStyle(.grouped)
 
-            HStack(spacing: 8) {
-                Image(systemName: "info.circle")
-                Text("녹음을 마치면 전사가 시작됩니다.")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            if let preparationMessage { MeetingPreparationNotice(message: preparationMessage) { store.workspaceSheet = nil } }
 
             HStack {
                 Spacer()
@@ -55,7 +52,7 @@ struct NewMeetingSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(store.isBusy || (try? options.plan(isDual: false)) == nil)
+                .disabled(store.isBusy || plan == nil || preparationMessage != nil)
             }
         }
         .padding(28)

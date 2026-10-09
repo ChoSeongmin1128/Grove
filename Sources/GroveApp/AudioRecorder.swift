@@ -12,9 +12,42 @@ protocol AudioRecordingDevice: AnyObject {
     func stop()
     func updateMeters()
     func averagePower(forChannel channelNumber: Int) -> Float
+    func observeTermination(_ handler: @escaping @Sendable () -> Void)
 }
 
-extension AVAudioRecorder: AudioRecordingDevice {}
+extension AudioRecordingDevice {
+    func observeTermination(_ handler: @escaping @Sendable () -> Void) {}
+}
+
+final class RecordingDelegate: NSObject, AVAudioRecorderDelegate, Sendable {
+    private let onTermination: @Sendable () -> Void
+    init(onTermination: @escaping @Sendable () -> Void) { self.onTermination = onTermination }
+    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) { onTermination() }
+    func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: (any Error)?) { onTermination() }
+}
+
+@MainActor
+private final class SystemRecordingDevice: AudioRecordingDevice {
+    private let device: AVAudioRecorder
+    private var delegate: RecordingDelegate?
+    init(url: URL, settings: [String: Any]) throws { device = try AVAudioRecorder(url: url, settings: settings) }
+    var isRecording: Bool { device.isRecording }
+    var currentTime: TimeInterval { device.currentTime }
+    var isMeteringEnabled: Bool {
+        get { device.isMeteringEnabled }
+        set { device.isMeteringEnabled = newValue }
+    }
+    func prepareToRecord() -> Bool { device.prepareToRecord() }
+    func record() -> Bool { device.record() }
+    func pause() { device.pause() }
+    func stop() { device.stop() }
+    func updateMeters() { device.updateMeters() }
+    func averagePower(forChannel channelNumber: Int) -> Float { device.averagePower(forChannel: channelNumber) }
+    func observeTermination(_ handler: @escaping @Sendable () -> Void) {
+        delegate = RecordingDelegate(onTermination: handler)
+        device.delegate = delegate
+    }
+}
 
 @MainActor
 final class AudioRecorder: NSObject, ObservableObject {
@@ -22,13 +55,15 @@ final class AudioRecorder: NSObject, ObservableObject {
     @Published private(set) var isPaused = false
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var level: Double = 0
+    var onUnexpectedStop: ((TimeInterval) -> Void)?
 
     private var recorder: (any AudioRecordingDevice)?
     private var meterTimer: Timer?
+    private var captureID: UUID?
     private let makeRecorder: (URL, [String: Any]) throws -> any AudioRecordingDevice
     private let permissionRequester: () async -> Bool
 
-    init(makeRecorder: @escaping (URL, [String: Any]) throws -> any AudioRecordingDevice = { try AVAudioRecorder(url: $0, settings: $1) },
+    init(makeRecorder: @escaping (URL, [String: Any]) throws -> any AudioRecordingDevice = { try SystemRecordingDevice(url: $0, settings: $1) },
          permissionRequester: @escaping () async -> Bool = AudioRecorder.requestSystemPermission) {
         self.makeRecorder = makeRecorder
         self.permissionRequester = permissionRequester
@@ -62,11 +97,16 @@ final class AudioRecorder: NSObject, ObservableObject {
             AVEncoderBitRateKey: 128_000,
         ]
         let recorder = try makeRecorder(url, settings)
+        let captureID = UUID()
+        recorder.observeTermination { [weak self] in
+            Task { @MainActor in self?.recordingTerminated(captureID: captureID) }
+        }
         recorder.isMeteringEnabled = true
         guard recorder.prepareToRecord(), recorder.record() else {
             throw RecordingError.couldNotStart
         }
         self.recorder = recorder
+        self.captureID = captureID
         isPaused = false
         elapsed = 0
         level = 0
@@ -83,7 +123,8 @@ final class AudioRecorder: NSObject, ObservableObject {
 
     @discardableResult
     func stop() -> TimeInterval {
-        let finalDuration = recorder?.currentTime ?? elapsed
+        let finalDuration = max(recorder?.currentTime ?? 0, elapsed)
+        captureID = nil
         recorder?.stop()
         recorder = nil
         meterTimer?.invalidate()
@@ -109,18 +150,29 @@ final class AudioRecorder: NSObject, ObservableObject {
         isPaused = false
     }
 
-    @objc private func updateMeter() {
-        guard let recorder, recorder.isRecording else { return }
+    @objc func updateMeter() {
+        guard let recorder, isRecording, !isPaused else { return }
+        guard recorder.isRecording else {
+            if let captureID { recordingTerminated(captureID: captureID) }
+            return
+        }
         recorder.updateMeters()
         let decibels = recorder.averagePower(forChannel: 0)
         level = max(0, min(1, pow(10, Double(decibels) / 28)))
         elapsed = recorder.currentTime
+    }
+
+    private func recordingTerminated(captureID: UUID) {
+        guard self.captureID == captureID, isRecording else { return }
+        let duration = stop()
+        onUnexpectedStop?(duration)
     }
 }
 
 enum RecordingError: LocalizedError {
     case permissionDenied
     case couldNotStart
+    case unexpectedlyStopped
 
     var errorDescription: String? {
         switch self {
@@ -128,6 +180,8 @@ enum RecordingError: LocalizedError {
             "마이크 접근이 꺼져 있습니다. 시스템 설정 → 개인정보 보호 및 보안 → 마이크에서 Grove를 허용해 주세요."
         case .couldNotStart:
             "선택한 마이크로 녹음을 시작하지 못했습니다. 입력 장치 연결 상태를 확인해 주세요."
+        case .unexpectedlyStopped:
+            "녹음이 예기치 않게 중단됐습니다. 저장된 녹음은 보존됩니다. 마이크 연결 상태를 확인해 주세요."
         }
     }
 }
