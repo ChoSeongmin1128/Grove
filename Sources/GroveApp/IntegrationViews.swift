@@ -184,8 +184,9 @@ struct NotionSettingsView: View {
                 }
             }
             Section("기본 저장 위치") {
-                TextField("추가할 페이지 링크", text: $parentLink, prompt: Text("https://www.notion.so/..."))
+                TextField("추가할 페이지 링크", text: $parentLink, prompt: Text("https://app.notion.com/p/..."))
                     .disabled(isBusy || connection.isConnecting)
+                if let error = NotionPageLink.validationMessage(for: parentLink) { Text(error).font(.callout).foregroundStyle(.secondary) }
                 Text("기존 본문 맨 아래에 구분선과 회의록 하위 페이지를 추가합니다. 데이터베이스 저장은 이 버전에서 지원하지 않습니다.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -247,18 +248,23 @@ struct NotionExportSheet: View {
             Divider()
             Text("페이지 하단에 회의록 추가").font(GroveTypography.heading)
             HStack {
-                TextField("추가할 페이지 링크", text: $parentLink, prompt: Text("https://www.notion.so/..."))
+                TextField("추가할 페이지 링크", text: $parentLink, prompt: Text("https://app.notion.com/p/..."))
                     .textFieldStyle(.roundedBorder).disabled(exporter.isSaving)
                 Button("위치 확인") {
                     checkingParent = true
+                    let link = parentLink, destinationKey = connection.destinationKey
                     Task {
                         defer { checkingParent = false }
-                        do { message = "저장 위치: " + (try await client().parentTitle(id: NotionPageLink.id(from: parentLink))) }
-                        catch { message = error.localizedDescription }
+                        do {
+                            let title = try await client().parentTitle(id: NotionPageLink.id(from: link))
+                            if parentLink == link && connection.destinationKey == destinationKey { message = "저장 위치: " + title }
+                        } catch {
+                            if parentLink == link && connection.destinationKey == destinationKey { message = error.localizedDescription }
+                        }
                     }
                 }.disabled(!connection.isConnected || connection.isConnecting || checkingParent || exporter.isSaving || (try? NotionPageLink.id(from: parentLink)) == nil)
             }
-            if let message { Text(message).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            if let message = NotionPageLink.validationMessage(for: parentLink) ?? message { Text(message).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if uncertain {
                 HStack {
                     TextField("생성된 회의록 페이지 링크", text: $recoveryLink).textFieldStyle(.roundedBorder)
@@ -269,6 +275,7 @@ struct NotionExportSheet: View {
                         }
                     }.disabled(exporter.isSaving || (try? NotionPageLink.id(from: recoveryLink)) == nil)
                 }
+                if let error = NotionPageLink.validationMessage(for: recoveryLink) { Text(error).font(.callout).foregroundStyle(.secondary) }
             }
             HStack {
                 Button("Notion 연결 설정") { UserDefaults.standard.set("notion", forKey: "settingsTab"); openSettings() }
@@ -298,6 +305,7 @@ struct NotionExportSheet: View {
             .onChange(of: connection.destinationKey) { _, _ in
                 if !exporter.isSaving { parentLink = connection.parentLink }
             }
+            .onChange(of: parentLink) { _, _ in message = nil }
     }
     private func client() throws -> any NotionPageClient {
         try connection.client()

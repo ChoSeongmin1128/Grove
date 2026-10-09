@@ -30,6 +30,9 @@ inference, proposals, and unverified items.
 - AuthenticationServices completion callbacks may arrive on an XPC queue. Keep the
   callback explicitly Sendable and move state changes to MainActor inside it. Exercise
   that same callback from a background queue; a mock browser alone does not verify it.
+- Research Notion link forms and destination entity semantics before changing URL
+  rules. Use `docs/notion-link-handling.md`; apply the same normalizer to input and
+  API-returned URLs. Do not guess page IDs from slugs or confuse database views / rows.
 - User glossaries are optional machine-local profiles and never public defaults.
 - Preserve original audio and raw transcripts. Store corrections, speaker assignments,
   and summaries as separate revisions.

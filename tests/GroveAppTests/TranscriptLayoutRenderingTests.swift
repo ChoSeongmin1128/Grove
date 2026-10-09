@@ -65,6 +65,8 @@ struct TranscriptLayoutRenderingTests {
             rawText: "오늘 논의한 내용은 전체 전사문으로 남기겠습니다.", sourceChannelID: "recording", engineClusterID: nil, speakerID: nil, editedText: nil)])
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let event = ScheduledMeeting(id: "synthetic", calendarID: "synthetic", title: "제품 검토 회의", start: Date(), end: Date().addingTimeInterval(3600), calendarName: "업무")
+        let invalidLinkConnection = NotionConnection(storage: MemoryNotionConnectionStore(), defaults: UserDefaults(suiteName: "Grove.LinkLayout.\(UUID().uuidString)")!)
+        invalidLinkConnection.parentLink = "https://workspace.notion.site/meeting-notes"
         let views: [(String, AnyView, Double, Double)] = [
             ("first-run", AnyView(FirstRunSetupView(store: store)), 900, 720),
             ("home", AnyView(LibraryHomeView(store: store)), 1000, 720),
@@ -72,6 +74,7 @@ struct TranscriptLayoutRenderingTests {
             ("calendar", AnyView(CalendarSettingsView(schedule: store.calendarSchedule)), 620, 570),
             ("notion-export", AnyView(NotionExportSheet(meeting: meeting, document: document, exporter: store.notionExporter, connection: store.notionConnection)), 692, 650),
             ("notion-connect", AnyView(NotionSettingsView(connection: store.notionConnection)), 620, 480),
+            ("notion-link-recovery", AnyView(NotionSettingsView(connection: invalidLinkConnection)), 620, 600),
             ("new-meeting", AnyView(NewMeetingSheet(store: store)), 560, 600),
             ("reminder", AnyView(MeetingReminderBanner(meeting: event, record: {}, snooze: {}, close: {})), 680, 76)
         ]

@@ -99,6 +99,16 @@ struct NotionExportTests {
         #expect(NotionProtocol.methods == ["GET"])
         #expect(try exporter.receipt(meetingID: meeting.id) == nil)
     }
+    @Test func aDifferentReturnedPageNeverReceivesTheTranscript() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory)
+        let (meeting, document) = try fixture()
+        let client = client([(200, "{\"object\":\"page\",\"id\":\"\(child)\",\"properties\":{}}")])
+        await #expect(throws: NotionExportError.self) { try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client) }
+        #expect(NotionProtocol.methods == ["GET"])
+        #expect(try exporter.receipt(meetingID: meeting.id) == nil)
+    }
 }
 
 @MainActor

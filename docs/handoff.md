@@ -27,7 +27,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.20. This is a personal local beta, a
+The source targets version0.4.0 / local-beta.21. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -140,6 +140,8 @@ licenses and private evidence before scoped cleanup.
   to MainActor for session state. Background-queue callback / cancellation / retry
   checks exercise the actual bridge rather than replacing the browser implementation.
   See `setup-and-integrations.md` for lifecycle and compatibility.
+  Destination URL / entity handling is defined in `notion-link-handling.md`. Research
+  upstream forms first; input parsing and returned server URLs share one normalizer.
 - [Automatic speaker identification](automatic-speaker-identification.md) has implemented
   microphone enrollment and attendance selection. **Automatic naming remains gated**.
   A new embedding recipe needs independent-session known/unknown calibration and

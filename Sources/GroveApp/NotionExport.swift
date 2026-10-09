@@ -3,28 +3,6 @@ import CryptoKit
 import Foundation
 import Security
 
-enum NotionPageLink {
-    static func id(from input: String) throws -> String {
-        let input = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let path: String
-        if UUID(uuidString: input) != nil { return input.lowercased() }
-        if input.count == 32 && input.allSatisfy(\.isHexDigit) { path = input }
-        else {
-            guard let url = URL(string: input), url.scheme == "https", let host = url.host?.lowercased(),
-                  host == "notion.so" || host.hasSuffix(".notion.so") || host == "notion.site" || host.hasSuffix(".notion.site"),
-                  url.user == nil, url.password == nil else { throw NotionExportError.invalidLink }
-            path = url.lastPathComponent
-        }
-        guard let match = path.range(of: #"[0-9a-fA-F]{32}$|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#, options: .regularExpression) else {
-            throw NotionExportError.invalidLink
-        }
-        let hex = String(path[match]).replacingOccurrences(of: "-", with: "").lowercased()
-        let chars = Array(hex)
-        return [String(chars[0..<8]), String(chars[8..<12]), String(chars[12..<16]), String(chars[16..<20]), String(chars[20..<32])].joined(separator: "-")
-    }
-    static func url(for id: String) -> URL { URL(string: "https://www.notion.so/" + id.replacingOccurrences(of: "-", with: ""))! }
-}
-
 enum MeetingExportContent {
     static func title(_ meeting: MeetingRecord) -> String {
         let formatter = DateFormatter()
@@ -73,7 +51,9 @@ struct NotionClient: NotionPageClient {
     var session: URLSession = .shared
     func parentTitle(id: String) async throws -> String {
         let page = try await request("pages/\(id)")
-        guard page["object"] as? String == "page", page["in_trash"] as? Bool != true, page["archived"] as? Bool != true else {
+        guard page["object"] as? String == "page" else { throw NotionExportError.unsupportedParent }
+        guard let responseID = page["id"] as? String, (try? NotionPageLink.id(from: responseID)) == id,
+              page["in_trash"] as? Bool != true, page["archived"] as? Bool != true else {
             throw NotionExportError.invalidParent
         }
         let properties = page["properties"] as? [String: [String: Any]] ?? [:]
@@ -194,11 +174,14 @@ final class NotionExporter: ObservableObject {
 }
 
 enum NotionExportError: Error, LocalizedError {
-    case invalidLink, invalidParent, missingToken, keychain, unknownResult, changedExport, busy, dividerFailed, http(Int)
+    case invalidLink, pageLinkRequired, ambiguousLink, unsupportedParent, invalidParent, missingToken, keychain, unknownResult, changedExport, busy, dividerFailed, http(Int)
     var errorDescription: String? {
         switch self {
-        case .invalidLink: "Notion 페이지 링크를 입력해 주세요. 데이터베이스 링크는 지원하지 않습니다."
-        case .invalidParent: "저장할 일반 페이지와 접근 권한을 확인해 주세요."
+        case .invalidLink: "Notion 페이지의 공유 링크를 입력해 주세요."
+        case .pageLinkRequired: "저장할 페이지를 확인할 수 없습니다. Notion에서 페이지를 열고 공유 링크를 복사해 주세요."
+        case .ambiguousLink: "저장할 페이지가 명확하지 않습니다. 해당 페이지를 전체 화면으로 열고 공유 링크를 복사해 주세요."
+        case .unsupportedParent: "데이터베이스, 보기, 데이터 소스는 저장 위치로 사용할 수 없습니다. 추가할 페이지의 링크를 입력해 주세요."
+        case .invalidParent: "저장할 페이지와 접근 권한을 확인해 주세요."
         case .missingToken: "설정에서 Notion에 연결해 주세요."
         case .keychain: "Notion 연결 정보를 Keychain에서 읽거나 저장하지 못했습니다."
         case .unknownResult: "저장 결과를 확인하지 못했습니다. 중복 생성을 막기 위해 다시 만들지 않습니다. Notion에서 생성된 페이지를 확인하고 아래에 링크를 연결해 주세요."

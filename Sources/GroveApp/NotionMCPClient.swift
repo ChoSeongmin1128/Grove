@@ -103,18 +103,23 @@ struct NotionFetchedPage {
     let parentID: String?
 
     init(response: [String: Any], expectedID: String) throws {
+        let kind = response["type"] as? String ?? (response["metadata"] as? [String: Any])?["type"] as? String
+        if let kind, kind != "page" { throw NotionExportError.unsupportedParent }
         guard response["truncated"] as? Bool != true,
               (response["unknown_block_count"] as? Int ?? 0) == 0 else { throw NotionExportError.invalidParent }
         let text = response["text"] as? String ?? response["content"] as? String ?? ""
         let page: String
         if text.contains("<page ") { page = text }
-        else { throw NotionExportError.invalidParent }
+        else {
+            if text.contains("<database ") || text.contains("<data-source ") || text.contains("<view ") || text.contains("<folder ") { throw NotionExportError.unsupportedParent }
+            throw NotionExportError.invalidParent
+        }
         guard !page.contains("<unknown"), response["type"] as? String != "database",
               let opening = Self.capture(#"<page\s[^>]*url="([^"]+)"[^>]*>"#, in: page),
               let id = try? NotionPageLink.id(from: opening), id == expectedID,
               let properties = Self.capture(#"(?s)<properties>\s*(.*?)\s*</properties>"#, in: page),
               let data = properties.data(using: .utf8), let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let title = values["title"] as? String,
+              let title = response["title"] as? String ?? values["title"] as? String,
               let content = Self.capture(#"(?s)<content>\n?(.*?)\n?</content>"#, in: page) else { throw NotionExportError.invalidParent }
         self.id = id; self.title = title; self.content = content
         let ancestors = Self.capture(#"(?s)<ancestor-path>(.*?)</ancestor-path>"#, in: page) ?? ""
