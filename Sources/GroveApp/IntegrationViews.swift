@@ -294,7 +294,10 @@ struct NotionExportSheet: View {
                 Button("Notion 연결 설정") { UserDefaults.standard.set("notion", forKey: "settingsTab"); openSettings() }
                 Spacer()
                 if let savedURL { Link("추가된 회의록 열기", destination: savedURL) }
-                if exporter.isSaving { ProgressView().controlSize(.small) }
+                if exporter.isSaving {
+                    ProgressView().controlSize(.small)
+                    if let stage = exporter.stage { Text(stage.label).font(.caption).foregroundStyle(.secondary) }
+                }
                 Button(dividerPending ? "결과 확인" : "적용") {
                     Task {
                         do {

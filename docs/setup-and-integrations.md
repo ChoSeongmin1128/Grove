@@ -116,6 +116,23 @@ MCP의 `insert_content` 본문은 `content`에 전달한다. `new_str`는 전체
 마지막 구분선이 확인되면 `creationPending`을 저장하고 회의록 생성으로 진행한다.
 기존 단계 필드가 없는 불확실한 생성 기록은 그대로 불확실한 생성으로 취급한다.
 
+### 요청 수와 대기
+
+- OAuth grant별 MCP 클라이언트를 재사용. 로그인 교체 / 연결 해제 / 재연결 필요 상태에서 폐기
+- 저장 직전 부모 페이지 조회 한 번으로 페이지 검증과 마지막 구분선 확인을 함께 수행. 이전 위치 조회의 본문을 저장에 재사용하지 않음
+- 구분선 없는 새 저장의 정상 경로는 fetch → update-page → create-pages → fetch, 도구 호출 4회. 차가운 연결은 초기화 HTTP 요청 2회가 추가됨
+- 위치 확인 뒤 적용은 초기화 2회 / 위치 조회 1회 / 저장 4회, MCP HTTP 요청 7회. 토큰 갱신, 세션 만료와 비동기 확인은 별도
+- 기존 생성 기록이 있으면 생성 없이 해당 페이지의 부모 관계만 확인. 변경된 내용 / 대상이나 불확실한 생성은 다시 보내지 않음
+- 만료된 MCP 세션의 읽기는 새 초기화 후 한 번만 재조회. 쓰기는 연결 상태만 초기화하고 오류를 반환, 자동 재전송하지 않음
+- update-page의 비동기 응답은 서버의 poll_after_seconds에 따라 확인. 값이 없거나 잘못됐으면 2초 사용. 응답 대기 예산 60초 / 개별 요청 timeout 적용, 결과 미확인은 dividerPending 유지
+- 적용 중 저장 위치 확인, 구분선 추가, 회의록 저장, 결과 확인 단계를 표시
+- 진단 파일은 Application Support/Grove/Diagnostics/notion-requests.json. 최근 100개 기록만 유지하며 백그라운드에서 원자 저장
+- 기록은 요청 이름, HTTP 상태 / 바이트 수 / 시간, 별도의 인증 갱신 / poll 대기 / 전체 저장 시간. 토큰 / 계정 / 페이지 ID / URL / 본문 / 오류 원문은 남기지 않음
+- 진단의 정상 HTTP 응답은 최종 저장 완료를 뜻하지 않음. 저장 완료는 기존 receipt와 부모 관계 확인 기준 사용
+
+비동기 계약의 정본은 [Notion MCP](https://developers.notion.com/guides/mcp/mcp-supported-tools#async-page-create-and-update),
+세션 재초기화 기준은 [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management)임.
+
 ## 구현 위치
 
 화면 제목이나 버튼만으로 알 수 있는 내용은 설명문으로 반복하지 않는다.

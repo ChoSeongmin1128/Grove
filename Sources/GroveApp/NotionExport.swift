@@ -40,10 +40,23 @@ enum MeetingExportContent {
 @MainActor
 protocol NotionPageClient {
     func parentTitle(id: String) async throws -> String
+    func inspectParent(id: String) async throws -> NotionExportDestination
     func create(parent: String, title: String, markdown: String) async throws -> String
-    func ensureDividerAtEnd(parent: String) async throws
+    func appendDivider(parent: String) async throws
     func hasDividerAtEnd(parent: String) async throws -> Bool
     func verifyChild(id: String, parent: String) async throws
+}
+
+struct NotionExportDestination {
+    let id: String
+    let hasDivider: Bool
+}
+
+extension NotionPageClient {
+    func inspectParent(id: String) async throws -> NotionExportDestination {
+        _ = try await parentTitle(id: id)
+        return .init(id: id, hasDivider: try await hasDividerAtEnd(parent: id))
+    }
 }
 
 @MainActor
@@ -67,8 +80,7 @@ struct NotionClient: NotionPageClient {
               UUID(uuidString: id) != nil else { throw NotionExportError.unknownResult }
         return id
     }
-    func ensureDividerAtEnd(parent: String) async throws {
-        if try await hasDividerAtEnd(parent: parent) { return }
+    func appendDivider(parent: String) async throws {
         do {
             _ = try await request("pages/\(parent)/markdown", method: "PATCH",
                 body: ["type": "insert_content", "insert_content": ["content": "\n---\n", "position": ["type": "end"]]])
@@ -119,12 +131,29 @@ struct NotionExportReceipt: Codable {
     var phase: Phase? = nil
 }
 
+enum NotionExportStage: Equatable {
+    case checkingDestination, addingDivider, creatingNote, verifyingSave
+    var label: String {
+        switch self {
+        case .checkingDestination: "저장 위치 확인 중"
+        case .addingDivider: "구분선 추가 중"
+        case .creatingNote: "회의록 저장 중"
+        case .verifyingSave: "저장 결과 확인 중"
+        }
+    }
+}
+
 @MainActor
 final class NotionExporter: ObservableObject {
     @Published private(set) var isSaving = false
+    @Published private(set) var stage: NotionExportStage?
     @Published private(set) var message: String?
     let directory: URL
-    init(directory: URL) { self.directory = directory }
+    private let diagnostics: NotionDiagnostics
+    init(directory: URL, diagnostics: NotionDiagnostics = NotionDiagnostics()) {
+        self.directory = directory
+        self.diagnostics = diagnostics
+    }
     func receipt(meetingID: UUID) throws -> NotionExportReceipt? {
         let url = directory.appendingPathComponent(meetingID.uuidString + ".json")
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
@@ -134,25 +163,44 @@ final class NotionExporter: ObservableObject {
               client: any NotionPageClient) async throws -> URL {
         guard !isSaving else { throw NotionExportError.busy }
         isSaving = true
-        defer { isSaving = false }
+        let startedAt = Date(), started = ProcessInfo.processInfo.systemUptime
+        var succeeded = false
+        defer {
+            isSaving = false
+            stage = nil
+            diagnostics.record(kind: .export, operation: "save", startedAt: startedAt,
+                elapsed: ProcessInfo.processInfo.systemUptime - started, failed: !succeeded)
+        }
         let parent = try NotionPageLink.id(from: parentLink)
         let markdown = MeetingExportContent.markdown(meeting: meeting, document: document, original: original)
         let hash = SHA256.hash(data: Data(markdown.utf8)).map { String(format: "%02x", $0) }.joined()
-        _ = try await client.parentTitle(id: parent)
         var receipt: NotionExportReceipt
         if let previous = try self.receipt(meetingID: meeting.id) {
             guard previous.parentID == parent, previous.contentHash == hash else { throw NotionExportError.changedExport }
             if let page = previous.pageID {
+                stage = .verifyingSave
                 try await client.verifyChild(id: page, parent: parent)
+                succeeded = true
                 return NotionPageLink.url(for: page)
             }
             guard previous.phase == .dividerPending else { throw NotionExportError.unknownResult }
-            guard try await client.hasDividerAtEnd(parent: parent) else { throw NotionExportError.dividerPending }
+            stage = .checkingDestination
+            let destination = try await client.inspectParent(id: parent)
+            guard destination.id == parent else { throw NotionExportError.invalidParent }
+            guard destination.hasDivider else { throw NotionExportError.dividerPending }
             receipt = previous
         } else {
+            stage = .checkingDestination
+            let destination = try await client.inspectParent(id: parent)
+            guard destination.id == parent else { throw NotionExportError.invalidParent }
             receipt = NotionExportReceipt(meetingID: meeting.id, parentID: parent, contentHash: hash, phase: .dividerPending)
             try persist(receipt)
-            do { try await client.ensureDividerAtEnd(parent: parent) }
+            do {
+                if !destination.hasDivider {
+                    stage = .addingDivider
+                    try await client.appendDivider(parent: parent)
+                }
+            }
             catch {
                 if Self.isDefinitiveRejection(error) {
                     try? FileManager.default.removeItem(at: directory.appendingPathComponent(meeting.id.uuidString + ".json"))
@@ -164,6 +212,7 @@ final class NotionExporter: ObservableObject {
         receipt.phase = .creationPending
         try persist(receipt)
         let id: String
+        stage = .creatingNote
         do { id = try await client.create(parent: parent, title: MeetingExportContent.title(meeting), markdown: markdown) }
         catch {
             if Self.isDefinitiveRejection(error) {
@@ -173,9 +222,11 @@ final class NotionExporter: ObservableObject {
         }
         receipt.pageID = id
         try persist(receipt)
+        stage = .verifyingSave
         try await client.verifyChild(id: id, parent: parent)
         receipt.verified = true
         try persist(receipt)
+        succeeded = true
         return NotionPageLink.url(for: id)
     }
     func connectCreatedPage(meetingID: UUID, link: String, client: any NotionPageClient) async throws -> URL {
@@ -196,13 +247,14 @@ final class NotionExporter: ObservableObject {
     }
     private static func isDefinitiveRejection(_ error: any Error) -> Bool {
         if case NotionExportError.requestRejected = error { return true }
+        if case NotionExportError.sessionExpired = error { return true }
         if case NotionExportError.http(let status) = error { return (400..<500).contains(status) }
         return false
     }
 }
 
 enum NotionExportError: Error, LocalizedError {
-    case invalidLink, pageLinkRequired, ambiguousLink, unsupportedParent, invalidParent, missingToken, keychain, unknownResult, changedExport, busy, dividerFailed, dividerPending, requestRejected, http(Int)
+    case invalidLink, pageLinkRequired, ambiguousLink, unsupportedParent, invalidParent, missingToken, keychain, unknownResult, changedExport, busy, dividerFailed, dividerPending, requestRejected, sessionExpired, http(Int)
     var errorDescription: String? {
         switch self {
         case .invalidLink: "Notion 페이지의 공유 링크를 입력해 주세요."
@@ -217,6 +269,7 @@ enum NotionExportError: Error, LocalizedError {
         case .busy: "다른 회의록을 저장하고 있습니다."
         case .dividerFailed: "구분선 추가 결과를 확인하지 못했습니다. 다시 적용하면 페이지 하단을 확인한 뒤 이어서 처리합니다."
         case .requestRejected: "Notion이 요청 형식을 거부했습니다. Grove 업데이트 후 다시 시도해 주세요."
+        case .sessionExpired: "Notion 연결이 만료됐습니다. 다시 적용해 주세요."
         case .dividerPending: "구분선 추가 결과를 아직 확인하지 못했습니다. '결과 확인'으로 기존 요청의 결과를 확인해 주세요."
         case .http(let status): switch status {
             case 401: "Notion에 다시 연결해 주세요."

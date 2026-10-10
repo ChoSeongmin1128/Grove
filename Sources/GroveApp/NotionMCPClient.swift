@@ -1,22 +1,40 @@
 import Foundation
 
+private enum NotionMCPSessionError: Error { case expired(String) }
+
 @MainActor
 final class NotionMCPTransport {
-    private let connection: NotionConnection
+    private weak var connection: NotionConnection?
     private let grantID: UUID
     private let session: URLSession
     private var sessionID: String?
     private var protocolVersion = "2025-11-25"
     private var initialized = false
     private var initialization: Task<Void, any Error>?
+    private let diagnostics: NotionDiagnostics
 
     init(connection: NotionConnection, grantID: UUID, session: URLSession) {
         self.connection = connection; self.grantID = grantID; self.session = session
+        diagnostics = connection.diagnostics
     }
 
-    func call(_ name: String, arguments: [String: Any], writes: Bool = false) async throws -> [String: Any] {
-        try await initialize()
-        let result = try await rpc("tools/call", params: ["name": name, "arguments": arguments], writes: writes)
+    func call(_ name: String, arguments: [String: Any], writes: Bool = false, timeout: TimeInterval = 60) async throws -> [String: Any] {
+        let params: [String: Any] = ["name": name, "arguments": arguments]
+        let result: [String: Any]
+        do {
+            try await initialize()
+            result = try await rpc("tools/call", params: params, writes: writes, timeout: timeout)
+        } catch NotionMCPSessionError.expired(let expiredID) {
+            resetSession(ifMatching: expiredID)
+            guard !writes else { throw NotionExportError.sessionExpired }
+            do {
+                try await initialize()
+                result = try await rpc("tools/call", params: params, timeout: timeout)
+            } catch NotionMCPSessionError.expired(let secondID) {
+                resetSession(ifMatching: secondID)
+                throw NotionExportError.http(404)
+            }
+        }
         if result["isError"] as? Bool == true {
             let envelope = result["structuredContent"] as? [String: Any]
                 ?? (result["content"] as? [[String: Any]])?.compactMap { block -> [String: Any]? in
@@ -39,28 +57,51 @@ final class NotionMCPTransport {
         if initialized { return }
         if let initialization { return try await initialization.value }
         let task = Task { @MainActor in
-            let result = try await rpc("initialize", params: ["protocolVersion": protocolVersion,
-                "capabilities": [:], "clientInfo": ["name": "Grove", "version": "0.4.0"]])
-            guard let version = result["protocolVersion"] as? String,
-                  ["2025-03-26", "2025-06-18", "2025-11-25"].contains(version) else { throw NotionConnectionError.invalidResponse }
-            protocolVersion = version
-            _ = try await rpc("notifications/initialized", params: [:], notification: true)
-            initialized = true
+            do {
+                let result = try await rpc("initialize", params: ["protocolVersion": protocolVersion,
+                    "capabilities": [:], "clientInfo": ["name": "Grove", "version": "0.4.0"]])
+                guard let version = result["protocolVersion"] as? String,
+                      ["2025-03-26", "2025-06-18", "2025-11-25"].contains(version) else { throw NotionConnectionError.invalidResponse }
+                protocolVersion = version
+                _ = try await rpc("notifications/initialized", params: [:], notification: true)
+                initialized = true
+            } catch {
+                sessionID = nil
+                initialized = false
+                throw error
+            }
         }
         initialization = task
         defer { initialization = nil }
         try await task.value
     }
 
-    private func rpc(_ method: String, params: [String: Any], writes: Bool = false, notification: Bool = false) async throws -> [String: Any] {
+    private func resetSession(ifMatching id: String) {
+        guard sessionID == id else { return }
+        sessionID = nil
+        initialized = false
+    }
+
+    private func rpc(_ method: String, params: [String: Any], writes: Bool = false, notification: Bool = false,
+                     timeout: TimeInterval = 60) async throws -> [String: Any] {
         let id = UUID().uuidString
         var payload: [String: Any] = ["jsonrpc": "2.0", "method": method, "params": params]
         if !notification { payload["id"] = id }
         let body = try JSONSerialization.data(withJSONObject: payload)
+        guard let connection else { throw NotionConnectionError.connectionChanged }
         var token = try await connection.accessToken(grantID: grantID)
         for attempt in 0...1 {
+            let startedAt = Date(), started = ProcessInfo.processInfo.systemUptime
+            var statusCode: Int?, responseBytes = 0, failed = true
+            var responseElapsed: TimeInterval?
+            defer {
+                diagnostics.record(kind: .request, operation: params["name"] as? String ?? method,
+                    startedAt: startedAt, elapsed: responseElapsed ?? ProcessInfo.processInfo.systemUptime - started,
+                    statusCode: statusCode, requestBytes: body.count, responseBytes: responseBytes, failed: failed)
+            }
+            let requestSessionID = sessionID
             var request = URLRequest(url: NotionOAuthConfiguration.server)
-            request.httpMethod = "POST"; request.httpBody = body; request.timeoutInterval = 60
+            request.httpMethod = "POST"; request.httpBody = body; request.timeoutInterval = timeout
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
@@ -69,18 +110,25 @@ final class NotionMCPTransport {
             let data: Data, response: URLResponse
             do { (data, response) = try await session.data(for: request) }
             catch { if writes { throw NotionExportError.unknownResult }; throw error }
+            responseElapsed = ProcessInfo.processInfo.systemUptime - started
             guard let http = response as? HTTPURLResponse else { throw NotionExportError.unknownResult }
+            statusCode = http.statusCode
+            responseBytes = data.count
+            try connection.validateGrant(id: grantID)
             if http.statusCode == 401 && attempt == 0 {
                 token = try await connection.accessToken(grantID: grantID, rejectedToken: token)
                 continue
             }
+            if http.statusCode == 404, let requestSessionID { throw NotionMCPSessionError.expired(requestSessionID) }
             guard (200..<300).contains(http.statusCode) else {
                 if writes && http.statusCode >= 500 { throw NotionExportError.unknownResult }
                 throw NotionExportError.http(http.statusCode)
             }
-            if let value = http.value(forHTTPHeaderField: "Mcp-Session-Id") { sessionID = value }
-            if notification { return [:] }
-            return try Self.result(data: data, contentType: http.value(forHTTPHeaderField: "Content-Type") ?? "", id: id)
+            if let value = http.value(forHTTPHeaderField: "Mcp-Session-Id"), requestSessionID == nil || requestSessionID == sessionID { sessionID = value }
+            if notification { failed = false; return [:] }
+            let result = try Self.result(data: data, contentType: http.value(forHTTPHeaderField: "Content-Type") ?? "", id: id)
+            failed = result["isError"] as? Bool == true
+            return result
         }
         throw NotionConnectionError.reconnectRequired
     }
@@ -161,8 +209,12 @@ struct NotionFetchedPage {
 @MainActor
 final class NotionMCPPageClient: NotionPageClient {
     private let transport: NotionMCPTransport
-    init(connection: NotionConnection, grantID: UUID, session: URLSession) {
+    private let polling: NotionAsyncPolling
+    private let diagnostics: NotionDiagnostics
+    init(connection: NotionConnection, grantID: UUID, session: URLSession, polling: NotionAsyncPolling = NotionAsyncPolling()) {
         transport = NotionMCPTransport(connection: connection, grantID: grantID, session: session)
+        self.polling = polling
+        diagnostics = connection.diagnostics
     }
 
     private func fetch(_ id: String) async throws -> NotionFetchedPage {
@@ -170,19 +222,28 @@ final class NotionMCPPageClient: NotionPageClient {
     }
     func parentTitle(id: String) async throws -> String { try await fetch(id).title }
 
-    func ensureDividerAtEnd(parent: String) async throws {
-        if try await hasDividerAtEnd(parent: parent) { return }
+    func inspectParent(id: String) async throws -> NotionExportDestination {
+        let page = try await fetch(id)
+        return .init(id: page.id, hasDivider: Self.hasDivider(page.content))
+    }
+
+    func appendDivider(parent: String) async throws {
         do {
             let result = try await transport.call("notion-update-page", arguments: ["page_id": parent,
                 "command": "insert_content", "content": "\n---\n", "position": ["type": "end"], "allow_async": false], writes: true)
             try await completeUpdate(result, expectedID: parent)
         } catch NotionExportError.requestRejected { throw NotionExportError.requestRejected }
+        catch NotionExportError.sessionExpired { throw NotionExportError.sessionExpired }
         catch NotionExportError.http(let status) { throw NotionExportError.http(status) }
         catch { throw NotionExportError.dividerFailed }
     }
     func hasDividerAtEnd(parent: String) async throws -> Bool {
         let page = try await fetch(parent)
-        return page.content.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last == "---"
+        return Self.hasDivider(page.content)
+    }
+
+    private static func hasDivider(_ content: String) -> Bool {
+        content.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last == "---"
     }
 
     func create(parent: String, title: String, markdown: String) async throws -> String {
@@ -203,11 +264,24 @@ final class NotionMCPPageClient: NotionPageClient {
         var result = response
         if result["object"] as? String == "async_task" {
             guard let task = result["id"] as? String else { throw NotionExportError.unknownResult }
-            for _ in 0..<6 {
-                try await Task.sleep(for: .seconds(2))
-                let progress = try await transport.call("notion-get-async-task", arguments: ["task_id": task])
-                if progress["status"] as? String == "succeeded", let completed = progress["result"] as? [String: Any] { result = completed; break }
-                if progress["status"] as? String == "failed" { throw NotionExportError.dividerFailed }
+            let deadline = polling.now() + polling.timeout
+            var interval = NotionAsyncPolling.interval(result)
+            while true {
+                if result["status"] as? String == "succeeded", let completed = result["result"] as? [String: Any] {
+                    result = completed
+                    break
+                }
+                if result["status"] as? String == "failed" { throw NotionExportError.dividerFailed }
+                if let status = result["status"] as? String, !["queued", "running", "retrying"].contains(status) { throw NotionExportError.unknownResult }
+                interval = NotionAsyncPolling.interval(result, fallback: interval)
+                guard polling.now() + interval < deadline else { throw NotionExportError.unknownResult }
+                let startedAt = Date(), started = polling.now()
+                try await polling.wait(interval)
+                diagnostics.record(kind: .pollWait, operation: "poll", startedAt: startedAt, elapsed: polling.now() - started)
+                try Task.checkCancellation()
+                let remaining = deadline - polling.now()
+                guard remaining > 0 else { throw NotionExportError.unknownResult }
+                result = try await transport.call("notion-get-async-task", arguments: ["task_id": task], timeout: remaining)
             }
         }
         guard let pageID = result["page_id"] as? String, (try? NotionPageLink.id(from: pageID)) == expectedID,

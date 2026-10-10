@@ -70,8 +70,10 @@ final class GroveStore: ObservableObject {
         calendarSchedule = CalendarSchedule(defaults: baseDirectory == nil ? .standard : UserDefaults(suiteName: "Grove.Tests.\(UUID().uuidString)")!)
         modelManager = ModelManager(baseDirectory: base)
         self.voiceEnrollmentSession = voiceEnrollmentSession ?? VoiceEnrollmentSession(directory: base.appendingPathComponent("VoiceWork/Capture", isDirectory: true))
-        notionExporter = NotionExporter(directory: base.appendingPathComponent("Exports/Notion"))
-        notionConnection = baseDirectory == nil ? NotionConnection() : NotionConnection(storage: MemoryNotionConnectionStore(), defaults: UserDefaults(suiteName: "Grove.Notion.QA.\(UUID().uuidString)")!)
+        let notionDiagnostics = NotionDiagnostics(file: base.appendingPathComponent("Diagnostics/notion-requests.json"))
+        notionExporter = NotionExporter(directory: base.appendingPathComponent("Exports/Notion"), diagnostics: notionDiagnostics)
+        notionConnection = baseDirectory == nil ? NotionConnection(diagnostics: notionDiagnostics)
+            : NotionConnection(storage: MemoryNotionConnectionStore(), defaults: UserDefaults(suiteName: "Grove.Notion.QA.\(UUID().uuidString)")!, diagnostics: notionDiagnostics)
         libraryStorage = MeetingLibraryStorage(url: base.appendingPathComponent("library.json"))
         audioDirectory = base.appendingPathComponent("Audio", isDirectory: true)
         transcriptStorage = TranscriptDocumentStorage(directory: base.appendingPathComponent("Documents", isDirectory: true))
@@ -885,6 +887,11 @@ final class GroveStore: ObservableObject {
         _ = await voiceTask?.value
         guard !isExportingOriginal, !isRecording, !isStartingCapture, !isProcessing, !isSavingSpeakerProfile, !isRecognizingVoices else {
             alertMessage = "진행 중인 저장이나 녹음을 마친 뒤 앱을 닫아 주세요."
+            return false
+        }
+        await notionConnection.diagnostics.flush()
+        guard !notionExporter.isSaving, !notionConnection.isConnecting else {
+            alertMessage = "Notion 작업을 마친 뒤 앱을 닫아 주세요."
             return false
         }
         voiceEnrollmentSession.discard()

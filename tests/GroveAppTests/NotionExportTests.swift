@@ -52,7 +52,7 @@ struct NotionExportTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let exporter = NotionExporter(directory: directory)
         let (meeting, document) = try fixture()
-        let client = client([(200, parentPage), (200, parentMarkdown), (200, dividerResult), (200, childPage), (200, childPage), (200, parentPage), (200, childPage)])
+        let client = client([(200, parentPage), (200, parentMarkdown), (200, dividerResult), (200, childPage), (200, childPage), (200, childPage)])
         let first = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
         let repeated = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
         #expect(first == repeated)
@@ -148,6 +148,16 @@ struct NotionExportTests {
         #expect(NotionProtocol.methods == ["GET"])
         #expect(try exporter.receipt(meetingID: meeting.id) == nil)
     }
+    @Test func savingReportsEachStageAndAlwaysClearsProgress() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory)
+        let (meeting, document) = try fixture()
+        let client = ExportStageClient(exporter: exporter, child: child)
+        _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+        #expect(client.stages == [.checkingDestination, .addingDivider, .creatingNote, .verifyingSave])
+        #expect(exporter.stage == nil && !exporter.isSaving)
+    }
     @Test func aDifferentReturnedPageNeverReceivesTheTranscript() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -161,12 +171,29 @@ struct NotionExportTests {
 }
 
 @MainActor
+private final class ExportStageClient: NotionPageClient {
+    private weak var exporter: NotionExporter?
+    let child: String
+    var stages: [NotionExportStage?] = []
+    init(exporter: NotionExporter, child: String) { self.exporter = exporter; self.child = child }
+    func parentTitle(id: String) async throws -> String { "부모" }
+    func inspectParent(id: String) async throws -> NotionExportDestination {
+        stages.append(exporter?.stage)
+        return .init(id: id, hasDivider: false)
+    }
+    func hasDividerAtEnd(parent: String) async throws -> Bool { false }
+    func appendDivider(parent: String) async throws { stages.append(exporter?.stage) }
+    func create(parent: String, title: String, markdown: String) async throws -> String { stages.append(exporter?.stage); return child }
+    func verifyChild(id: String, parent: String) async throws { stages.append(exporter?.stage) }
+}
+
+@MainActor
 private final class RejectedCreationClient: NotionPageClient {
     let child: String
     var attempts = 0
     init(child: String) { self.child = child }
     func parentTitle(id: String) async throws -> String { "부모 페이지" }
-    func ensureDividerAtEnd(parent: String) async throws {}
+    func appendDivider(parent: String) async throws {}
     func hasDividerAtEnd(parent: String) async throws -> Bool { true }
     func verifyChild(id: String, parent: String) async throws {}
     func create(parent: String, title: String, markdown: String) async throws -> String {
@@ -185,7 +212,7 @@ private final class PendingDividerClient: NotionPageClient {
     init(child: String) { self.child = child }
     func parentTitle(id: String) async throws -> String { "부모 페이지" }
     func hasDividerAtEnd(parent: String) async throws -> Bool { dividerExists }
-    func ensureDividerAtEnd(parent: String) async throws {
+    func appendDivider(parent: String) async throws {
         appendCount += 1
         throw NotionExportError.dividerFailed
     }

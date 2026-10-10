@@ -11,6 +11,7 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var tools: [(Int, [String: Any])] = []
     nonisolated(unsafe) static var rawToolResults = false
+    nonisolated(unsafe) static var failNextInitialized = false
     static var metadata: [String: Any] { ["issuer": "https://mcp.notion.com", "authorization_endpoint": "https://mcp.notion.com/authorize",
         "token_endpoint": "https://mcp.notion.com/token", "registration_endpoint": "https://mcp.notion.com/register",
         "code_challenge_methods_supported": ["S256"], "token_endpoint_auth_methods_supported": ["none"]] }
@@ -44,7 +45,10 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
                 let body = (try? JSONSerialization.jsonObject(with: recorded.httpBody ?? Data()) as? [String: Any]) ?? [:]
                 guard let method = body["method"] as? String else { return (400, [:]) }
                 if method == "initialize" { return (200, ["jsonrpc": "2.0", "id": body["id"]!, "result": ["protocolVersion": "2025-11-25", "capabilities": ["tools": [:]]]]) }
-                if method == "notifications/initialized" { return (202, [:]) }
+                if method == "notifications/initialized" {
+                    if Self.failNextInitialized { Self.failNextInitialized = false; return (503, [:]) }
+                    return (202, [:])
+                }
                 if method == "tools/call", let params = body["params"] as? [String: Any],
                    params["name"] as? String == "notion-update-page",
                    let arguments = params["arguments"] as? [String: Any], arguments["command"] as? String == "insert_content",
@@ -66,7 +70,7 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
-    static func reset() { lock.withLock { requests = []; invalidRefresh = false; workspace = "workspace-one"; tools = []; rawToolResults = false } }
+    static func reset() { lock.withLock { requests = []; invalidRefresh = false; workspace = "workspace-one"; tools = []; rawToolResults = false; failNextInitialized = false } }
 }
 
 @MainActor
@@ -282,10 +286,168 @@ struct NotionOAuthTests {
         return ["text": "<page url=\"\(NotionPageLink.url(for: id))\">\(ancestors)<properties>{\"title\":\"검증 페이지\"}</properties><content>\n\(content)\n</content></page>"]
     }
 
+    private func rpcCalls() -> [[String: Any]] {
+        OAuthFixtureProtocol.requests.filter { $0.url?.path == "/mcp" }
+            .compactMap { try? JSONSerialization.jsonObject(with: $0.httpBody ?? Data()) as? [String: Any] }
+    }
+
+    @Test func lookupAndApplyShareInitializationButRefreshTheParentAtSaveTime() async throws {
+        OAuthFixtureProtocol.reset()
+        let parent = "01234567-89ab-cdef-0123-456789abcdef", child = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        OAuthFixtureProtocol.tools = [(200, page(parent, content: "조회 당시")), (200, page(parent, content: "저장 직전")),
+            (200, ["page_id": parent]), (200, ["pages": [["id": child]]]), (200, page(child, parent: parent))]
+        let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
+        let diagnostics = NotionDiagnostics()
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), browser: OAuthFixtureBrowser(), defaults: defaults(), diagnostics: diagnostics)
+        let shared = session()
+        _ = try await connection.client(session: shared).parentTitle(id: parent)
+        #expect(rpcCalls().count == 3)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory, diagnostics: diagnostics)
+        let meeting = MeetingRecord(title: "검증 회의", startedAt: Date(), duration: 1, status: .ready, glossaryProfile: "", transcript: [], claims: [])
+        let document = try TranscriptDocument(speakers: [], utterances: [.init(id: UUID(), startTime: 0, endTime: 1,
+            rawText: "전체 원문", sourceChannelID: "recording", engineClusterID: nil, speakerID: nil, editedText: nil)])
+        _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: connection.client(session: shared))
+        #expect(rpcCalls().count == 7)
+        #expect(rpcCalls().filter { $0["method"] as? String == "initialize" }.count == 1)
+        let tools = rpcCalls().compactMap { $0["params"] as? [String: Any] }.compactMap { $0["name"] as? String }
+        #expect(tools == ["notion-fetch", "notion-fetch", "notion-update-page", "notion-create-pages", "notion-fetch"])
+        #expect(diagnostics.entries.filter { $0.kind == .request }.count == 7)
+        #expect(diagnostics.entries.last?.kind == .export && diagnostics.entries.last?.failed == false)
+        #expect(exporter.stage == nil && !exporter.isSaving)
+    }
+
+    @Test func defaultClientIsReusedAndDisconnectInvalidatesItWithoutRetainingConnection() async throws {
+        let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
+        var connection: NotionConnection? = NotionConnection(storage: storage, defaults: defaults())
+        weak var reference = connection
+        let first = try #require(try connection?.client() as? NotionMCPPageClient)
+        let second = try #require(try connection?.client() as? NotionMCPPageClient)
+        #expect(first === second)
+        try connection?.disconnect()
+        await #expect(throws: NotionConnectionError.self) { _ = try await first.parentTitle(id: "01234567-89ab-cdef-0123-456789abcdef") }
+        connection = nil
+        #expect(reference == nil)
+    }
+
+    @Test func expiredReadSessionInitializesOnceAndRetriesOnlyTheRead() async throws {
+        OAuthFixtureProtocol.reset()
+        let parent = "01234567-89ab-cdef-0123-456789abcdef"
+        OAuthFixtureProtocol.tools = [(200, page(parent)), (404, [:]), (200, page(parent))]
+        let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), defaults: defaults())
+        let client = try connection.client(session: session())
+        _ = try await client.parentTitle(id: parent)
+        _ = try await client.parentTitle(id: parent)
+        #expect(rpcCalls().filter { $0["method"] as? String == "initialize" }.count == 2)
+        let initializeRequests = OAuthFixtureProtocol.requests.filter { String(data: $0.httpBody ?? Data(), encoding: .utf8)?.contains("\"method\":\"initialize\"") == true }
+        #expect(initializeRequests.allSatisfy { $0.value(forHTTPHeaderField: "Mcp-Session-Id") == nil })
+        #expect(rpcCalls().compactMap { $0["params"] as? [String: Any] }.compactMap { $0["name"] as? String } == ["notion-fetch", "notion-fetch", "notion-fetch"])
+    }
+
+    @Test func failedInitializationDoesNotLeaveAnOldSessionOnTheCachedClient() async throws {
+        OAuthFixtureProtocol.reset()
+        let parent = "01234567-89ab-cdef-0123-456789abcdef"
+        OAuthFixtureProtocol.failNextInitialized = true
+        OAuthFixtureProtocol.tools = [(200, page(parent))]
+        let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), defaults: defaults())
+        let shared = session()
+        await #expect(throws: NotionExportError.self) { _ = try await connection.client(session: shared).parentTitle(id: parent) }
+        _ = try await connection.client(session: shared).parentTitle(id: parent)
+        let initialize = OAuthFixtureProtocol.requests.filter { String(data: $0.httpBody ?? Data(), encoding: .utf8)?.contains("\"method\":\"initialize\"") == true }
+        #expect(initialize.count == 2)
+        #expect(initialize.allSatisfy { $0.value(forHTTPHeaderField: "Mcp-Session-Id") == nil })
+    }
+
+    @Test func expiredSessionNeverAutomaticallyRepeatsAWritingRequest() async throws {
+        OAuthFixtureProtocol.reset()
+        let parent = "01234567-89ab-cdef-0123-456789abcdef"
+        OAuthFixtureProtocol.tools = [(200, page(parent)), (404, [:]), (200, page(parent))]
+        let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), defaults: defaults())
+        let client = try connection.client(session: session())
+        _ = try await client.parentTitle(id: parent)
+        do { try await client.appendDivider(parent: parent); Issue.record("Expired write succeeded") }
+        catch NotionExportError.sessionExpired { }
+        catch { Issue.record("Unexpected expiry result: \(error)") }
+        _ = try await client.parentTitle(id: parent)
+        let tools = rpcCalls().compactMap { $0["params"] as? [String: Any] }.compactMap { $0["name"] as? String }
+        #expect(tools.filter { $0 == "notion-update-page" }.count == 1)
+        #expect(rpcCalls().filter { $0["method"] as? String == "initialize" }.count == 2)
+    }
+
+    @Test func asynchronousDividerUsesEveryServerPollHintAndRecordsWaitingSeparately() async throws {
+        OAuthFixtureProtocol.reset()
+        let parent = "01234567-89ab-cdef-0123-456789abcdef"
+        OAuthFixtureProtocol.tools = [(200, ["object": "async_task", "id": "task", "status": "queued", "poll_after_seconds": 0.5]),
+            (200, ["status": "running", "poll_after_seconds": 1.25]), (200, ["status": "succeeded", "result": ["page_id": parent]])]
+        let storage = MemoryNotionConnectionStore(); let grant = try grant(); storage.value = .oauth(grant)
+        let diagnostics = NotionDiagnostics()
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), defaults: defaults(), diagnostics: diagnostics)
+        var time: TimeInterval = 0, waits: [TimeInterval] = []
+        let policy = NotionAsyncPolling(timeout: 10, now: { time }, wait: { waits.append($0); time += $0 })
+        let client = NotionMCPPageClient(connection: connection, grantID: grant.id, session: session(), polling: policy)
+        try await client.appendDivider(parent: parent)
+        #expect(waits == [0.5, 1.25])
+        #expect(diagnostics.entries.filter { $0.kind == .pollWait }.map(\.milliseconds) == [500, 1250])
+        let tools = rpcCalls().compactMap { $0["params"] as? [String: Any] }.compactMap { $0["name"] as? String }
+        #expect(tools == ["notion-update-page", "notion-get-async-task", "notion-get-async-task"])
+    }
+
+    @Test func completedAsyncResponseDoesNotSleepAndLongHintNeverCausesEarlyPolling() async throws {
+        for completed in [true, false] {
+            OAuthFixtureProtocol.reset()
+            let parent = "01234567-89ab-cdef-0123-456789abcdef"
+            OAuthFixtureProtocol.tools = [(200, completed ? ["object": "async_task", "id": "task", "status": "succeeded", "result": ["page_id": parent]]
+                : ["object": "async_task", "id": "task", "status": "queued", "poll_after_seconds": 120])]
+            let storage = MemoryNotionConnectionStore(); let grant = try grant(); storage.value = .oauth(grant)
+            let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), defaults: defaults())
+            let policy = NotionAsyncPolling(timeout: 60, now: { 0 }, wait: { _ in Issue.record("Unexpected wait") })
+            let client = NotionMCPPageClient(connection: connection, grantID: grant.id, session: session(), polling: policy)
+            if completed { try await client.appendDivider(parent: parent) }
+            else { await #expect(throws: NotionExportError.self) { try await client.appendDivider(parent: parent) } }
+            #expect(rpcCalls().filter { $0["method"] as? String == "tools/call" }.count == 1)
+        }
+    }
+
+    @Test func pollingHintsRejectMalformedNumbersWithoutUsingTheirValues() {
+        for value: Any in [0, -1, true, "1", Double.infinity, Double.nan] {
+            #expect(NotionAsyncPolling.interval(["poll_after_seconds": value], fallback: 3) == 3)
+        }
+        #expect(NotionAsyncPolling.interval(["poll_after_seconds": 1]) == 1)
+    }
+
+    @Test func expiredPollingBudgetPersistsTheDividerCheckpointAndNeverRepeatsItsWrite() async throws {
+        OAuthFixtureProtocol.reset()
+        let parent = "01234567-89ab-cdef-0123-456789abcdef"
+        OAuthFixtureProtocol.tools = [(200, page(parent)), (200, ["object": "async_task", "id": "task", "status": "queued", "poll_after_seconds": 1])]
+            + Array(repeating: (200, ["status": "running", "poll_after_seconds": 1]), count: 4) + [(200, page(parent))]
+        let storage = MemoryNotionConnectionStore(); let grant = try grant(); storage.value = .oauth(grant)
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), defaults: defaults())
+        var time: TimeInterval = 0
+        let policy = NotionAsyncPolling(timeout: 5, now: { time }, wait: { time += $0 })
+        let client = NotionMCPPageClient(connection: connection, grantID: grant.id, session: session(), polling: policy)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let meeting = MeetingRecord(title: "검증 회의", startedAt: Date(), duration: 1, status: .ready, glossaryProfile: "", transcript: [], claims: [])
+        let document = try TranscriptDocument(speakers: [], utterances: [.init(id: UUID(), startTime: 0, endTime: 1,
+            rawText: "원문", sourceChannelID: "recording", engineClusterID: nil, speakerID: nil, editedText: nil)])
+        let exporter = NotionExporter(directory: directory)
+        await #expect(throws: NotionExportError.self) { _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client) }
+        #expect(try exporter.receipt(meetingID: meeting.id)?.phase == .dividerPending)
+        let reopened = NotionExporter(directory: directory)
+        await #expect(throws: NotionExportError.self) { _ = try await reopened.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client) }
+        let names = rpcCalls().compactMap { $0["params"] as? [String: Any] }.compactMap { $0["name"] as? String }
+        #expect(names.filter { $0 == "notion-update-page" }.count == 1)
+        #expect(!names.contains("notion-create-pages"))
+    }
+
     @Test func oauthExportAppendsADividerCreatesOneChildAndVerifiesItsParent() async throws {
         OAuthFixtureProtocol.reset()
         let parent = "01234567-89ab-cdef-0123-456789abcdef", child = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        OAuthFixtureProtocol.tools = [(200, page(parent)), (200, page(parent)), (200, ["page_id": parent.replacingOccurrences(of: "-", with: "")]),
+        OAuthFixtureProtocol.tools = [(200, page(parent)), (200, ["page_id": parent.replacingOccurrences(of: "-", with: "")]),
             (200, ["pages": [["id": child]]]), (200, page(child, parent: parent))]
         let storage = MemoryNotionConnectionStore(); storage.value = .oauth(try grant())
         let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), browser: OAuthFixtureBrowser(), defaults: defaults())
@@ -299,8 +461,8 @@ struct NotionOAuthTests {
         #expect(try exporter.receipt(meetingID: meeting.id)?.verified == true)
         let calls = OAuthFixtureProtocol.requests.filter { $0.url?.path == "/mcp" }.compactMap { try? JSONSerialization.jsonObject(with: $0.httpBody ?? Data()) as? [String: Any] }
         let tools = calls.filter { $0["method"] as? String == "tools/call" }.compactMap { $0["params"] as? [String: Any] }
-        #expect(tools.compactMap { $0["name"] as? String } == ["notion-fetch", "notion-fetch", "notion-update-page", "notion-create-pages", "notion-fetch"])
-        let update = tools[2]["arguments"] as? [String: Any]
+        #expect(tools.compactMap { $0["name"] as? String } == ["notion-fetch", "notion-update-page", "notion-create-pages", "notion-fetch"])
+        let update = tools[1]["arguments"] as? [String: Any]
         #expect(update?["command"] as? String == "insert_content")
         #expect(update?["content"] as? String == "\n---\n")
         #expect(update?["new_str"] == nil)

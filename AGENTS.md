@@ -119,6 +119,11 @@ inference, proposals, and unverified items.
 - Notion tokens stay in Keychain. Copy works without a connection. Add a divider and child
   meeting-note page at the chosen parent's end; do not replace the existing parent body.
   Preserve creation receipts and never automatically retry an uncertain page creation.
+- Reuse Notion MCP initialization only within the same OAuth grant. Inspect the parent
+  once at save time; do not reuse an earlier lookup's body for insertion decisions.
+  Respect server poll intervals, retain uncertain-write checkpoints and never automatically
+  repeat a write when its MCP session expires. Diagnostics contain timing / sizes / status
+  only, never tokens, page IDs, URLs or transcript content.
 - Developer ID signing / notarization credentials are supplied locally; do not commit
   credentials or reuse another app's update keys / CloudKit profile for Grove.
 - Use `.work` for new logs, builds, app bundles and native-worker preparation. Retained

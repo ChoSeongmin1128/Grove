@@ -100,12 +100,16 @@ final class NotionConnection: ObservableObject {
     private let defaults: UserDefaults
     private var connectID: UUID?
     private var refreshTask: Task<String, any Error>?
+    let diagnostics: NotionDiagnostics
+    private var cachedClient: (grantID: UUID, session: ObjectIdentifier?, client: NotionMCPPageClient)?
 
     init(storage: any NotionConnectionStoring = KeychainNotionConnectionStore(),
          service: NotionOAuthService = NotionOAuthService(), browser: (any NotionBrowserAuthorizing)? = nil,
          defaults: UserDefaults = .standard,
+         diagnostics: NotionDiagnostics = NotionDiagnostics(),
          now: @escaping () -> Date = Date.init) {
         self.storage = storage; self.service = service; self.browser = browser ?? NotionBrowserAuthorization(); self.now = now; self.defaults = defaults
+        self.diagnostics = diagnostics
         do { stored = try storage.read() ?? .disconnected }
         catch { message = "Notion 연결 정보를 읽지 못했습니다." }
     }
@@ -152,6 +156,7 @@ final class NotionConnection: ObservableObject {
             let grant = NotionOAuthGrant(id: UUID(), clientID: clientID, metadata: metadata, accessToken: tokens.accessToken,
                 refreshToken: refresh, expiresAt: now().addingTimeInterval(tokens.expiresIn), workspaceID: workspace, userID: user)
             try storage.save(.oauth(grant))
+            cachedClient = nil
             stored = .oauth(grant); requiresReconnect = false
         } catch {
             if connectID == id { message = error is CancellationError ? NotionConnectionError.cancelled.localizedDescription : error.localizedDescription }
@@ -164,19 +169,24 @@ final class NotionConnection: ObservableObject {
         guard !isConnecting, !isRefreshing else { throw NotionExportError.busy }
         let cleaned = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty, !cleaned.contains(where: \.isWhitespace) else { throw NotionExportError.missingToken }
-        try storage.save(.manual(cleaned)); stored = .manual(cleaned); requiresReconnect = false; message = nil
+        try storage.save(.manual(cleaned)); cachedClient = nil; stored = .manual(cleaned); requiresReconnect = false; message = nil
     }
 
     func disconnect() throws {
         guard !isConnecting, !isRefreshing else { throw NotionExportError.busy }
-        try storage.save(.disconnected); stored = .disconnected; requiresReconnect = false; message = nil
+        try storage.save(.disconnected); cachedClient = nil; stored = .disconnected; requiresReconnect = false; message = nil
     }
 
     func client(session: URLSession? = nil) throws -> any NotionPageClient {
         guard !requiresReconnect else { throw NotionConnectionError.reconnectRequired }
         switch stored {
         case .manual(let token): return NotionClient(token: token, session: session ?? .shared)
-        case .oauth(let grant): return NotionMCPPageClient(connection: self, grantID: grant.id, session: session ?? NotionNoRedirects.session())
+        case .oauth(let grant):
+            let key = session.map(ObjectIdentifier.init)
+            if let cachedClient, cachedClient.grantID == grant.id, cachedClient.session == key { return cachedClient.client }
+            let client = NotionMCPPageClient(connection: self, grantID: grant.id, session: session ?? NotionNoRedirects.session())
+            cachedClient = (grant.id, key, client)
+            return client
         case .disconnected: throw NotionExportError.missingToken
         }
     }
@@ -188,6 +198,12 @@ final class NotionConnection: ObservableObject {
         if rejectedToken == nil && grant.expiresAt.timeIntervalSince(now()) > 60 { return grant.accessToken }
         isRefreshing = true
         let task = Task { @MainActor in
+            let startedAt = Date(), started = ProcessInfo.processInfo.systemUptime
+            var succeeded = false
+            defer {
+                diagnostics.record(kind: .authentication, operation: "oauth-refresh", startedAt: startedAt,
+                    elapsed: ProcessInfo.processInfo.systemUptime - started, failed: !succeeded)
+            }
             do {
                 let tokens = try await service.refresh(grant)
                 guard case .oauth(let current) = stored, current.id == grantID else { throw NotionConnectionError.connectionChanged }
@@ -196,8 +212,10 @@ final class NotionConnection: ObservableObject {
                 updated.expiresAt = now().addingTimeInterval(tokens.expiresIn)
                 // Persist the rotated pair together before publishing or using either token.
                 try storage.save(.oauth(updated)); stored = .oauth(updated)
+                succeeded = true
                 return updated.accessToken
             } catch {
+                cachedClient = nil
                 requiresReconnect = true
                 message = NotionConnectionError.reconnectRequired.localizedDescription
                 if case NotionConnectionError.reconnectRequired = error {
@@ -209,5 +227,11 @@ final class NotionConnection: ObservableObject {
         refreshTask = task
         defer { refreshTask = nil; isRefreshing = false }
         return try await task.value
+    }
+
+    func validateGrant(id: UUID) throws {
+        guard !requiresReconnect, case .oauth(let grant) = stored, grant.id == id else {
+            throw NotionConnectionError.connectionChanged
+        }
     }
 }
