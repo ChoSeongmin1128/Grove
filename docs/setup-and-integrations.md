@@ -8,8 +8,10 @@
 | Mac 기본 전사 | Apple SpeechTranscriber / SpeechAnalyzer | Grove 모델 없음. macOS 언어 자산이 없으면 Apple에서 준비 | 제공하지 않음 |
 
 최초 선택과 새 녹음 기본값은 라이브러리에 저장한다. 녹음별 설정은 별도로 보존한다.
-기존 설정에서 전사 방식이 없으면 MOSS로 해석한다. 기존 automatic 화자 경로는
-Ultra8 / Community-1 정책을 유지하며, 명시적 선택도 보존한다.
+기존 설정에서 전사 방식이 없으면 MOSS로 해석한다. 새 처리의 화자 분리는 Nemotron 3와
+Community-1(9명 이상 또는 정확한 인원 지정)만 제공한다. 이전 Sortformer / Ultra8 / automatic
+결과는 그대로 읽고, 옵션을 다시 열면 9명 이상이나 정확한 인원 지정이었던 경우 Community-1,
+나머지는 Nemotron 3로 연다.
 Mac 기본 전사는 `transcriptionEngine=apple`, `diarizationPreference=none`으로 저장한다.
 화자 미분리 결과를 단일 화자 추정 또는 화자 확인 완료로 위장하지 않는다.
 
@@ -37,10 +39,9 @@ Mac 기본 전사는 `transcriptionEngine=apple`, `diarizationPreference=none`�
 이유를 표시하며, 마이크 권한 요청 / 파일 복사 / 기존 전사 상태 변경 전에 중단한다.
 재전사 준비 중 취소해도 기존 결과와 옵션은 유지한다.
 
-설정의 모델 화면에서 Mac 기본 전사의 한국어 자산도 준비할 수 있다. Ultra8은
-SHA256 검증을 마친 파일 상태에 묶인 별도 준비 기록을 사용한다. 예전 파일만 있고
-기록이 없으면 Ultra8 준비를 다시 눌러 검증하며, 일치하는 파일을 다시 받지 않는다.
-Sortformer / Community-1은 별도 캐시의 그래프 / 가중치 구성을 확인한다. 캐시 존재
+설정의 모델 화면에서 Mac 기본 전사의 한국어 자산도 준비할 수 있다.
+Community-1은 speech CLI가 받은 캐시가 `Community1Model`의 고정 revision과 같은지 확인한다.
+파일 크기는 준비 상태를 보여줄 때마다, SHA256은 작업 시작 전에 검사한다. 이
 검사는 모델 정확도나 실행 품질 검증이 아니며 앱에서 자동 설치하지 않는다.
 
 ## Calendar

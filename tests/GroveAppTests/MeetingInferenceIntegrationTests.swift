@@ -64,12 +64,11 @@ struct MeetingInferenceIntegrationTests {
             #expect(try configuration.resolvedEngine() == .nemotron3)
             #expect(configuration.expectedSpeakerCount == environment["GROVE_BETA_SPEAKER_COUNT"].flatMap(Int.init))
         }
-        if environment["GROVE_BETA_ENGINE"] == "ultra8" {
-            #expect(meeting.inferenceConfiguration?.diarizationPreference == .ultra8)
-            #expect(meeting.inferenceConfiguration?.speakerCountPolicy == .advisory)
+        if environment["GROVE_BETA_ENGINE"] == "community1" {
+            #expect(meeting.inferenceConfiguration?.diarizationPreference == .community1)
         }
         let utterance = try #require(document.utterances.first)
-        #expect(store.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: "베타 검수 수정"))
+        #expect(store.transcripts.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: "베타 검수 수정"))
         let reopened = GroveStore(baseDirectory: root, inferenceService: service)
         #expect(reopened.transcriptDocuments[meeting.id]?.utterances.first?.displayedText == "베타 검수 수정")
     }
@@ -87,7 +86,6 @@ struct MeetingInferenceIntegrationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let service = MeetingInferenceFixture()
         let store = GroveStore(baseDirectory: base, inferenceService: service)
-        store.defaultSpeakerOptions.engineChoice = .automatic
         store.defaultSpeakerOptions.mode = .manualCount
         store.defaultSpeakerOptions.countText = "4"
         let original = try Data(contentsOf: audio)
@@ -101,13 +99,13 @@ struct MeetingInferenceIntegrationTests {
         #expect(meeting.completedResult?.speakerCounts.first?.expected == 4)
         #expect(meeting.completedResult?.speakerCounts.first?.detected == 1)
         #expect(!store.isProcessing)
-        #expect(try await service.configurations.first?.resolvedEngine() == .ultra8)
+        #expect(try await service.configurations.first?.resolvedEngine() == .nemotron3)
         #expect(await service.configurations.first?.expectedSpeakerCount == 4)
         #expect(try Data(contentsOf: audio) == original)
         #expect(try Data(contentsOf: URL(fileURLWithPath: #require(meeting.audioPath))) == original)
         let reloaded = GroveStore(baseDirectory: base, inferenceService: service)
         #expect(reloaded.transcriptDocuments[meeting.id] == document)
-        #expect(try reloaded.meetings.first?.inferenceConfiguration?.resolvedEngine() == .ultra8)
+        #expect(try reloaded.meetings.first?.inferenceConfiguration?.resolvedEngine() == .nemotron3)
         #expect(reloaded.meetings.first?.inferenceConfiguration?.expectedSpeakerCount == 4)
         let raw = base.appendingPathComponent("Documents/EngineResults/\(meeting.id.uuidString)/\(document.revisionID.uuidString).json")
         #expect(FileManager.default.fileExists(atPath: raw.path))
@@ -121,11 +119,11 @@ struct MeetingInferenceIntegrationTests {
         await store.importRecording(from: audio)
         let id = try #require(store.meetings.first?.id)
         let utterance = try #require(store.transcriptDocuments[id]?.utterances.first)
-        #expect(store.updateUtteranceText(meetingID: id, utteranceID: utterance.id, text: "사용자 수정"))
+        #expect(store.transcripts.updateUtteranceText(meetingID: id, utteranceID: utterance.id, text: "사용자 수정"))
         let corrected = try #require(store.transcriptDocuments[id])
         await store.transcribeMeeting(id: id, plan: .init(configuration:
             .init(expectedSpeakerCount: 4, diarizationPreference: .sortformerStreaming)))
-        #expect(try store.previousTranscripts(meetingID: id).contains { $0.document == corrected })
+        #expect(try store.transcripts.previousTranscripts(meetingID: id).contains { $0.document == corrected })
         let next = try #require(store.transcriptDocuments[id])
         #expect(next.revisionID != corrected.revisionID)
         await service.setBehavior(.fail)
@@ -201,11 +199,10 @@ struct MeetingInferenceIntegrationTests {
         #expect(await service.configurations.isEmpty)
     }
 
-    @Test func betaModesUseUltraAndDoNotClampLargeMeetings() throws {
-        #expect(try MeetingProcessingMode.manualCount.configuration(speakerCount: 4).resolvedEngine() == .ultra8)
-        #expect(try MeetingProcessingMode.manualCount.configuration(speakerCount: 8).resolvedEngine() == .ultra8)
-        #expect(try MeetingProcessingMode.manualCount.configuration(speakerCount: 9).resolvedEngine() == .community1)
-        #expect(try MeetingProcessingMode.automatic.configuration().resolvedEngine() == .ultra8)
+    @Test func engineChoicesDoNotClampLargeMeetings() throws {
+        #expect(try MeetingEngineChoice.nemotron3.configuration(count: 8).resolvedEngine() == .nemotron3)
+        #expect(throws: InferenceError.self) { try MeetingEngineChoice.nemotron3.configuration(count: 9) }
+        #expect(try MeetingEngineChoice.community1.configuration(count: 12).expectedSpeakerCount == 12)
         #expect(MeetingProcessingMode(configuration: .init(expectedSpeakerCount: 8)) == .manualCount)
         #expect(MeetingProcessingMode(configuration: .init(expectedSpeakerCount: 4)) == .manualCount)
     }
@@ -216,7 +213,7 @@ struct MeetingInferenceIntegrationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let service = MeetingInferenceFixture()
         let store = GroveStore(baseDirectory: base, inferenceService: service)
-        store.defaultSpeakerOptions.engineChoice = .automatic
+        store.defaultSpeakerOptions.engineChoice = count <= 8 ? .nemotron3 : .community1
         store.defaultSpeakerOptions.mode = .manualCount
         store.defaultSpeakerOptions.countText = "0"
         await store.importRecording(from: audio)
@@ -227,7 +224,7 @@ struct MeetingInferenceIntegrationTests {
         let config = try #require(await service.configurations.first)
         #expect(config.expectedSpeakerCount == count)
         #expect(config.speakerCountPolicy == (count <= 8 ? .advisory : .exact))
-        #expect(try config.resolvedEngine() == (count <= 8 ? .ultra8 : .community1))
+        #expect(try config.resolvedEngine() == (count <= 8 ? .nemotron3 : .community1))
         let reopened = GroveStore(baseDirectory: base, inferenceService: service)
         #expect(reopened.meetings.first?.inferenceConfiguration == config)
     }

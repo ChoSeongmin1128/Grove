@@ -1,6 +1,8 @@
 # Diarization selection and speaker-count controls
 
-Current source contract. AI-assisted notes; verify against source and tests.
+Historical. Ultra8, Sortformer4 and automatic routing were removed from new processing;
+their saved results remain readable. Current choices are in [setup](setup-and-integrations.md).
+AI-assisted notes; verify against source and tests.
 
 ## Default policy
 

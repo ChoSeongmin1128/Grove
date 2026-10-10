@@ -16,30 +16,36 @@ extension MeetingInferenceRunning {
 struct BundledMeetingInferenceService: MeetingInferenceRunning {
     let appBundle: URL
     let applicationSupport: URL
+    // UI checks read the app's shared model state instead of rescanning model files on every render.
+    var modelsReady: (@MainActor @Sendable () -> Bool)? = nil
 
     @MainActor func preparationIssue(configuration: InferenceConfiguration, appleReady: Bool) -> String? {
-        if configuration.transcriptionEngine == .apple {
-            return appleReady ? nil : TranscriptionError.assetsMissing.localizedDescription
-        }
-        do {
-            let models = ModelManager(baseDirectory: applicationSupport)
-            guard models.isReadyForUse else {
-                return "설정의 모델 화면에서 정밀 전사 모델을 준비해 주세요."
-            }
-            if try configuration.resolvedEngine() == .ultra8, !models.isUltra8Ready {
-                return "설정의 모델 화면에서 Ultra8 모델을 준비해 주세요."
-            }
-            _ = try backend(configuration: configuration)
-            return nil
-        } catch { return error.localizedDescription }
+        issue(configuration: configuration, appleReady: appleReady, modelsReady: modelsReady?() ?? freshModelsReady)
     }
 
     @MainActor func validatePreparation(configuration: InferenceConfiguration) async throws {
         if configuration.transcriptionEngine == .apple {
             try await AppleTranscriptionService.validatePreparation()
-        } else if let issue = preparationIssue(configuration: configuration, appleReady: false) {
+        } else if let issue = issue(configuration: configuration, appleReady: false, modelsReady: freshModelsReady) {
             throw InferenceError.invalidOutput(issue)
+        } else if try configuration.resolvedEngine() == .community1 {
+            try await Task.detached(priority: .userInitiated) {
+                try LegacyDiarizationPreparation.validate(engine: .community1, verifyContents: true)
+            }.value
         }
+    }
+
+    @MainActor private var freshModelsReady: Bool { ModelManager(baseDirectory: applicationSupport).isReadyForUse }
+
+    @MainActor private func issue(configuration: InferenceConfiguration, appleReady: Bool, modelsReady: Bool) -> String? {
+        if configuration.transcriptionEngine == .apple {
+            return appleReady ? nil : TranscriptionError.assetsMissing.localizedDescription
+        }
+        guard modelsReady else { return "설정의 모델 화면에서 정밀 전사 모델을 준비해 주세요." }
+        do {
+            _ = try backend(configuration: configuration)
+            return nil
+        } catch { return error.localizedDescription }
     }
 
     func run(source: URL, configuration: InferenceConfiguration, directory: URL,
@@ -62,9 +68,7 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
     func backend(configuration: InferenceConfiguration) throws -> NativeInferenceBackend {
         let helpers = appBundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
         let moss = helpers.appendingPathComponent("Moss.bundle/Contents/MacOS/MossHarness")
-        let sortformer = helpers.appendingPathComponent("fluidaudiocli")
         let community = helpers.appendingPathComponent("speech")
-        let ultra = helpers.appendingPathComponent("grove-ultra8")
         let nemotron = helpers.appendingPathComponent("Nemotron/bin/nemo-speech")
         let engine = try configuration.resolvedEngine()
         try LegacyDiarizationPreparation.validate(engine: engine)
@@ -72,33 +76,26 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
         switch engine {
         case .none: diarizer = moss
         case .nemotron3: diarizer = nemotron
-        case .sortformerStreaming: diarizer = sortformer
         case .community1: diarizer = community
-        case .ultra8: diarizer = ultra
+        case .sortformerStreaming, .ultra8: throw InferenceError.unsupportedEngine
         }
         for executable in [moss, diarizer] {
             guard FileManager.default.isExecutableFile(atPath: executable.path) else {
                 throw InferenceError.missingExecutable(executable.lastPathComponent)
             }
         }
-        let ultraModel = Ultra8Model.url(in: applicationSupport)
         let nemotronModel = NemotronModel.url(in: applicationSupport)
         if engine == .nemotron3 && !FileManager.default.isReadableFile(atPath: nemotronModel.path) {
             throw InferenceError.invalidOutput("설정의 모델 화면에서 기본 모델을 준비해 주세요.")
         }
-        if engine == .ultra8 && !FileManager.default.isReadableFile(atPath: ultraModel.path) {
-            throw InferenceError.invalidOutput("Ultra8 로컬 모델이 준비되지 않았습니다. 다른 엔진으로 자동 변경하지 않습니다.")
-        }
-        let model = applicationSupport.appendingPathComponent(
-            "Models/hub/models--OpenMOSS-Team--MOSS-Transcribe-Diarize/snapshots/704aa4a9c304e8520be88901e0d1960158ef5b15", isDirectory: true)
-        for file in ["config.json", "tokenizer.json", "tokenizer_config.json", "processor_config.json", "model-00000-of-00001.safetensors"] {
+        let model = MossModel.directory(in: applicationSupport)
+        for file in MossModel.requiredFiles {
             guard FileManager.default.isReadableFile(atPath: model.appendingPathComponent(file).path) else {
                 throw InferenceError.invalidOutput("설정의 모델 화면에서 전사 모델을 먼저 준비해 주세요.")
             }
         }
-        return NativeInferenceBackend(mossExecutable: moss, mossModelDirectory: model,
-            sortformerExecutable: sortformer, communityExecutable: community,
-            ultra8Executable: ultra, ultra8Model: ultraModel, nemotronExecutable: nemotron, nemotronModel: nemotronModel)
+        return NativeInferenceBackend(mossExecutable: moss, mossModelDirectory: model, communityExecutable: community,
+                                      nemotronExecutable: nemotron, nemotronModel: nemotronModel)
     }
 }
 
@@ -111,15 +108,6 @@ enum MeetingProcessingMode: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .automatic: "자동 추정"
         case .manualCount: "인원 입력"
-        }
-    }
-    func configuration(speakerCount: Int? = nil) throws -> InferenceConfiguration {
-        switch self {
-        case .automatic: return .init(diarizationPreference: .automatic)
-        case .manualCount:
-            guard let speakerCount, speakerCount > 0 else { throw InferenceError.invalidSpeakerCount }
-            return .init(expectedSpeakerCount: speakerCount, diarizationPreference: .automatic,
-                         speakerCountPolicy: speakerCount <= 8 ? .advisory : .exact)
         }
     }
     init(configuration: InferenceConfiguration?) {
@@ -163,7 +151,7 @@ extension TranscriptDocument {
             // Keep separate IDs even when both workers label a cluster "Speaker 0".
             for var speaker in document.speakers {
                 speaker.order = speakers.count
-                speaker.name = "화자 \(speakers.count + 1)"
+                speaker.name = MeetingSpeaker.defaultName(order: speakers.count)
                 speakers.append(speaker)
             }
             utterances.append(contentsOf: document.utterances)

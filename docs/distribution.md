@@ -8,7 +8,8 @@ MOSS의 Metal 리소스, Nemotron의 모든 동적 라이브러리와 라이선�
 모델 서버를 운영하지 않고 공식 저장소의 검증한 고정 파일을 내려받는다.
 
 개발 시 native workers는 `.work/native-workers`에서 준비한다.
-MOSS / Ultra8 빌드 절차는 기존 worker 문서, Nemotron은 `scripts/native-nemotron/README.md`를 따른다.
+MOSS는 `scripts/native-moss-harness/README.md`, Nemotron은 `scripts/native-nemotron/README.md`를 따른다.
+Community-1은 speech-swift 공식 릴리스의 `speech` 실행 파일을 쓴다.
 이 작업은 앱 제작 단계에만 해당하며 사용자 Mac에는 해당 도구가 필요하지 않다.
 
 ## 서명 / 공증

@@ -103,3 +103,21 @@ final class ModelDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable
         else { continuation?.resume(returning: partial) }
     }
 }
+
+// Download callbacks arrive per network chunk; publishing each one would redraw the UI hundreds of times a second.
+final class ProgressThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private let interval: TimeInterval
+    private var last: TimeInterval = 0
+
+    init(interval: TimeInterval = 0.2) { self.interval = interval }
+
+    func shouldReport(_ bytes: Int64, of total: Int64) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        return lock.withLock {
+            guard bytes >= total || now - last >= interval else { return false }
+            last = now
+            return true
+        }
+    }
+}

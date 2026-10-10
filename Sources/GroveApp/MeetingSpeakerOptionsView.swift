@@ -44,13 +44,7 @@ struct MeetingSpeakerOptionsView: View {
     private var engineExplanation: String {
         switch options.engineChoice {
         case .nemotron3:
-            return "최대 8명까지 자동으로 구분하는 가벼운 모델입니다. 입력 인원은 결과 확인용이며 강제하지 않습니다. 화자 배정은 전사 후 확인해 주세요."
-        case .automatic:
-            return "인원 미입력 또는 1–8명은 Ultra8, 9명 이상은 Community-1을 사용합니다. 인원 미입력은 최대 8명까지만 구분하므로, 9명 이상이면 인원을 입력해 주세요. Ultra8에서는 인원수가 강제되지 않습니다."
-        case .sortformerStreaming:
-            return "최대 4명까지 자동으로 구분합니다. 입력 인원은 결과 확인용이며, 모델에 인원수를 강제하지 않습니다."
-        case .ultra8:
-            return "최대 8명까지 자동으로 구분합니다. 입력 인원은 결과 확인용이며, 모델에 인원수를 강제하지 않습니다. 한국어 5명 이상 정확도는 추가 검증이 필요합니다."
+            return "최대 8명까지 자동으로 구분하는 가벼운 모델입니다. 입력 인원은 결과 확인용이며 강제하지 않습니다. 9명 이상이면 Community-1을 선택해 주세요."
         case .community1:
             return options.mode == .manualCount ? "입력한 인원수를 화자 분리에 적용합니다." : "인원수를 지정하지 않고 자동으로 추정합니다."
         }

@@ -23,10 +23,10 @@ struct MeetingIntegrationTests {
                 transcription: result.transcription, rawDiarization: [.init(start: 0, end: 1, clusterID: "fake")])
         }
     }
-    @Test func freshDefaultIsLightweightButSavedAutomaticAndUltraRemainStable() throws {
+    @Test func freshDefaultAndRetiredAutomaticChoiceUseNemotron() throws {
         #expect(try MeetingSpeakerOptions().plan(isDual: false).configuration.resolvedEngine() == .nemotron3)
         let json = Data(#"{"mode":"automatic","engineChoice":"automatic","countText":""}"#.utf8)
-        #expect(try JSONDecoder().decode(MeetingSpeakerOptions.self, from: json).plan(isDual: false).configuration.resolvedEngine() == .ultra8)
+        #expect(try JSONDecoder().decode(MeetingSpeakerOptions.self, from: json).plan(isDual: false).configuration.resolvedEngine() == .nemotron3)
     }
     @Test func reminderOccurrenceWindowDoesNotIncludeAllExpiredOrFarFutureEvents() {
         let start = Date(timeIntervalSince1970: 2000)

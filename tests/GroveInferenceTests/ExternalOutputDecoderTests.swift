@@ -29,10 +29,15 @@ struct ExternalOutputDecoderTests {
         #expect(try ExternalOutputDecoder.diarization(community, engine: .community1, duration: 2).first?.clusterID == "5")
     }
 
-    @Test func decoderDoesNotTreatDifferentSortformerShapeAsStreaming() throws {
+    @Test func decoderRejectsAnotherEngineShape() throws {
         let input = Data(#"{"segments":[{"startTimeSeconds":0,"endTimeSeconds":1,"speaker":"speaker_0"}]}"#.utf8)
-        #expect(try ExternalOutputDecoder.diarization(input, engine: .sortformerStreaming, duration: 2).count == 1)
         #expect(throws: (any Error).self) { try ExternalOutputDecoder.diarization(input, engine: .community1, duration: 2) }
+    }
+
+    @Test func unclosedBraceInProgressOutputDoesNotHideTheResult() throws {
+        let output = Data("Loading config {\n".utf8) + Data(#"{"segments":[{"start":0,"end":1,"speaker":"A"}]}"#.utf8)
+        let parsed = try ExternalOutputDecoder.segmentsObject(from: output)
+        #expect((try JSONSerialization.jsonObject(with: parsed) as? [String: Any])?["segments"] is [Any])
     }
 
     @Test func findsJSONWithoutConfusingTranscriptBracesWithStructure() throws {

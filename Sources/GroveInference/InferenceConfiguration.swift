@@ -90,6 +90,7 @@ public enum InferenceError: Error, LocalizedError, Sendable {
     case workerFailed(Int32)
     case jobAlreadyRunning
     case noSpeech
+    case unsupportedEngine
 
     public var errorDescription: String? {
         switch self {
@@ -104,6 +105,7 @@ public enum InferenceError: Error, LocalizedError, Sendable {
         case .workerFailed(let status): "음성 처리 프로세스가 종료됐습니다. 종료 코드: \(status)"
         case .jobAlreadyRunning: "다른 회의를 처리하고 있습니다. 처리가 끝난 뒤 다시 시도해 주세요."
         case .noSpeech: "전사할 음성을 찾지 못했습니다. 원본 녹음은 보존됩니다."
+        case .unsupportedEngine: "이 화자 분리 엔진은 더 이상 제공하지 않습니다. Nemotron 3 또는 Community-1을 선택해 주세요."
         }
     }
 }

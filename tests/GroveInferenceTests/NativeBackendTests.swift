@@ -3,20 +3,25 @@ import Testing
 @testable import GroveInference
 
 struct NativeBackendTests {
-    @Test func retainedSortformerPathCannotTurnIntoOfflineAccidentally() throws {
-        let args = try NativeInferenceBackend.diarizationArguments(audio: URL(fileURLWithPath: "/tmp/input.wav"),
-            output: URL(fileURLWithPath: "/tmp/output.json"),
-            configuration: .init(expectedSpeakerCount: 4, diarizationPreference: .sortformerStreaming))
-        #expect(args.first == "sortformer")
-        #expect(!args.contains("--offline"))
-        #expect(args.contains("all"))
+    @Test func retiredEnginesAreReadableButNeverRunAgain() async throws {
+        let audio = URL(fileURLWithPath: "/tmp/input.wav")
+        let output = URL(fileURLWithPath: "/tmp/output.json")
+        for configuration in [InferenceConfiguration(expectedSpeakerCount: 4, diarizationPreference: .sortformerStreaming),
+                              .init(diarizationPreference: .ultra8), .init(expectedSpeakerCount: 4)] {
+            #expect(throws: InferenceError.self) {
+                try NativeInferenceBackend.diarizationArguments(audio: audio, output: output, configuration: configuration)
+            }
+        }
+        let turns = Data(#"{"segments":[{"start":0,"end":1,"speaker":"0"}]}"#.utf8)
+        #expect(throws: InferenceError.self) { try ExternalOutputDecoder.diarization(turns, engine: .ultra8, duration: 2) }
     }
 
     @Test func knownCountIsAdvisoryUnlessExplicitlyConstrained() throws {
         let audio = URL(fileURLWithPath: "/tmp/input.wav")
         let output = URL(fileURLWithPath: "/tmp/output.json")
         let advisory = try NativeInferenceBackend.diarizationArguments(audio: audio, output: output,
-            configuration: .init(expectedSpeakerCount: 5), ultra8Model: URL(fileURLWithPath: "/tmp/model.onnx"))
+            configuration: .init(expectedSpeakerCount: 5, diarizationPreference: .nemotron3),
+            nemotronModel: URL(fileURLWithPath: "/tmp/model.gguf"))
         let exact = try NativeInferenceBackend.diarizationArguments(audio: audio, output: output,
             configuration: .init(expectedSpeakerCount: 5, speakerCountPolicy: .exact))
         #expect(!advisory.contains("--num-speakers"))

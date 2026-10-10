@@ -3,23 +3,16 @@ import Foundation
 public struct NativeInferenceBackend: Sendable {
     public let mossExecutable: URL
     public let mossModelDirectory: URL
-    public let sortformerExecutable: URL
     public let communityExecutable: URL
-    public let ultra8Executable: URL?
-    public let ultra8Model: URL?
     public let nemotronExecutable: URL?
     public let nemotronModel: URL?
     private let runner = NativeProcessRunner()
 
-    public init(mossExecutable: URL, mossModelDirectory: URL, sortformerExecutable: URL, communityExecutable: URL,
-                ultra8Executable: URL? = nil, ultra8Model: URL? = nil,
+    public init(mossExecutable: URL, mossModelDirectory: URL, communityExecutable: URL,
                 nemotronExecutable: URL? = nil, nemotronModel: URL? = nil) {
         self.mossExecutable = mossExecutable
         self.mossModelDirectory = mossModelDirectory
-        self.sortformerExecutable = sortformerExecutable
         self.communityExecutable = communityExecutable
-        self.ultra8Executable = ultra8Executable
-        self.ultra8Model = ultra8Model
         self.nemotronExecutable = nemotronExecutable
         self.nemotronModel = nemotronModel
     }
@@ -45,32 +38,27 @@ public struct NativeInferenceBackend: Sendable {
         }
         let log = directory.appendingPathComponent("diarization.log")
         let arguments = try Self.diarizationArguments(audio: audio, output: output, configuration: configuration,
-                                                     ultra8Model: ultra8Model, nemotronModel: nemotronModel)
-        let executable: URL
+                                                     nemotronModel: nemotronModel)
         switch engine {
-        case .none: return []
+        case .none:
+            return []
         case .nemotron3:
             guard let nemotronExecutable else { throw InferenceError.missingExecutable("Nemotron 3") }
-            executable = nemotronExecutable
-        case .sortformerStreaming: executable = sortformerExecutable
-        case .community1: executable = communityExecutable
-        case .ultra8:
-            guard let ultra8Executable else { throw InferenceError.missingExecutable("Ultra8") }
-            executable = ultra8Executable
+            try await runner.run(executable: nemotronExecutable, arguments: arguments, directory: directory, log: log)
+        case .community1:
+            // The CLI prints its JSON result on stdout; keep stderr progress out of that stream.
+            let stdout = directory.appendingPathComponent("community1.stdout")
+            try await runner.run(executable: communityExecutable, arguments: arguments, directory: directory,
+                                 log: log, standardOutput: stdout)
+            try ExternalOutputDecoder.segmentsObject(from: Data(contentsOf: stdout)).write(to: output, options: .withoutOverwriting)
+        case .sortformerStreaming, .ultra8:
+            throw InferenceError.unsupportedEngine
         }
-        try await runner.run(executable: executable, arguments: arguments, directory: directory, log: log)
-        let data: Data
-        if engine != .community1 {
-            data = try Data(contentsOf: output)
-        } else {
-            data = try ExternalOutputDecoder.segmentsObject(from: Data(contentsOf: log))
-            try data.write(to: output, options: .withoutOverwriting)
-        }
-        return try ExternalOutputDecoder.diarization(data, engine: engine, duration: duration)
+        return try ExternalOutputDecoder.diarization(Data(contentsOf: output), engine: engine, duration: duration)
     }
 
     public static func diarizationArguments(audio: URL, output: URL, configuration: InferenceConfiguration,
-                                           ultra8Model: URL? = nil, nemotronModel: URL? = nil) throws -> [String] {
+                                           nemotronModel: URL? = nil) throws -> [String] {
         switch try configuration.resolvedEngine() {
         case .none: return []
         case .nemotron3:
@@ -79,19 +67,14 @@ public struct NativeInferenceBackend: Sendable {
                     "--preset", "v3-offline", "--format", "json", "--output", output.path,
                     "--onset", "0.5", "--offset", "0.5", "--pad-onset", "0", "--pad-offset", "0",
                     "--min-duration-on", "0", "--min-duration-off", "0", "--no-batching"]
-        case .sortformerStreaming:
-            // The measured streaming condition uses --compute-units all. Never add
-            // --offline here: that invokes a different model and timeline algorithm.
-            return ["sortformer", audio.path, "--compute-units", "all", "--output", output.path]
         case .community1:
             var arguments = ["diarize", audio.path, "--engine", "community1", "--community1-compute-units", "ane", "--json"]
             if configuration.speakerCountPolicy == .exact, let count = configuration.expectedSpeakerCount {
                 arguments += ["--num-speakers", String(count)]
             }
             return arguments
-        case .ultra8:
-            guard let ultra8Model, ultra8Model.isFileURL else { throw InferenceError.invalidOutput("Ultra8 로컬 모델이 준비되지 않았습니다.") }
-            return [audio.path, ultra8Model.path, output.path]
+        case .sortformerStreaming, .ultra8:
+            throw InferenceError.unsupportedEngine
         }
     }
 }

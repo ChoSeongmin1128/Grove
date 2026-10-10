@@ -2,28 +2,31 @@ import Foundation
 import GroveInference
 
 enum MeetingEngineChoice: String, Codable, CaseIterable, Identifiable {
-    case automatic, nemotron3, sortformerStreaming, ultra8, community1
+    case nemotron3, community1
 
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .automatic: "자동 선택"
         case .nemotron3: "Nemotron 3 (최대 8명, 경량)"
-        case .sortformerStreaming: "Sortformer (최대 4명)"
-        case .ultra8: "Ultra8 (최대 8명)"
         case .community1: "Community-1 (인원 지정 지원)"
         }
     }
 
-    func configuration(mode: MeetingProcessingMode, count: Int?) throws -> InferenceConfiguration {
+    // Retired engines (automatic routing, Sortformer, Ultra8) only remain readable in saved results.
+    // A saved preference that needed 9+ people or an exact count maps to Community-1, otherwise Nemotron 3.
+    init(savedPreference: DiarizationPreference?, count: Int?, policy: SpeakerCountPolicy?) {
+        switch savedPreference {
+        case .community1: self = .community1
+        case .automatic, .ultra8, .sortformerStreaming:
+            self = policy == .exact || (count ?? 0) > 8 ? .community1 : .nemotron3
+        case .nemotron3, .some(.none), nil: self = .nemotron3
+        }
+    }
+
+    func configuration(count: Int?) throws -> InferenceConfiguration {
         let result: InferenceConfiguration
         switch self {
         case .nemotron3: result = .init(expectedSpeakerCount: count, diarizationPreference: .nemotron3)
-        case .automatic: result = try mode.configuration(speakerCount: count)
-        case .sortformerStreaming:
-            result = .init(expectedSpeakerCount: count, diarizationPreference: .sortformerStreaming)
-        case .ultra8:
-            result = .init(expectedSpeakerCount: count, diarizationPreference: .ultra8)
         case .community1:
             result = .init(expectedSpeakerCount: count, diarizationPreference: .community1,
                            speakerCountPolicy: count == nil ? .advisory : .exact)
@@ -70,8 +73,11 @@ struct MeetingSpeakerOptions: Codable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         mode = try values.decodeIfPresent(MeetingProcessingMode.self, forKey: .mode) ?? .automatic
         transcriptionEngine = try values.decodeIfPresent(TranscriptionEngine.self, forKey: .transcriptionEngine) ?? .moss
-        engineChoice = try values.decodeIfPresent(MeetingEngineChoice.self, forKey: .engineChoice) ?? .automatic
         countText = try values.decodeIfPresent(String.self, forKey: .countText) ?? ""
+        let saved = try values.decodeIfPresent(String.self, forKey: .engineChoice)
+        engineChoice = saved.flatMap(MeetingEngineChoice.init(rawValue:)) ?? MeetingEngineChoice(
+            savedPreference: saved.flatMap(DiarizationPreference.init(rawValue:)) ?? .automatic,
+            count: mode == .manualCount ? Int(countText) : nil, policy: nil)
         systemCountText = try values.decodeIfPresent(String.self, forKey: .systemCountText) ?? ""
         microphoneCountText = try values.decodeIfPresent(String.self, forKey: .microphoneCountText) ?? ""
     }
@@ -79,14 +85,17 @@ struct MeetingSpeakerOptions: Codable, Equatable {
     init(configuration: InferenceConfiguration?, channels: [String: InferenceConfiguration]? = nil) {
         transcriptionEngine = configuration?.transcriptionEngine ?? .moss
         mode = .init(configuration: configuration)
-        if let preference = configuration?.diarizationPreference {
-            engineChoice = MeetingEngineChoice(rawValue: preference.rawValue) ?? .automatic
+        if let configuration {
+            engineChoice = MeetingEngineChoice(savedPreference: configuration.diarizationPreference,
+                count: configuration.expectedSpeakerCount, policy: configuration.speakerCountPolicy)
         }
         if let count = configuration?.expectedSpeakerCount { countText = String(count) }
         if let channels {
             let preferences = Set(channels.values.map(\.diarizationPreference))
             if preferences.count == 1, let preference = preferences.first {
-                engineChoice = MeetingEngineChoice(rawValue: preference.rawValue) ?? .automatic
+                let counts = channels.values.compactMap(\.expectedSpeakerCount)
+                engineChoice = MeetingEngineChoice(savedPreference: preference, count: counts.max(),
+                    policy: channels.values.contains { $0.speakerCountPolicy == .exact } ? .exact : nil)
             }
             if channels.values.contains(where: { $0.expectedSpeakerCount != nil }) { mode = .manualCount }
             if let count = channels["system"]?.expectedSpeakerCount { systemCountText = String(count) }
@@ -98,7 +107,7 @@ struct MeetingSpeakerOptions: Codable, Equatable {
         if transcriptionEngine == .apple { return "Mac 기본 전사" }
         guard mode == .manualCount else { return mode.label }
         if let count = try? Self.parseCount(countText) {
-            return engineChoice == .community1 || (engineChoice == .automatic && count > 8) ? "\(count)명 지정" : "\(count)명 (참고)"
+            return engineChoice == .community1 ? "\(count)명 지정" : "\(count)명 (참고)"
         }
         return "인원 입력 필요"
     }
@@ -108,13 +117,13 @@ struct MeetingSpeakerOptions: Codable, Equatable {
             return MeetingInferencePlan(configuration: .init(diarizationPreference: .none, transcriptionEngine: .apple))
         }
         if mode == .manualCount, isDual {
-            let system = try engineChoice.configuration(mode: mode, count: Self.parseCount(systemCountText))
-            let microphone = try engineChoice.configuration(mode: mode, count: Self.parseCount(microphoneCountText))
-            let base = try engineChoice.configuration(mode: .automatic, count: nil)
+            let system = try engineChoice.configuration(count: Self.parseCount(systemCountText))
+            let microphone = try engineChoice.configuration(count: Self.parseCount(microphoneCountText))
+            let base = try engineChoice.configuration(count: nil)
             return MeetingInferencePlan(configuration: base,
                 channelConfigurations: ["system": system, "microphone": microphone])
         }
-        return MeetingInferencePlan(configuration: try engineChoice.configuration(mode: mode,
+        return MeetingInferencePlan(configuration: try engineChoice.configuration(
             count: mode == .manualCount ? Self.parseCount(countText) : nil))
     }
 

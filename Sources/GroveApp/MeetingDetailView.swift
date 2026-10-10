@@ -1,3 +1,4 @@
+import GroveInference
 import SwiftUI
 
 struct MeetingDetailView: View {
@@ -86,7 +87,7 @@ struct MeetingDetailView: View {
                 Text(store.folderName(meeting.folderID))
                 Label(presentation.label, systemImage: presentation.symbol)
                 if let engines = store.transcriptDocuments[meeting.id]?.sourceDiarizationEngines, !engines.isEmpty {
-                    Text(Set(engines.values.map { $0 == .none ? "Mac 기본 전사" : $0 == .nemotron3 ? "Nemotron 3" : $0 == .ultra8 ? "Ultra8" : $0 == .sortformerStreaming ? "Sortformer" : "Community-1" }).sorted().joined(separator: ", "))
+                    Text(Set(engines.values.map(\.displayName)).sorted().joined(separator: ", "))
                 }
                 Text(meeting.startedAt, format: .dateTime.year().month().day().hour().minute())
                 if meeting.duration > 0 { Text(meeting.duration.clockString).monospacedDigit() }
@@ -147,5 +148,17 @@ struct MeetingDetailView: View {
     private func presentTranscriptionOptions() {
         speakerOptions = .init(configuration: meeting.inferenceConfiguration, channels: meeting.channelInferenceConfigurations)
         showsTranscriptionOptions = true
+    }
+}
+
+private extension DiarizationEngine {
+    var displayName: String {
+        switch self {
+        case .none: "Mac 기본 전사"
+        case .nemotron3: "Nemotron 3"
+        case .community1: "Community-1"
+        case .ultra8: "Ultra8"
+        case .sortformerStreaming: "Sortformer"
+        }
     }
 }
