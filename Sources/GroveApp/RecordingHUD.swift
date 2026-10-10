@@ -21,9 +21,15 @@ struct RecordingHUD: View {
                 Text(meeting.title)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
-                Text(recorder.isPaused ? "일시정지됨 · 멈춘 시간은 저장하지 않습니다" : "원본 저장 중")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if recorder.isInputSilent {
+                    Text("입력이 들어오지 않습니다. 마이크 연결과 음소거를 확인해 주세요.")
+                        .font(.caption2)
+                        .foregroundStyle(GroveTheme.evidence)
+                } else {
+                    Text(recorder.isPaused ? "일시정지됨 · 멈춘 시간은 저장하지 않습니다" : "원본 저장 중")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             Text(recorder.elapsed.clockString)
                 .font(.body.monospacedDigit().weight(.medium))

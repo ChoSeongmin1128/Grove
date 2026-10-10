@@ -9,18 +9,52 @@ private final class FakeRecordingDevice: AudioRecordingDevice {
     var currentTime: TimeInterval = 0
     var isMeteringEnabled = false
     var canResume = true
+    var power: Float = -20
     var termination: (@Sendable () -> Void)?
     func prepareToRecord() -> Bool { true }
     func record() -> Bool { isRecording = canResume; return canResume }
     func pause() { isRecording = false }
     func stop() { isRecording = false; currentTime = 0 }
     func updateMeters() {}
-    func averagePower(forChannel channelNumber: Int) -> Float { -20 }
+    func averagePower(forChannel channelNumber: Int) -> Float { power }
     func observeTermination(_ handler: @escaping @Sendable () -> Void) { termination = handler }
 }
 
 @MainActor
+private final class TestClock {
+    var now: TimeInterval = 0
+}
+
+@MainActor
 struct RecordingPauseTests {
+    @Test func sustainedDigitalSilenceWarnsAndQuietSpeechDoesNot() throws {
+        let device = FakeRecordingDevice()
+        let clock = TestClock()
+        let recorder = AudioRecorder(makeRecorder: { _, _ in device }, clock: { clock.now })
+        try recorder.start(to: URL(fileURLWithPath: "/tmp/unused.aac"))
+        device.power = -160
+        recorder.updateMeter()
+        clock.now = AudioRecorder.silenceWarningDelay - 1
+        recorder.updateMeter()
+        #expect(!recorder.isInputSilent)
+        clock.now = AudioRecorder.silenceWarningDelay
+        recorder.updateMeter()
+        #expect(recorder.isInputSilent)
+        device.power = -55
+        recorder.updateMeter()
+        #expect(!recorder.isInputSilent)
+        device.power = -160
+        clock.now += AudioRecorder.silenceWarningDelay
+        recorder.updateMeter()
+        recorder.pause()
+        clock.now += AudioRecorder.silenceWarningDelay * 2
+        try recorder.resume()
+        recorder.updateMeter()
+        #expect(!recorder.isInputSilent)
+        _ = recorder.stop()
+        #expect(!recorder.isInputSilent)
+    }
+
     @Test func stoppedDeviceFinalizesOnceAndPausedDeviceDoesNotFail() throws {
         let device = FakeRecordingDevice()
         let recorder = AudioRecorder(makeRecorder: { _, _ in device })

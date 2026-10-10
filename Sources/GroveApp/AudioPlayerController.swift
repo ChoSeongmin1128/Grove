@@ -69,7 +69,9 @@ final class AudioPlayerController: ObservableObject {
             self.player = player
             loadedPath = path
             sourceChannel = path == meeting.microphoneAudioPath ? "microphone" : path == meeting.systemAudioPath ? "system" : nil
-            duration = player.duration
+            // AVAudioPlayer only estimates the length of an ADTS capture that was never repackaged.
+            duration = URL(fileURLWithPath: path).pathExtension.lowercased() == "aac"
+                ? RecordingFinalizer.duration(of: URL(fileURLWithPath: path)) ?? player.duration : player.duration
             errorMessage = nil
         } catch {
             errorMessage = "녹음 파일을 열지 못했습니다. \(error.localizedDescription)"

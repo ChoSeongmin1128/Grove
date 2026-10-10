@@ -55,18 +55,29 @@ final class AudioRecorder: NSObject, ObservableObject {
     @Published private(set) var isPaused = false
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var level: Double = 0
+    @Published private(set) var isInputSilent = false
     var onUnexpectedStop: ((TimeInterval) -> Void)?
+
+    // An all-zero input reads as -160 dB. Ninety seconds of it before warning is the default
+    // of meeting-transcriber's channel fault monitor; a quiet but live microphone stays above it.
+    static let digitalSilenceFloor: Float = -120
+    static let silenceWarningDelay: TimeInterval = 90
 
     private var recorder: (any AudioRecordingDevice)?
     private var meterTimer: Timer?
     private var captureID: UUID?
+    private var silentSince: TimeInterval?
+    private var activity: (any NSObjectProtocol)?
     private let makeRecorder: (URL, [String: Any]) throws -> any AudioRecordingDevice
     private let permissionRequester: () async -> Bool
+    private let clock: () -> TimeInterval
 
     init(makeRecorder: @escaping (URL, [String: Any]) throws -> any AudioRecordingDevice = { try SystemRecordingDevice(url: $0, settings: $1) },
-         permissionRequester: @escaping () async -> Bool = AudioRecorder.requestSystemPermission) {
+         permissionRequester: @escaping () async -> Bool = AudioRecorder.requestSystemPermission,
+         clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.makeRecorder = makeRecorder
         self.permissionRequester = permissionRequester
+        self.clock = clock
         super.init()
     }
 
@@ -110,7 +121,10 @@ final class AudioRecorder: NSObject, ObservableObject {
         isPaused = false
         elapsed = 0
         level = 0
+        resetSilence()
         isRecording = true
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled],
+                                                         reason: "Recording a meeting")
         meterTimer?.invalidate()
         meterTimer = Timer.scheduledTimer(
             timeInterval: 0.08,
@@ -133,6 +147,9 @@ final class AudioRecorder: NSObject, ObservableObject {
         isPaused = false
         elapsed = finalDuration
         level = 0
+        resetSilence()
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
         return finalDuration
     }
 
@@ -142,6 +159,7 @@ final class AudioRecorder: NSObject, ObservableObject {
         elapsed = recorder.currentTime
         isPaused = true
         level = 0
+        resetSilence()
     }
 
     func resume() throws {
@@ -160,6 +178,19 @@ final class AudioRecorder: NSObject, ObservableObject {
         let decibels = recorder.averagePower(forChannel: 0)
         level = max(0, min(1, pow(10, Double(decibels) / 28)))
         elapsed = recorder.currentTime
+        if decibels <= Self.digitalSilenceFloor {
+            let now = clock()
+            let since = silentSince ?? now
+            silentSince = since
+            if !isInputSilent && now - since >= Self.silenceWarningDelay { isInputSilent = true }
+        } else {
+            resetSilence()
+        }
+    }
+
+    private func resetSilence() {
+        silentSince = nil
+        if isInputSilent { isInputSilent = false }
     }
 
     private func recordingTerminated(captureID: UUID) {
