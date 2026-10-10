@@ -85,6 +85,16 @@ struct VoiceRecognitionPolicyTests {
         #expect(result.reason == .belowSimilarity)
     }
 
+    @Test func withheldDecisionsKeepScoresForCalibration() {
+        let first = record(), close = record(angle: 0.1)
+        let ambiguous = VoiceRecognitionPolicy.evaluate(samples: [voice(), voice(angle: 0.02)], enrollments: [first, close])
+        #expect(ambiguous.reason == .ambiguousProfiles && ambiguous.profileID == nil)
+        #expect(ambiguous.bestSimilarity != nil && ambiguous.runnerUpSimilarity != nil)
+        #expect((ambiguous.bestSimilarity ?? 0) >= (ambiguous.runnerUpSimilarity ?? 1))
+        let accepted = VoiceRecognitionPolicy.evaluate(samples: [voice(), voice(angle: 0.05)], enrollments: [first, record(angle: .pi / 2)])
+        #expect(accepted.profileID == first.profileID && accepted.bestSimilarity == accepted.similarity)
+    }
+
     @Test func singleProfileDoesNotInventRunnerUpConfidence() {
         let result = VoiceRecognitionPolicy.evaluate(samples: [voice(), voice()], enrollments: [record()])
         #expect(result.profileID != nil)

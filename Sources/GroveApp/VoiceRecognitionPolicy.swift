@@ -57,10 +57,15 @@ enum VoiceRecognitionPolicy {
         let supportingSamples: Int
         let reason: Reason?
         let policyVersion: String
+        // Scores of the deciding query, kept even when no name is given so thresholds can
+        // be calibrated against labelled meetings later.
+        var bestSimilarity: Float? = nil
+        var runnerUpSimilarity: Float? = nil
 
-        static func unknown(_ reason: Reason) -> Self {
+        static func unknown(_ reason: Reason, best: Float? = nil, runnerUp: Float? = nil) -> Self {
             Self(profileID: nil, similarity: nil, runnerUpMargin: nil,
-                 supportingSamples: 0, reason: reason, policyVersion: version)
+                 supportingSamples: 0, reason: reason, policyVersion: version,
+                 bestSimilarity: best, runnerUpSimilarity: runnerUp)
         }
     }
 
@@ -116,6 +121,7 @@ enum VoiceRecognitionPolicy {
         var selected: UUID?
         var minimumScore: Float = 1
         var narrowestMargin: Float?
+        var decidingRunnerUp: Float?
         for query in samples {
             var scored: [(UUID, Float)] = []
             for record in compatible {
@@ -128,20 +134,24 @@ enum VoiceRecognitionPolicy {
                 if left.1 == right.1 { return left.0.uuidString < right.0.uuidString }
                 return left.1 > right.1
             }
+            let runnerUp = scored.count > 1 ? scored[1].1 : nil
             guard let winner = scored.first, winner.1.isFinite, winner.1 >= thresholds.similarity else {
-                return .unknown(.belowSimilarity)
+                return .unknown(.belowSimilarity, best: scored.first?.1, runnerUp: runnerUp)
             }
-            if scored.count > 1 {
-                let margin = winner.1 - scored[1].1
-                guard margin >= thresholds.margin else { return .unknown(.ambiguousProfiles) }
+            if let runnerUp {
+                let margin = winner.1 - runnerUp
+                guard margin >= thresholds.margin else { return .unknown(.ambiguousProfiles, best: winner.1, runnerUp: runnerUp) }
                 narrowestMargin = min(narrowestMargin ?? margin, margin)
             }
-            guard selected == nil || selected == winner.0 else { return .unknown(.conflictingVotes) }
+            guard selected == nil || selected == winner.0 else {
+                return .unknown(.conflictingVotes, best: winner.1, runnerUp: runnerUp)
+            }
             selected = winner.0
-            minimumScore = min(minimumScore, winner.1)
+            if winner.1 <= minimumScore { minimumScore = winner.1; decidingRunnerUp = runnerUp }
         }
         return Decision(profileID: selected, similarity: minimumScore, runnerUpMargin: narrowestMargin,
-                        supportingSamples: samples.count, reason: nil, policyVersion: version)
+                        supportingSamples: samples.count, reason: nil, policyVersion: version,
+                        bestSimilarity: minimumScore, runnerUpSimilarity: decidingRunnerUp)
     }
 
     private static func medianSimilarity(query: SpeakerVoicePrint, enrollment: [VoiceEnrollmentSample]) -> Float? {

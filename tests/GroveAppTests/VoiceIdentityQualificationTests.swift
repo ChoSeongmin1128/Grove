@@ -24,6 +24,8 @@ struct VoiceIdentityQualificationTests {
         let reason: String?
         let similarity: Float?
         let margin: Float?
+        let best: Float?
+        let runnerUp: Float?
     }
     struct Trial: Codable {
         let thresholds: VoiceRecognitionPolicy.Thresholds
@@ -94,8 +96,8 @@ struct VoiceIdentityQualificationTests {
         let modelIDs = Set(features.values.flatMap { $0.map { $0.voicePrint.modelIdentifier } })
         try #require(modelIDs.count == 1)
         var trials: [Trial] = []
-        for similarity: Float in [0.80, 0.85, 0.90] {
-            for margin: Float in [0.10, 0.15, 0.20] {
+        for similarity: Float in [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90] {
+            for margin: Float in [0.05, 0.10, 0.15, 0.20] {
                 let thresholds = VoiceRecognitionPolicy.Thresholds(similarity: similarity, margin: margin)
                 var rows: [Row] = []
                 for query in manifest.queries {
@@ -107,7 +109,8 @@ struct VoiceIdentityQualificationTests {
                     let result = VoiceRecognitionPolicy.evaluate(samples: features[query.id]!.map(\.voicePrint), enrollments: selected, thresholds: thresholds)
                     let predicted = records.first { $0.value.profileID == result.profileID }?.key
                     rows.append(.init(id: query.id, expected: expected, predicted: predicted, reason: result.reason?.rawValue,
-                        similarity: result.similarity, margin: result.runnerUpMargin))
+                        similarity: result.similarity, margin: result.runnerUpMargin,
+                        best: result.bestSimilarity, runnerUp: result.runnerUpSimilarity))
                 }
                 let known = rows.filter { $0.expected != nil }, unknown = rows.filter { $0.expected == nil }
                 trials.append(.init(thresholds: thresholds, knownQueries: known.count,
