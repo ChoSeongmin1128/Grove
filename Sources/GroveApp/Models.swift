@@ -87,32 +87,13 @@ struct MeetingRecord: Identifiable, Codable, Hashable, Sendable {
     var claims: [EvidenceClaim]
     var errorMessage: String?
 
-    var reviewCount: Int {
-        transcript.filter { ($0.confidence ?? 1) < 0.72 || $0.isRevised }.count
-            + claims.filter { !$0.isReviewed }.count
-    }
-}
-
-struct GlossaryTerm: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID = UUID()
-    var canonical: String
-    var observedForms: [String]
-    var isEnabled: Bool
+    // Stored with each record by earlier versions; the app no longer applies glossaries.
+    static let noGlossaryProfile = "사전 없음"
 }
 
 enum SidebarDestination: Hashable {
     case library
     case unfiled
     case folder(UUID)
-    case review
-    case glossary
     case meeting(UUID)
-}
-
-enum MeetingTab: String, CaseIterable, Identifiable {
-    case minutes = "회의록"
-    case transcript = "대화"
-    case review = "검토"
-
-    var id: String { rawValue }
 }

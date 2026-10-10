@@ -12,16 +12,17 @@ enum VoiceIdentityReleaseGate {
 
 protocol SpeakerVoiceExtracting: Sendable {
     func extractSamples(source: URL, ranges: [VoiceSampleRange], workingDirectory: URL) async throws -> [VoiceEmbeddingSample]
+    /// The identifier new samples would carry, or nil when it cannot be determined.
+    func currentModelIdentifier() throws -> String?
+}
+
+extension SpeakerVoiceExtracting {
+    func currentModelIdentifier() throws -> String? { nil }
 }
 
 struct LocalSpeakerVoiceService: SpeakerVoiceExtracting {
     let modelDirectory: URL
     var recipe: VoiceEmbeddingRecipe = .activeFrameCenteredV2
-
-    static func defaultModelDirectory() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("FluidAudio/Models/speaker-diarization", isDirectory: true)
-    }
 
     func extractSamples(source: URL, ranges: [VoiceSampleRange], workingDirectory: URL) async throws -> [VoiceEmbeddingSample] {
         for name in ["FBank.mlmodelc", "Embedding.mlmodelc"] {
@@ -31,6 +32,11 @@ struct LocalSpeakerVoiceService: SpeakerVoiceExtracting {
         }
         return try await VoiceEmbeddingExtractor(modelDirectory: modelDirectory, recipe: recipe)
             .extractSamples(source: source, ranges: ranges, workingDirectory: workingDirectory)
+    }
+
+    func currentModelIdentifier() throws -> String? {
+        guard FileManager.default.fileExists(atPath: modelDirectory.appendingPathComponent("Embedding.mlmodelc").path) else { return nil }
+        return try VoiceEmbeddingExtractor.modelFingerprint(directory: modelDirectory, recipe: recipe)
     }
 }
 
@@ -91,7 +97,7 @@ enum VoiceIdentitySelection {
     }
 
     static func permitsAutomaticName(_ speaker: MeetingSpeaker, in document: TranscriptDocument) -> Bool {
-        guard speaker.profileMatch == nil, speaker.name == "화자 \(speaker.order + 1)" else { return false }
+        guard speaker.profileMatch == nil, speaker.hasDefaultName else { return false }
         for change in document.undoHistory + document.redoHistory {
             for mutation in change.mutations {
                 switch mutation {

@@ -7,7 +7,7 @@ extension TranscriptDocument {
         let orderedClusters = result.rawDiarization.sorted { $0.start < $1.start }.reduce(into: [String]()) { ids, turn in
             if !ids.contains(turn.clusterID) { ids.append(turn.clusterID) }
         }
-        let speakers = orderedClusters.enumerated().map { MeetingSpeaker(name: "화자 \($0.offset + 1)", order: $0.offset) }
+        let speakers = orderedClusters.enumerated().map { MeetingSpeaker(name: MeetingSpeaker.defaultName(order: $0.offset), order: $0.offset) }
         let speakerByCluster = Dictionary(uniqueKeysWithValues: zip(orderedClusters, speakers.map(\.id)))
         let assignmentByUtterance = Dictionary(uniqueKeysWithValues: result.assignments.map { ($0.utteranceID, $0) })
         let utterances = result.transcription.utterances.map { utterance in

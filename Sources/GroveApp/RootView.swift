@@ -92,8 +92,6 @@ struct RootView: View {
         case .library, .none: "모든 녹음"
         case .unfiled: "미분류"
         case .folder(let id): store.folderName(id)
-        case .review: "검토"
-        case .glossary: "사전"
         case .meeting(let id): store.meetings.first(where: { $0.id == id })?.title ?? "Grove"
         }
     }
@@ -108,10 +106,6 @@ struct RootView: View {
             LibraryHomeView(store: store, showsUnfiled: true)
         case .folder(let id):
             LibraryHomeView(store: store, folderID: id)
-        case .review:
-            ReviewInboxView(store: store)
-        case .glossary:
-            GlossaryView(store: store)
         case .meeting(let id):
             if let meeting = store.meetings.first(where: { $0.id == id }) {
                 MeetingDetailView(store: store, meeting: meeting)

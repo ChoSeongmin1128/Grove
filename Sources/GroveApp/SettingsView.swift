@@ -14,8 +14,6 @@ struct SettingsView: View {
                     Text("각 녹음에서 따로 변경할 수 있습니다. 기존 녹음에는 적용되지 않습니다.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("이 베타에서는 사용자 사전이 전사에 적용되지 않습니다.")
-                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("원본 보관", value: "녹음 파일과 전사 원문 유지")
                 Text("텍스트와 화자를 수정해도 원문은 바뀌지 않습니다. 대화 화면에서 변경을 되돌릴 수 있습니다.")
                     .font(.callout).foregroundStyle(.secondary)

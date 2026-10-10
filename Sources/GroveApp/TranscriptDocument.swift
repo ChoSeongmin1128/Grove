@@ -6,6 +6,9 @@ struct MeetingSpeaker: Identifiable, Codable, Hashable, Sendable {
     var name: String
     var order: Int
     var profileMatch: SpeakerProfileMatch? = nil
+
+    static func defaultName(order: Int) -> String { "화자 \(order + 1)" }
+    var hasDefaultName: Bool { name == Self.defaultName(order: order) }
 }
 
 struct DocumentUtterance: Identifiable, Codable, Hashable, Sendable {
@@ -241,7 +244,7 @@ struct TranscriptDocument: Codable, Hashable, Sendable {
         guard let speaker = speakers.first(where: { $0.id == id }), let old = speaker.profileMatch,
               !old.isConfirmed else { throw TranscriptEditError.missingSpeaker }
         try commit(TranscriptChange(label: "추정한 화자 이름 해제", mutations: [
-            .speakerName(id: id, before: speaker.name, after: old.originalName ?? "화자 \(speaker.order + 1)"),
+            .speakerName(id: id, before: speaker.name, after: old.originalName ?? MeetingSpeaker.defaultName(order: speaker.order)),
             .speakerProfile(id: id, before: old, after: nil)
         ]))
     }
