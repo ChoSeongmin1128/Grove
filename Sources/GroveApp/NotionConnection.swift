@@ -211,17 +211,28 @@ final class NotionConnection: ObservableObject {
                 updated.accessToken = tokens.accessToken; updated.refreshToken = tokens.refreshToken!
                 updated.expiresAt = now().addingTimeInterval(tokens.expiresIn)
                 // Persist the rotated pair together before publishing or using either token.
-                try storage.save(.oauth(updated)); stored = .oauth(updated)
+                do { try storage.save(.oauth(updated)) }
+                catch {
+                    // The server already rotated the pair, so the stored refresh token is dead.
+                    cachedClient = nil
+                    requiresReconnect = true
+                    message = NotionConnectionError.reconnectRequired.localizedDescription
+                    throw error
+                }
+                stored = .oauth(updated)
                 succeeded = true
                 return updated.accessToken
-            } catch {
+            } catch NotionConnectionError.reconnectRequired {
+                // Only a rejected refresh token ends the grant. Network or server failures
+                // fail this request and leave the stored connection usable for a retry.
                 cachedClient = nil
                 requiresReconnect = true
                 message = NotionConnectionError.reconnectRequired.localizedDescription
-                if case NotionConnectionError.reconnectRequired = error {
-                    try storage.save(.disconnected); stored = .disconnected
-                }
-                throw error
+                try storage.save(.disconnected); stored = .disconnected
+                throw NotionConnectionError.reconnectRequired
+            } catch NotionConnectionError.connectionChanged {
+                cachedClient = nil
+                throw NotionConnectionError.connectionChanged
             }
         }
         refreshTask = task

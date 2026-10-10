@@ -59,7 +59,7 @@ final class NotionMCPTransport {
         let task = Task { @MainActor in
             do {
                 let result = try await rpc("initialize", params: ["protocolVersion": protocolVersion,
-                    "capabilities": [:], "clientInfo": ["name": "Grove", "version": "0.4.0"]])
+                    "capabilities": [:], "clientInfo": ["name": "Grove", "version": Self.clientVersion]])
                 guard let version = result["protocolVersion"] as? String,
                       ["2025-03-26", "2025-06-18", "2025-11-25"].contains(version) else { throw NotionConnectionError.invalidResponse }
                 protocolVersion = version
@@ -75,6 +75,8 @@ final class NotionMCPTransport {
         defer { initialization = nil }
         try await task.value
     }
+
+    private static let clientVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
 
     private func resetSession(ifMatching id: String) {
         guard sessionID == id else { return }

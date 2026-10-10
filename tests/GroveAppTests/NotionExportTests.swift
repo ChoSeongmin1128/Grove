@@ -97,6 +97,23 @@ struct NotionExportTests {
         #expect(try reopened.receipt(meetingID: meeting.id)?.verified == true)
     }
 
+    @Test func userCanDiscardOnlyADividerWhoseResultWasNeverConfirmed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let exporter = NotionExporter(directory: directory)
+        let (meeting, document) = try fixture()
+        let client = PendingDividerClient(child: child)
+        _ = try? await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+        #expect(try exporter.receipt(meetingID: meeting.id)?.phase == .dividerPending)
+        try exporter.discardPendingDivider(meetingID: meeting.id)
+        #expect(try exporter.receipt(meetingID: meeting.id) == nil)
+        client.dividerExists = true
+        _ = try await exporter.save(meeting: meeting, document: document, parentLink: parent, original: false, client: client)
+        #expect(client.createCount == 1)
+        #expect(throws: NotionExportError.self) { try exporter.discardPendingDivider(meetingID: meeting.id) }
+        #expect(try exporter.receipt(meetingID: meeting.id)?.verified == true)
+    }
+
     @Test func anUnwritableReceiptPreventsTheFirstRemoteMutation() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)

@@ -7,6 +7,7 @@ import Testing
 private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
     nonisolated(unsafe) static var invalidRefresh = false
+    nonisolated(unsafe) static var unavailableRefresh = false
     nonisolated(unsafe) static var workspace = "workspace-one"
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var tools: [(Int, [String: Any])] = []
@@ -38,6 +39,7 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
             case "/token":
                 let refresh = String(data: recorded.httpBody ?? Data(), encoding: .utf8)?.contains("grant_type=refresh_token") == true
                 if refresh && Self.invalidRefresh { return (400, ["error": "invalid_grant"]) }
+                if refresh && Self.unavailableRefresh { return (503, ["error": "temporarily_unavailable"]) }
                 var result: [String: Any] = ["access_token": refresh ? "rotated-access" : "access", "refresh_token": refresh ? "rotated-refresh" : "refresh", "token_type": "bearer", "expires_in": 3600]
                 if !refresh { result["workspace_id"] = Self.workspace; result["user_id"] = "authorized-user" }
                 return (200, result)
@@ -70,7 +72,7 @@ private final class OAuthFixtureProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
-    static func reset() { lock.withLock { requests = []; invalidRefresh = false; workspace = "workspace-one"; tools = []; rawToolResults = false; failNextInitialized = false } }
+    static func reset() { lock.withLock { requests = []; invalidRefresh = false; unavailableRefresh = false; workspace = "workspace-one"; tools = []; rawToolResults = false; failNextInitialized = false } }
 }
 
 @MainActor
@@ -220,6 +222,17 @@ struct NotionOAuthTests {
         await #expect(throws: (any Error).self) { try await connection.accessToken(grantID: grant.id) }
         #expect(storage.value == .disconnected && connection.requiresReconnect)
         #expect(OAuthFixtureProtocol.requests.filter { $0.url?.path == "/token" }.count == 1)
+    }
+
+    @Test func temporaryRefreshFailureKeepsTheGrantForARetry() async throws {
+        OAuthFixtureProtocol.reset(); OAuthFixtureProtocol.unavailableRefresh = true
+        let storage = MemoryNotionConnectionStore(), grant = try grant(); storage.value = .oauth(grant)
+        let connection = NotionConnection(storage: storage, service: NotionOAuthService(session: session()), browser: OAuthFixtureBrowser(), defaults: defaults())
+        await #expect(throws: (any Error).self) { try await connection.accessToken(grantID: grant.id) }
+        #expect(storage.value == .oauth(grant) && !connection.requiresReconnect && connection.isConnected)
+        OAuthFixtureProtocol.unavailableRefresh = false
+        _ = try await connection.accessToken(grantID: grant.id)
+        #expect(OAuthFixtureProtocol.requests.filter { $0.url?.path == "/token" }.count == 2)
     }
 
     @Test func rotatedTokensAreNotPublishedWhenTheirAtomicSaveFails() async throws {

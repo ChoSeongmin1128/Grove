@@ -125,7 +125,7 @@ struct ModelSettingsView: View {
             Section("전사 모델") {
                 ForEach(ModelGroup.allCases) { group in
                     LabeledContent(group.label) {
-                        Text((group == .voiceIdentity ? models.isVoiceModelReady : group == .ultra8 ? models.isUltra8Ready : models.isReadyForUse) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
+                        Text((group == .voiceIdentity ? models.isVoiceModelReady : models.isReadyForUse) ? "준비됨" : "준비 필요").foregroundStyle(.secondary)
                     }
                 }
                 Text("다운로드 약 1.9 GB. 설치 후에는 인터넷 없이 전사할 수 있습니다.")
@@ -136,16 +136,15 @@ struct ModelSettingsView: View {
                 } else {
                     HStack {
                         Button(models.isReadyForUse ? "모델 확인" : "모델 설치") { models.install() }.disabled(isBusy)
-                        Button("Ultra8 준비") { models.install(groups: [.ultra8]) }.disabled(isBusy)
                         Button("목소리 모델 준비") { models.install(groups: [.voiceIdentity]) }.disabled(isBusy)
                     }
                 }
                 if let message = models.message { Text(message).font(.caption).foregroundStyle(.secondary) }
             }
             Section("모델 선택") {
-                Text("Nemotron 3는 최대 8명을 자동으로 구분하며 인원수를 강제하지 않습니다. 전사 후 화자 배정을 확인해 주세요. 기존 녹음의 모델 선택은 유지됩니다.")
+                Text("Nemotron 3는 최대 8명을 자동으로 구분하며 인원수를 강제하지 않습니다. 전사 후 화자 배정을 확인해 주세요. 기존 녹음의 결과는 그대로 유지됩니다.")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("Sortformer와 Community-1은 기존 고급 선택지입니다. 해당 모델을 별도로 준비한 환경에서 사용할 수 있습니다.")
+                Text("Community-1은 9명 이상이거나 인원을 정확히 지정할 때 쓰는 고급 선택지입니다. 해당 모델을 별도로 준비한 환경에서 사용할 수 있습니다.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("모델 폴더 열기") { NSWorkspace.shared.open(models.baseDirectory.appendingPathComponent("Models")) }
             }
@@ -297,6 +296,15 @@ struct NotionExportSheet: View {
                 if exporter.isSaving {
                     ProgressView().controlSize(.small)
                     if let stage = exporter.stage { Text(stage.label).font(.caption).foregroundStyle(.secondary) }
+                }
+                if dividerPending && !exporter.isSaving {
+                    Button("처음부터 다시") {
+                        do {
+                            try exporter.discardPendingDivider(meetingID: meeting.id)
+                            dividerPending = false
+                            message = nil
+                        } catch { message = error.localizedDescription }
+                    }.help("구분선이 추가되지 않은 것을 Notion에서 확인한 뒤 누르세요. 회의록 페이지는 만들어지지 않았습니다.")
                 }
                 Button(dividerPending ? "결과 확인" : "적용") {
                     Task {

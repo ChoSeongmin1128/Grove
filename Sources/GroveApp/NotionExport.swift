@@ -241,6 +241,14 @@ final class NotionExporter: ObservableObject {
         try persist(receipt)
         return NotionPageLink.url(for: page)
     }
+    /// Clears a receipt whose divider request never got a confirmed result. Only the user
+    /// does this after checking the page; no page creation was attempted for this receipt.
+    func discardPendingDivider(meetingID: UUID) throws {
+        guard !isSaving, let receipt = try receipt(meetingID: meetingID),
+              receipt.phase == .dividerPending, receipt.pageID == nil else { throw NotionExportError.invalidParent }
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(meetingID.uuidString + ".json"))
+    }
+
     private func persist(_ receipt: NotionExportReceipt) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(receipt).write(to: directory.appendingPathComponent(receipt.meetingID.uuidString + ".json"), options: .atomic)
@@ -270,7 +278,7 @@ enum NotionExportError: Error, LocalizedError {
         case .dividerFailed: "구분선 추가 결과를 확인하지 못했습니다. 다시 적용하면 페이지 하단을 확인한 뒤 이어서 처리합니다."
         case .requestRejected: "Notion이 요청 형식을 거부했습니다. Grove 업데이트 후 다시 시도해 주세요."
         case .sessionExpired: "Notion 연결이 만료됐습니다. 다시 적용해 주세요."
-        case .dividerPending: "구분선 추가 결과를 아직 확인하지 못했습니다. '결과 확인'으로 기존 요청의 결과를 확인해 주세요."
+        case .dividerPending: "구분선 추가 결과를 아직 확인하지 못했습니다. '결과 확인'을 누르거나, 페이지 끝에 구분선이 없다면 '처음부터 다시'를 눌러 주세요."
         case .http(let status): switch status {
             case 401: "Notion에 다시 연결해 주세요."
             case 403, 404: "이 페이지에 접근할 수 없습니다. Notion 페이지의 연결 설정과 쓰기 권한을 확인해 주세요."
