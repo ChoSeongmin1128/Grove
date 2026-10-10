@@ -38,7 +38,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version0.4.0 / local-beta.25. This is a personal local beta, a
+The source targets version 0.4.0 / local-beta.25. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -151,6 +151,12 @@ licenses and private evidence before scoped cleanup.
 
 ## Research boundaries and next work
 
+- AI summaries and ChatGPT / Claude provider authentication are not implemented.
+  The current source only has evidence-claim data / display scaffolding; it does not
+  generate summaries. Provider integration was researched and deferred. A future
+  implementation requires new authorization, provider eligibility / billing checks,
+  explicit transcript transmission and separate summary revisions linked to source
+  utterances. No provider token or summary request was created during the research.
 - Notion OAuth uses public-client PKCE / dynamic registration with the official hosted
   MCP endpoint. No Grove auth server, app secret or user-installed CLI is needed. Grant
   metadata and user-selected destinations replace team / workspace / email allowlists.
@@ -181,7 +187,8 @@ licenses and private evidence before scoped cleanup.
 
 See [transcript/library UX](transcript-library-ux.md), [file management](recording-file-management.md),
 [release readiness](release-readiness.md), [saved speakers](microphone-folders-and-speaker-reuse.md)
-and [artifact retention](artifact-retention.md). Historical private notes and local
-installation details remain under ignored `results/`.
+and [artifact retention](artifact-retention.md). Private handoff and decision records
+are reached through root `HANDOFF.md` / `.local`; generated installation evidence
+belongs in `.work/`. Retained historical experiments may still exist in `results/`.
 
 See [setup and integrations](setup-and-integrations.md) and [distribution](distribution.md).

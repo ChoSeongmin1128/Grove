@@ -36,6 +36,9 @@ inference, proposals, and unverified items.
 - User glossaries are optional machine-local profiles and never public defaults.
 - Preserve original audio and raw transcripts. Store corrections, speaker assignments,
   and summaries as separate revisions.
+- AI summaries and ChatGPT / Claude provider sign-in are not implemented. Provider
+  research is not implementation approval. Require a new user request before adding
+  provider authentication or transmitting transcripts for summaries.
 - Unexpected recording completion and encoding failures terminate only their own capture,
   preserve meeting audio and publish an interrupted state. Pausing is not completion.
 - Prepare playback after the recording file is finalized, including the same detail view

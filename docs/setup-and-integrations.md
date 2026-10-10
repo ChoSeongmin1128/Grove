@@ -133,6 +133,14 @@ MCP의 `insert_content` 본문은 `content`에 전달한다. `new_str`는 전체
 비동기 계약의 정본은 [Notion MCP](https://developers.notion.com/guides/mcp/mcp-supported-tools#async-page-create-and-update),
 세션 재초기화 기준은 [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management)임.
 
+## AI 요약
+
+현재 자동 요약과 ChatGPT / Claude 연결은 구현하지 않음. 전사 결과의 결정 / 할 일
+자료형과 표시 코드가 있다는 사실은 자동 생성 기능의 구현을 뜻하지 않음.
+외부 제공업체 연동은 조사만 진행했고 보류함. 새 구현 요청 전에는 인증 정보나
+전사문 전송을 추가하지 않음. 향후 제공한다면 요약은 원문과 별도 결과로 저장하고,
+각 결정 / 할 일의 근거 발화를 연결하며 담당자 / 기한을 원문 없이 추정하지 않음.
+
 ## 구현 위치
 
 화면 제목이나 버튼만으로 알 수 있는 내용은 설명문으로 반복하지 않는다.
