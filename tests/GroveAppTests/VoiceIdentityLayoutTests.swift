@@ -46,7 +46,7 @@ struct VoiceIdentityLayoutTests {
             .environment(\.colorScheme, .dark),
             size: CGSize(width: 580, height: 540),
             destination: output.appendingPathComponent("voice-enrollment-empty.png"))
-        #expect(await store.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: "등록 전 이름"))
+        #expect(await store.voice.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: "등록 전 이름"))
         try render(FolderSpeakerLibraryView(store: store, folderID: folderID).environment(\.colorScheme, .dark),
                    size: CGSize(width: 540, height: 300),
                    destination: output.appendingPathComponent("voice-library-names-only.png"))
@@ -54,7 +54,7 @@ struct VoiceIdentityLayoutTests {
         try render(FolderSpeakerLibraryView(store: gatedStore, folderID: folderID).environment(\.colorScheme, .dark),
                    size: CGSize(width: 540, height: 360),
                    destination: output.appendingPathComponent("voice-library-production-gate.png"))
-        let profileID = try #require(gatedStore.addTeamMember(folderID: folderID, name: "등록할 팀원"))
+        let profileID = try #require(gatedStore.libraryStore.addTeamMember(folderID: folderID, name: "등록할 팀원"))
         let profile = try #require(gatedStore.speakerProfiles(in: folderID).first { $0.id == profileID })
         if let modelPath = ProcessInfo.processInfo.environment["GROVE_VOICE_IDENTITY_MODELS"] {
             let destination = base.appendingPathComponent("Models/VoiceIdentity")

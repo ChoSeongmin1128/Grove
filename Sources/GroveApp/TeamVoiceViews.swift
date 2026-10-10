@@ -27,8 +27,8 @@ struct TeamMemberNameSheet: View {
                 Spacer()
                 Button("취소") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(profile == nil ? "추가" : "저장") {
-                    let saved = profile.map { store.renameTeamMember(profileID: $0.id, name: name) }
-                        ?? (store.addTeamMember(folderID: folderID, name: name) != nil)
+                    let saved = profile.map { store.libraryStore.renameTeamMember(profileID: $0.id, name: name) }
+                        ?? (store.libraryStore.addTeamMember(folderID: folderID, name: name) != nil)
                     if saved { dismiss() } else { error = "이름을 저장하지 못했습니다." }
                 }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy)
@@ -60,7 +60,8 @@ struct MeetingAttendanceView: View {
                         HStack {
                             Text(profile.name)
                             Spacer()
-                            Text(store.voiceProfileIsRegistered(profile.id) ? "목소리 등록됨" : "이름만 등록")
+                            Text(store.voice.needsReenrollment(profile.id) ? "재등록 필요"
+                                 : store.voice.isRegistered(profile.id) ? "목소리 등록됨" : "이름만 등록")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }.toggleStyle(.checkbox)
@@ -172,7 +173,7 @@ struct RecordedVoiceEnrollmentSheet: View {
                 }
             }
             if let error = session.error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
-            if store.voiceProfileIsRegistered(profile.id) {
+            if store.voice.isRegistered(profile.id) {
                 Text("등록하면 이전 목소리가 교체됩니다.").font(.caption).foregroundStyle(.secondary)
             }
             Divider()
@@ -185,7 +186,7 @@ struct RecordedVoiceEnrollmentSheet: View {
                     Button(submitting ? "등록 중" : "등록") {
                         submitting = true
                         Task {
-                            if await store.enrollRecordedVoice(profileID: profile.id, permissionConfirmed: permissionConfirmed) { dismiss() }
+                            if await store.voice.enrollRecordedVoice(profileID: profile.id, permissionConfirmed: permissionConfirmed) { dismiss() }
                             submitting = false
                         }
                     }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)

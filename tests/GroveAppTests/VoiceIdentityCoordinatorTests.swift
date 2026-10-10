@@ -67,6 +67,13 @@ private actor CoordinatorVoiceExtractor: SpeakerVoiceExtracting {
     }
 }
 
+private struct ReplacedModelExtractor: SpeakerVoiceExtracting {
+    func extractSamples(source: URL, ranges: [VoiceSampleRange], workingDirectory: URL) async throws -> [VoiceEmbeddingSample] {
+        throw CoordinatorVoiceFailure.injected
+    }
+    func currentModelIdentifier() throws -> String? { "synthetic-coordinator-voice-v2" }
+}
+
 private func coordinatorResult(configuration: InferenceConfiguration = .init(expectedSpeakerCount: 1),
                                mixedThirdSpan: Bool = false) throws -> InferenceResult {
     var activities: [DiarizationTurn] = [
@@ -142,8 +149,8 @@ private struct VoiceCoordinatorFixture {
     func enroll(_ meeting: MeetingRecord, name: String = "저장한 사람", automatic: Bool = false) async throws -> SavedSpeakerProfile {
         let document = try document(meeting)
         let speaker = try #require(document.speakers.first)
-        let ids = Set(store.voiceEnrollmentCandidates(meetingID: meeting.id, speakerID: speaker.id).map(\.id))
-        let saved = await store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: name,
+        let ids = Set(store.voice.enrollmentCandidates(meetingID: meeting.id, speakerID: speaker.id).map(\.id))
+        let saved = await store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: name,
                                            selectedUtteranceIDs: ids, permissionConfirmed: true,
                                            enableAutomaticIdentification: automatic)
         try #require(saved, Comment(rawValue: store.alertMessage ?? "enrollment should succeed"))
@@ -167,20 +174,20 @@ struct VoiceIdentityCoordinatorTests {
         // Omit the injection flag to exercise the shipped constructor default too.
         let productionDefault = GroveStore(baseDirectory: fixture.root, inferenceService: fixture.inference,
                                           voiceVault: fixture.vault, voiceExtractor: fixture.extractor)
-        #expect(!productionDefault.voiceIdentificationAvailable)
-        #expect(!fixture.store.voiceIdentificationAvailable)
-        #expect(!(await fixture.store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "사용 불가 등록",
+        #expect(!productionDefault.voice.isAvailable)
+        #expect(!fixture.store.voice.isAvailable)
+        #expect(!(await fixture.store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "사용 불가 등록",
             selectedUtteranceIDs: Set(document.utterances.map(\.id)), permissionConfirmed: true,
             enableAutomaticIdentification: true)))
-        #expect(!fixture.store.setAutomaticSpeakerIdentification(folderID: fixture.folderID, enabled: true))
-        await fixture.store.identifySpeakers(meetingID: meeting.id)
+        #expect(!fixture.store.voice.setAutomaticIdentification(folderID: fixture.folderID, enabled: true))
+        await fixture.store.voice.identifySpeakers(meetingID: meeting.id)
         await fixture.store.transcribeMeeting(id: meeting.id)
         #expect(await fixture.extractor.calls == 0)
         #expect(fixture.store.speakerProfiles(in: fixture.folderID).isEmpty)
         #expect(try fixture.document(meeting).speakers.allSatisfy { $0.profileMatch == nil })
         #expect(fixture.store.meetings.first?.status == .ready)
         let currentSpeakerID = try #require(fixture.document(meeting).speakers.first?.id)
-        #expect(await fixture.store.saveSpeakerProfile(meetingID: meeting.id,
+        #expect(await fixture.store.voice.saveSpeakerProfile(meetingID: meeting.id,
             speakerID: currentSpeakerID, name: "계속 가능한 이름 저장"))
         #expect(await fixture.extractor.calls == 0)
     }
@@ -193,19 +200,35 @@ struct VoiceIdentityCoordinatorTests {
         try MeetingRecordStorage(url: fixture.root.appendingPathComponent("meetings.json")).save(fixture.store.meetings)
         let gated = GroveStore(baseDirectory: fixture.root, inferenceService: fixture.inference,
                                voiceVault: fixture.vault, voiceExtractor: fixture.extractor)
-        await gated.refreshVoiceEnrollmentStatus()
+        await gated.voice.refreshEnrollmentStatus()
         #expect(gated.library.folders.first?.automaticSpeakerIdentification == true)
-        #expect(!gated.automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
-        #expect(gated.voiceProfileIsRegistered(profile.id))
-        await gated.identifySpeakers(meetingID: query.id)
+        #expect(!gated.voice.automaticIdentificationEnabled(folderID: fixture.folderID))
+        #expect(gated.voice.isRegistered(profile.id))
+        await gated.voice.identifySpeakers(meetingID: query.id)
         await gated.transcribeMeeting(id: query.id)
         #expect(await fixture.extractor.calls == 1)
         #expect(gated.meetings.first(where: { $0.id == query.id })?.status == .ready)
         #expect(gated.transcriptDocuments[query.id]?.speakers.allSatisfy { $0.profileMatch == nil } == true)
-        #expect(await gated.removeVoiceEnrollment(profileID: profile.id))
-        #expect(!gated.voiceProfileHasStorage(profile.id))
+        #expect(await gated.voice.removeVoiceEnrollment(profileID: profile.id))
+        #expect(!gated.voice.hasStorage(profile.id))
         #expect(gated.speakerProfiles(in: fixture.folderID).first?.name == profile.name)
-        #expect(gated.removeSpeakerProfile(id: profile.id))
+        #expect(gated.voice.removeSpeakerProfile(id: profile.id))
+    }
+
+    @Test func enrollmentFromAnotherVoiceModelIsMarkedForReenrollment() async throws {
+        let fixture = try VoiceCoordinatorFixture()
+        defer { fixture.clean() }
+        let profile = try await fixture.enroll(fixture.addMeeting(), automatic: false)
+        let unchanged = GroveStore(baseDirectory: fixture.root, inferenceService: fixture.inference,
+                                   voiceVault: fixture.vault, voiceExtractor: fixture.extractor)
+        await unchanged.voice.refreshEnrollmentStatus()
+        await unchanged.voice.refreshModelCompatibility()
+        #expect(unchanged.voice.isRegistered(profile.id) && !unchanged.voice.needsReenrollment(profile.id))
+        let replaced = GroveStore(baseDirectory: fixture.root, inferenceService: fixture.inference,
+                                  voiceVault: fixture.vault, voiceExtractor: ReplacedModelExtractor())
+        await replaced.voice.refreshEnrollmentStatus()
+        await replaced.voice.refreshModelCompatibility()
+        #expect(replaced.voice.needsReenrollment(profile.id))
     }
 
     @Test func savingNameNeverExtractsOrRegistersVoice() async throws {
@@ -213,12 +236,12 @@ struct VoiceIdentityCoordinatorTests {
         defer { fixture.clean() }
         let meeting = try fixture.addMeeting()
         let speaker = try #require(fixture.document(meeting).speakers.first)
-        #expect(await fixture.store.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: "이름만 저장"))
+        #expect(await fixture.store.voice.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: "이름만 저장"))
         let profile = try #require(fixture.store.speakerProfiles(in: fixture.folderID).first)
         #expect(await fixture.extractor.calls == 0)
         #expect(profile.voice == nil)
         #expect(try await !fixture.vault.hasRecord(profileID: profile.id))
-        #expect(!fixture.store.automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
+        #expect(!fixture.store.voice.automaticIdentificationEnabled(folderID: fixture.folderID))
     }
 
     @Test func consentAndExplicitMinimumSelectionAreRequiredBeforeExtraction() async throws {
@@ -228,14 +251,14 @@ struct VoiceIdentityCoordinatorTests {
         let document = try fixture.document(meeting)
         let speaker = try #require(document.speakers.first)
         let ids = Set(document.utterances.map(\.id))
-        #expect(!(await fixture.store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "합성 화자",
+        #expect(!(await fixture.store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "합성 화자",
             selectedUtteranceIDs: ids, permissionConfirmed: false, enableAutomaticIdentification: true)))
-        #expect(!(await fixture.store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "합성 화자",
+        #expect(!(await fixture.store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "합성 화자",
             selectedUtteranceIDs: Set(document.utterances.prefix(2).map(\.id)), permissionConfirmed: true,
             enableAutomaticIdentification: true)))
         #expect(await fixture.extractor.calls == 0)
         #expect(fixture.store.speakerProfiles(in: fixture.folderID).isEmpty)
-        #expect(!fixture.store.automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
+        #expect(!fixture.store.voice.automaticIdentificationEnabled(folderID: fixture.folderID))
     }
 
     @Test func rawMixedSpeakerEvidenceCannotBecomeEnrollmentBySelection() async throws {
@@ -244,10 +267,10 @@ struct VoiceIdentityCoordinatorTests {
         let meeting = try fixture.addMeeting(mixedThirdSpan: true)
         let document = try fixture.document(meeting)
         let speaker = try #require(document.speakers.first)
-        let candidates = fixture.store.voiceEnrollmentCandidates(meetingID: meeting.id, speakerID: speaker.id)
+        let candidates = fixture.store.voice.enrollmentCandidates(meetingID: meeting.id, speakerID: speaker.id)
         #expect(candidates.count == 2)
         #expect(candidates.allSatisfy { $0.endTime < 12 })
-        #expect(!(await fixture.store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "합성 화자",
+        #expect(!(await fixture.store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "합성 화자",
             selectedUtteranceIDs: Set(document.utterances.map(\.id)), permissionConfirmed: true,
             enableAutomaticIdentification: false)))
         #expect(await fixture.extractor.calls == 0)
@@ -275,10 +298,10 @@ struct VoiceIdentityCoordinatorTests {
             #expect(!text.contains("audioSHA256"))
         }
         let restarted = fixture.reopened()
-        await restarted.refreshVoiceEnrollmentStatus()
-        #expect(restarted.voiceProfileIsRegistered(profile.id))
+        await restarted.voice.refreshEnrollmentStatus()
+        #expect(restarted.voice.isRegistered(profile.id))
         #expect(restarted.speakerProfiles(in: fixture.folderID).first?.id == profile.id)
-        #expect(!restarted.automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
+        #expect(!restarted.voice.automaticIdentificationEnabled(folderID: fixture.folderID))
     }
 
     @Test func automaticHookRunsOnlyForExplicitlyEnabledFolder() async throws {
@@ -290,7 +313,7 @@ struct VoiceIdentityCoordinatorTests {
         await fixture.store.transcribeMeeting(id: disabled.id)
         #expect(await fixture.extractor.calls == 1)
         #expect(try fixture.document(disabled).speakers.first?.profileMatch == nil)
-        #expect(fixture.store.setAutomaticSpeakerIdentification(folderID: fixture.folderID, enabled: true))
+        #expect(fixture.store.voice.setAutomaticIdentification(folderID: fixture.folderID, enabled: true))
         let enabled = try fixture.addMeeting()
         await fixture.store.transcribeMeeting(id: enabled.id)
         #expect(await fixture.extractor.calls == 2)
@@ -302,7 +325,7 @@ struct VoiceIdentityCoordinatorTests {
         await fixture.store.transcribeMeeting(id: outside.id)
         #expect(await fixture.extractor.calls == 2)
         #expect(try fixture.document(outside).speakers.first?.profileMatch == nil)
-        #expect(fixture.reopened().automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
+        #expect(fixture.reopened().voice.automaticIdentificationEnabled(folderID: fixture.folderID))
     }
 
     @Test func suggestedIdentityConfirmRejectAndUndoDoNotEnrollOrChangeText() async throws {
@@ -314,19 +337,19 @@ struct VoiceIdentityCoordinatorTests {
         let original = try fixture.document(query)
         let originalSpeaker = try #require(original.speakers.first)
         let enrollmentBefore = try await fixture.vault.load(profileID: profile.id, folderID: fixture.folderID)
-        await fixture.store.identifySpeakers(meetingID: query.id)
+        await fixture.store.voice.identifySpeakers(meetingID: query.id)
         let proposed = try fixture.document(query)
         #expect(proposed.speakers.first?.profileMatch?.isConfirmed == false)
         #expect(proposed.speakers.first?.name == profile.name)
         #expect(proposed.utterances == original.utterances)
-        #expect(fixture.store.confirmSpeakerIdentity(meetingID: query.id, speakerID: originalSpeaker.id))
+        #expect(fixture.store.voice.confirmIdentity(meetingID: query.id, speakerID: originalSpeaker.id))
         #expect(try fixture.document(query).speakers.first?.profileMatch?.isConfirmed == true)
-        fixture.store.undoTranscriptEdit(meetingID: query.id)
+        fixture.store.transcripts.undo(meetingID: query.id)
         #expect(try fixture.document(query).speakers.first?.profileMatch?.isConfirmed == false)
-        #expect(fixture.store.rejectSpeakerIdentity(meetingID: query.id, speakerID: originalSpeaker.id))
+        #expect(fixture.store.voice.rejectIdentity(meetingID: query.id, speakerID: originalSpeaker.id))
         #expect(try fixture.document(query).speakers.first?.name == originalSpeaker.name)
         #expect(try fixture.document(query).speakers.first?.profileMatch == nil)
-        fixture.store.undoTranscriptEdit(meetingID: query.id)
+        fixture.store.transcripts.undo(meetingID: query.id)
         #expect(try fixture.document(query).speakers.first?.profileMatch?.isConfirmed == false)
         #expect(try await fixture.vault.load(profileID: profile.id, folderID: fixture.folderID) == enrollmentBefore)
         #expect(await fixture.extractor.calls == 2)
@@ -339,12 +362,12 @@ struct VoiceIdentityCoordinatorTests {
         _ = try await fixture.enroll(source)
         let query = try fixture.addMeeting()
         let speaker = try #require(fixture.document(query).speakers.first)
-        #expect(fixture.store.renameSpeaker(meetingID: query.id, speakerID: speaker.id, name: "직접 정한 이름"))
-        await fixture.store.identifySpeakers(meetingID: query.id)
+        #expect(fixture.store.transcripts.renameSpeaker(meetingID: query.id, speakerID: speaker.id, name: "직접 정한 이름"))
+        await fixture.store.voice.identifySpeakers(meetingID: query.id)
         #expect(try fixture.document(query).speakers.first?.name == "직접 정한 이름")
-        fixture.store.undoTranscriptEdit(meetingID: query.id)
+        fixture.store.transcripts.undo(meetingID: query.id)
         #expect(try fixture.document(query).speakers.first?.name == speaker.name)
-        await fixture.store.identifySpeakers(meetingID: query.id)
+        await fixture.store.voice.identifySpeakers(meetingID: query.id)
         #expect(try fixture.document(query).speakers.first?.profileMatch == nil)
         #expect(await fixture.extractor.calls == 1)
     }
@@ -356,7 +379,7 @@ struct VoiceIdentityCoordinatorTests {
         let source = try fixture.addMeeting(payload: payload)
         _ = try await fixture.enroll(source)
         let copy = try fixture.addMeeting(payload: payload)
-        await fixture.store.identifySpeakers(meetingID: copy.id)
+        await fixture.store.voice.identifySpeakers(meetingID: copy.id)
         #expect(try fixture.document(copy).speakers.first?.profileMatch == nil)
         #expect(await fixture.extractor.calls == 1)
     }
@@ -367,13 +390,13 @@ struct VoiceIdentityCoordinatorTests {
         let source = try fixture.addMeeting()
         let profile = try await fixture.enroll(source)
         let before = try fixture.document(source)
-        #expect(!fixture.store.removeSpeakerProfile(id: profile.id))
-        #expect(await fixture.store.removeVoiceEnrollment(profileID: profile.id))
+        #expect(!fixture.store.voice.removeSpeakerProfile(id: profile.id))
+        #expect(await fixture.store.voice.removeVoiceEnrollment(profileID: profile.id))
         #expect(try await !fixture.vault.hasRecord(profileID: profile.id))
         #expect(try fixture.keys.generations(profileID: profile.id).isEmpty)
         #expect(fixture.store.speakerProfiles(in: fixture.folderID).first?.name == profile.name)
         #expect(try fixture.document(source) == before)
-        #expect(fixture.store.removeSpeakerProfile(id: profile.id))
+        #expect(fixture.store.voice.removeSpeakerProfile(id: profile.id))
         #expect(fixture.store.speakerProfiles(in: fixture.folderID).isEmpty)
         #expect(try fixture.document(source) == before)
     }
@@ -388,27 +411,27 @@ struct VoiceIdentityCoordinatorTests {
         let document = try fixture.document(meeting)
         let speaker = try #require(document.speakers.first)
         fixture.keys.failDeletion(keyCleanupFails)
-        #expect(!(await fixture.store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "실패한 등록",
+        #expect(!(await fixture.store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "실패한 등록",
             selectedUtteranceIDs: Set(document.utterances.map(\.id)), permissionConfirmed: true,
             enableAutomaticIdentification: true)))
         let profile = try #require(fixture.store.speakerProfiles(in: fixture.folderID).first)
-        #expect(fixture.store.voiceProfileHasStorage(profile.id))
-        #expect(!fixture.store.voiceProfileIsRegistered(profile.id))
-        #expect(!fixture.store.removeSpeakerProfile(id: profile.id))
-        #expect(!(await fixture.store.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: "다른 이름")))
+        #expect(fixture.store.voice.hasStorage(profile.id))
+        #expect(!fixture.store.voice.isRegistered(profile.id))
+        #expect(!fixture.store.voice.removeSpeakerProfile(id: profile.id))
+        #expect(!(await fixture.store.voice.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: "다른 이름")))
         #expect(fixture.store.speakerProfiles(in: fixture.folderID).map(\.id) == [profile.id])
         #expect(try fixture.keys.generations(profileID: profile.id).count == (keyCleanupFails ? 1 : 0))
         let restarted = fixture.reopened()
-        await restarted.refreshVoiceEnrollmentStatus()
-        #expect(restarted.voiceProfileHasStorage(profile.id))
-        #expect(!restarted.removeSpeakerProfile(id: profile.id))
+        await restarted.voice.refreshEnrollmentStatus()
+        #expect(restarted.voice.hasStorage(profile.id))
+        #expect(!restarted.voice.removeSpeakerProfile(id: profile.id))
         fixture.keys.failDeletion(false)
-        #expect(await restarted.removeVoiceEnrollment(profileID: profile.id))
-        #expect(!restarted.voiceProfileHasStorage(profile.id))
+        #expect(await restarted.voice.removeVoiceEnrollment(profileID: profile.id))
+        #expect(!restarted.voice.hasStorage(profile.id))
         #expect(try fixture.keys.generations(profileID: profile.id).isEmpty)
-        #expect(restarted.removeSpeakerProfile(id: profile.id))
+        #expect(restarted.voice.removeSpeakerProfile(id: profile.id))
         #expect(restarted.speakerProfiles(in: fixture.folderID).isEmpty)
-        #expect(!restarted.automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
+        #expect(!restarted.voice.automaticIdentificationEnabled(folderID: fixture.folderID))
         #expect(try fixture.document(meeting) == document)
     }
 
@@ -422,13 +445,13 @@ struct VoiceIdentityCoordinatorTests {
         let speaker = try #require(original.speakers.first)
         let utterance = try #require(original.utterances.first)
         await fixture.extractor.setBehavior(.blocked)
-        let task = Task { await fixture.store.identifySpeakers(meetingID: query.id) }
+        let task = Task { await fixture.store.voice.identifySpeakers(meetingID: query.id) }
         defer { task.cancel() }
         try await waitForCalls(2, on: fixture.extractor)
         if edit == "name" {
-            #expect(fixture.store.renameSpeaker(meetingID: query.id, speakerID: speaker.id, name: "처리 중 바꾼 이름"))
+            #expect(fixture.store.transcripts.renameSpeaker(meetingID: query.id, speakerID: speaker.id, name: "처리 중 바꾼 이름"))
         } else {
-            #expect(fixture.store.updateUtteranceText(meetingID: query.id, utteranceID: utterance.id, text: "처리 중 수정한 발화"))
+            #expect(fixture.store.transcripts.updateUtteranceText(meetingID: query.id, utteranceID: utterance.id, text: "처리 중 수정한 발화"))
         }
         let edited = try fixture.document(query)
         await fixture.extractor.setBehavior(.normal)
@@ -446,16 +469,16 @@ struct VoiceIdentityCoordinatorTests {
         let speaker = try #require(original.speakers.first)
         await fixture.extractor.setBehavior(.blocked)
         let task = Task {
-            await fixture.store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "취소할 이름",
+            await fixture.store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: "취소할 이름",
                 selectedUtteranceIDs: Set(original.utterances.map(\.id)), permissionConfirmed: true,
                 enableAutomaticIdentification: true)
         }
         defer { task.cancel() }
         try await waitForCalls(1, on: fixture.extractor)
-        fixture.store.cancelVoiceWork()
+        fixture.store.voice.cancelWork()
         #expect(await task.value == false)
         #expect(fixture.store.speakerProfiles(in: fixture.folderID).isEmpty)
-        #expect(!fixture.store.automaticSpeakerIdentificationEnabled(folderID: fixture.folderID))
+        #expect(!fixture.store.voice.automaticIdentificationEnabled(folderID: fixture.folderID))
         #expect(try fixture.document(meeting) == original)
         #expect(!fixture.store.isBusy)
     }
@@ -468,7 +491,7 @@ struct VoiceIdentityCoordinatorTests {
         let query = try fixture.addMeeting()
         let original = try fixture.document(query)
         await fixture.extractor.setBehavior(.blocked)
-        let task = Task { await fixture.store.identifySpeakers(meetingID: query.id) }
+        let task = Task { await fixture.store.voice.identifySpeakers(meetingID: query.id) }
         defer { task.cancel() }
         try await waitForCalls(2, on: fixture.extractor)
         task.cancel()
@@ -491,7 +514,7 @@ struct VoiceIdentityCoordinatorTests {
         #expect(updated.errorMessage == nil)
         #expect(try fixture.document(query).utterances.count == 3)
         #expect(try fixture.document(query).speakers.first?.profileMatch == nil)
-        #expect(fixture.store.voiceIdentificationMessage(for: query.id) != nil)
+        #expect(fixture.store.voice.message(for: query.id) != nil)
         #expect(!fixture.store.isBusy)
     }
 
@@ -510,7 +533,7 @@ struct VoiceIdentityCoordinatorTests {
         let result = try InferenceResult(duration: 36, configuration: .init(expectedSpeakerCount: 2),
             transcription: RawTranscription(utterances: utterances), rawDiarization: turns)
         try fixture.store.acceptInferenceResult(result, meetingID: query.id, sourceChannelID: "recording")
-        await fixture.store.identifySpeakers(meetingID: query.id)
+        await fixture.store.voice.identifySpeakers(meetingID: query.id)
         #expect(await fixture.extractor.calls == 3)
         let identified = try fixture.document(query)
         #expect(identified.speakers.count == 2)
@@ -526,7 +549,7 @@ struct VoiceIdentityCoordinatorTests {
         query.attendance = MeetingAttendance()
         fixture.store.meetings = fixture.store.meetings.map { $0.id == query.id ? query : $0 }
         let before = try fixture.document(query)
-        await fixture.store.identifySpeakers(meetingID: query.id)
+        await fixture.store.voice.identifySpeakers(meetingID: query.id)
         #expect(await fixture.extractor.calls == 1)
         #expect(try fixture.document(query) == before)
     }
@@ -554,7 +577,7 @@ struct VoiceIdentityCoordinatorTests {
         let vault = SpeakerVoiceVault(directory: root.appendingPathComponent("VoiceRegistry"), keyStore: keys)
         let store = GroveStore(baseDirectory: root, voiceVault: vault, voiceExtractor: CoordinatorVoiceExtractor(), voiceEnrollmentSession: session)
         let folder = try #require(store.createFolder(name: "팀 회의"))
-        let person = try #require(store.addTeamMember(folderID: folder, name: "등록할 팀원"))
+        let person = try #require(store.libraryStore.addTeamMember(folderID: folder, name: "등록할 팀원"))
         await session.start()
         #expect(store.isBusy)
         device.currentTime = 16
@@ -565,10 +588,10 @@ struct VoiceIdentityCoordinatorTests {
         let source = try #require(session.source)
         await session.finish()
         #expect(session.review?.canExtract == true)
-        #expect(!(await store.enrollRecordedVoice(profileID: person, permissionConfirmed: false)))
-        #expect(await store.enrollRecordedVoice(profileID: person, permissionConfirmed: true))
-        #expect(store.voiceProfileIsRegistered(person))
-        #expect(!store.voiceIdentificationAvailable)
+        #expect(!(await store.voice.enrollRecordedVoice(profileID: person, permissionConfirmed: false)))
+        #expect(await store.voice.enrollRecordedVoice(profileID: person, permissionConfirmed: true))
+        #expect(store.voice.isRegistered(person))
+        #expect(!store.voice.isAvailable)
         #expect(!FileManager.default.fileExists(atPath: source.path))
         #expect(store.meetings.isEmpty)
         let stored = try #require(await vault.load(profileID: person, folderID: folder))
@@ -576,8 +599,8 @@ struct VoiceIdentityCoordinatorTests {
         #expect(stored.samples.allSatisfy { $0.sourceMeetingID == nil && $0.sourceRevisionID == nil })
         let index = String(decoding: try Data(contentsOf: root.appendingPathComponent("library.json")), as: UTF8.self)
         #expect(!index.contains("embedding"))
-        #expect(await store.removeVoiceEnrollment(profileID: person))
-        #expect(!store.voiceProfileIsRegistered(person))
+        #expect(await store.voice.removeVoiceEnrollment(profileID: person))
+        #expect(!store.voice.isRegistered(person))
     }
 
     private func waitForCalls(_ count: Int, on extractor: CoordinatorVoiceExtractor) async throws {

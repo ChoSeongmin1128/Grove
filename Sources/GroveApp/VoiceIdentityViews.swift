@@ -31,12 +31,12 @@ struct VoiceEnrollmentSheet: View {
     }
 
     private var candidates: [DocumentUtterance] {
-        store.voiceEnrollmentCandidates(meetingID: meeting.id, speakerID: speaker.id)
+        store.voice.enrollmentCandidates(meetingID: meeting.id, speakerID: speaker.id)
     }
 
     private var selectedDuration: Double {
         candidates.filter { selectedIDs.contains($0.id) }
-            .reduce(0) { $0 + store.voiceEnrollmentDuration($1) }
+            .reduce(0) { $0 + store.voice.enrollmentDuration($1) }
     }
 
     private var existingProfile: SavedSpeakerProfile? {
@@ -51,7 +51,7 @@ struct VoiceEnrollmentSheet: View {
     private var canRegister: Bool {
         (3...5).contains(selectedIDs.count) && selectedDuration >= 10 && permissionConfirmed
             && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !submitting && !store.isBusy && store.voiceIdentificationAvailable
+            && !submitting && !store.isBusy && store.voice.isAvailable
     }
 
     var body: some View {
@@ -62,18 +62,18 @@ struct VoiceEnrollmentSheet: View {
                     .font(GroveTypography.bodySmall).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if !store.voiceIdentificationAvailable { VoiceIdentityAvailabilityNotice() }
+            if !store.voice.isAvailable { VoiceIdentityAvailabilityNotice() }
             VStack(alignment: .leading, spacing: 6) {
                 TextField("화자 이름", text: $name).textFieldStyle(.roundedBorder)
                 if let profile = existingProfile {
-                    Text(store.voiceProfileIsRegistered(profile.id)
+                    Text(store.voice.isRegistered(profile.id)
                          ? "‘\(profile.name)’에 등록한 목소리를 이번에 선택한 발화로 교체합니다. 이름을 바꾸려면 먼저 화자 이름을 수정해 주세요."
                          : "저장한 이름 ‘\(profile.name)’에 목소리를 추가합니다. 이름을 바꾸려면 먼저 화자 이름을 수정해 주세요.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .disabled(submitting || !store.voiceIdentificationAvailable)
+            .disabled(submitting || !store.voice.isAvailable)
             VStack(alignment: .leading, spacing: 8) {
                 Text("단독 발화를 듣고 선택해 주세요").font(GroveTypography.label)
                 Text("선택한 모든 구간이 이 사람의 목소리인지 확인해 주세요. 3~5개를 선택하고, 실제 사용하는 음성의 합계가 10초 이상이어야 합니다.")
@@ -99,7 +99,7 @@ struct VoiceEnrollmentSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .accessibilityAddTraits(.updatesFrequently)
             }
-            .disabled(submitting || !store.voiceIdentificationAvailable)
+            .disabled(submitting || !store.voice.isAvailable)
             VStack(alignment: .leading, spacing: 10) {
                 Toggle("선택한 발화가 같은 사람의 목소리이며, 이 목소리를 등록할 권한이 있습니다", isOn: $permissionConfirmed)
                     .toggleStyle(.checkbox).font(GroveTypography.bodySmall)
@@ -110,7 +110,7 @@ struct VoiceEnrollmentSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .disabled(submitting || !store.voiceIdentificationAvailable)
+            .disabled(submitting || !store.voice.isAvailable)
             if let error {
                 Text(error).font(.caption).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -123,20 +123,20 @@ struct VoiceEnrollmentSheet: View {
             HStack(spacing: 12) {
                 if submitting {
                     ProgressView().controlSize(.small)
-                    Text(store.isCommittingVoiceEnrollment ? "암호화 저장 중"
+                    Text(store.voice.isCommittingVoiceEnrollment ? "암호화 저장 중"
                          : cancelling ? "취소 중" : "선택한 목소리 확인 중")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button(submitting ? "등록 취소" : "취소") {
                     if submitting {
-                        guard !store.isCommittingVoiceEnrollment else { return }
+                        guard !store.voice.isCommittingVoiceEnrollment else { return }
                         cancelling = true
-                        store.cancelVoiceWork()
+                        store.voice.cancelWork()
                     } else { dismiss() }
                 }
-                .keyboardShortcut(.cancelAction).disabled(cancelling || store.isCommittingVoiceEnrollment)
-                Button(existingProfile.map { store.voiceProfileIsRegistered($0.id) } == true ? "목소리 교체" : "목소리 등록") {
+                .keyboardShortcut(.cancelAction).disabled(cancelling || store.voice.isCommittingVoiceEnrollment)
+                Button(existingProfile.map { store.voice.isRegistered($0.id) } == true ? "목소리 교체" : "목소리 등록") {
                     register()
                 }
                 .buttonStyle(.borderedProminent).disabled(!canRegister)
@@ -181,7 +181,7 @@ struct VoiceEnrollmentSheet: View {
         submitting = true
         player.pause()
         Task {
-            let saved = await store.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: name,
+            let saved = await store.voice.enrollVoice(meetingID: meeting.id, speakerID: speaker.id, name: name,
                                                selectedUtteranceIDs: selectedIDs, permissionConfirmed: permissionConfirmed,
                                                enableAutomaticIdentification: enableAutomaticIdentification)
             submitting = false

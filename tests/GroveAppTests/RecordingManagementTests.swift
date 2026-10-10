@@ -60,7 +60,7 @@ struct RecordingManagementTests {
         try fixture.store.acceptInferenceResult(result, meetingID: fixture.meeting.id, sourceChannelID: "recording")
         let originalDocument = try #require(fixture.store.transcriptDocuments[fixture.meeting.id])
         let utteranceID = try #require(originalDocument.utterances.first?.id)
-        #expect(fixture.store.updateUtteranceText(meetingID: fixture.meeting.id, utteranceID: utteranceID, text: "사용자 교정"))
+        #expect(fixture.store.transcripts.updateUtteranceText(meetingID: fixture.meeting.id, utteranceID: utteranceID, text: "사용자 교정"))
         let corrected = try #require(fixture.store.transcriptDocuments[fixture.meeting.id])
         let original = try Data(contentsOf: URL(fileURLWithPath: #require(fixture.meeting.audioPath)))
         #expect(fixture.store.renameMeeting(id: fixture.meeting.id, title: "  새 녹음 이름  "))

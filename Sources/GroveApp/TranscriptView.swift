@@ -84,7 +84,7 @@ struct TranscriptView: View {
             player.prepare(meeting: meeting)
         }
         .task {
-            await store.refreshVoiceEnrollmentStatus()
+            await store.voice.refreshEnrollmentStatus()
         }
         .onDisappear { player.stop() }
         .onChange(of: document?.revisionID) { _, _ in
@@ -102,20 +102,20 @@ struct TranscriptView: View {
         }
         .sheet(item: $editingUtterance) { utterance in
             UtteranceTextEditor(utterance: utterance) { text in
-                store.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: text)
+                store.transcripts.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: text)
             }
         }
         .sheet(item: $changingSpeaker) { utterance in
             if let document {
                 SpeakerAssignmentEditor(document: document, utterance: utterance, selectedIDs: selectedIDs) { target, scope, confirming in
-                    store.reassignSpeaker(meetingID: meeting.id, utteranceID: utterance.id, target: target, scope: scope,
+                    store.transcripts.reassignSpeaker(meetingID: meeting.id, utteranceID: utterance.id, target: target, scope: scope,
                                           confirmingAnchor: confirming)
                 }
             }
         }
         .sheet(item: $splittingUtterance) { utterance in
             UtteranceSplitEditor(meeting: meeting, utterance: utterance, player: player) { time, first, second in
-                let saved = store.splitUtterance(meetingID: meeting.id, utteranceID: utterance.id,
+                let saved = store.transcripts.splitUtterance(meetingID: meeting.id, utteranceID: utterance.id,
                                                 time: time, firstText: first, secondText: second)
                 if saved { selectedIDs.remove(utterance.id) }
                 return saved
@@ -123,7 +123,7 @@ struct TranscriptView: View {
         }
         .sheet(item: $renamingSpeaker) { speaker in
             SpeakerNameEditor(speaker: speaker) { name in
-                store.renameSpeaker(meetingID: meeting.id, speakerID: speaker.id, name: name)
+                store.transcripts.renameSpeaker(meetingID: meeting.id, speakerID: speaker.id, name: name)
             }
         }
         .sheet(item: $savingSpeaker) { speaker in
@@ -208,13 +208,13 @@ struct TranscriptView: View {
                 } label: { Image(systemName: "textformat.size") }
                 .menuStyle(.borderlessButton).fixedSize().help("본문 글자 크기")
                 if let notice { Text(notice).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently) }
-                Button { store.undoTranscriptEdit(meetingID: meeting.id) } label: {
+                Button { store.transcripts.undo(meetingID: meeting.id) } label: {
                     Image(systemName: "arrow.uturn.backward")
                 }
                 .help(document.undoHistory.last.map { "되돌리기: \($0.label)" } ?? "되돌리기")
                 .accessibilityLabel("변경 되돌리기")
                 .disabled(document.undoHistory.isEmpty)
-                Button { store.redoTranscriptEdit(meetingID: meeting.id) } label: {
+                Button { store.transcripts.redo(meetingID: meeting.id) } label: {
                     Image(systemName: "arrow.uturn.forward")
                 }
                 .help("다시 실행").accessibilityLabel("변경 다시 실행")
@@ -343,7 +343,7 @@ struct TranscriptView: View {
                 Button("화자와 함께 복사") { copy(document, ids: [utterance.id], forcesSpeakers: true) }
                 if utterance.editedText != nil && utterance.parentUtteranceID == nil {
                     Button("내용을 원문으로 되돌리기") {
-                        _ = store.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: utterance.rawText)
+                        _ = store.transcripts.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: utterance.rawText)
                     }
                 }
             } label: {
@@ -367,7 +367,7 @@ struct TranscriptView: View {
                 Button("듣기") { player.play(meeting: meeting, utterance: utterance) }
                 if review.canConfirm {
                     Button("현재 화자가 맞음") {
-                        if store.confirmUtteranceSpeaker(meetingID: meeting.id, utteranceID: utterance.id) {
+                        if store.transcripts.confirmUtteranceSpeaker(meetingID: meeting.id, utteranceID: utterance.id) {
                             notice = "화자 배정을 확인했습니다"
                         }
                     }
@@ -386,22 +386,22 @@ struct TranscriptView: View {
                 Text("이름을 바꾸면 해당 화자의 모든 발화에 적용됩니다.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let folderID = meeting.folderID,
-                   store.voiceIdentificationAvailable,
-                   store.speakerProfiles(in: folderID).contains(where: { store.voiceProfileIsRegistered($0.id) }) {
+                   store.voice.isAvailable,
+                   store.speakerProfiles(in: folderID).contains(where: { store.voice.isRegistered($0.id) }) {
                     VStack(alignment: .leading, spacing: 7) {
-                        if store.isRecognizingVoices {
+                        if store.voice.isRecognizingVoices {
                             HStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
                                 Text("등록한 목소리 확인 중").font(.caption)
                             }
-                            Button("식별 취소") { store.cancelVoiceWork() }.buttonStyle(.plain).font(.caption)
+                            Button("식별 취소") { store.voice.cancelWork() }.buttonStyle(.plain).font(.caption)
                         } else {
                             Button("목소리로 이름 찾기") {
                                 player.pause()
-                                Task { await store.identifySpeakers(meetingID: meeting.id) }
-                            }.disabled(store.isBusy || !store.voiceIdentificationAvailable)
+                                Task { await store.voice.identifySpeakers(meetingID: meeting.id) }
+                            }.disabled(store.isBusy || !store.voice.isAvailable)
                         }
-                        if let message = store.voiceIdentificationMessage(for: meeting.id) {
+                        if let message = store.voice.message(for: meeting.id) {
                             Text(message).font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -437,11 +437,11 @@ struct TranscriptView: View {
                                     .font(.caption).foregroundStyle(GroveTheme.evidence)
                                 HStack(spacing: 12) {
                                     Button("맞음") {
-                                        _ = store.confirmSpeakerIdentity(meetingID: meeting.id, speakerID: speaker.id)
+                                        _ = store.voice.confirmIdentity(meetingID: meeting.id, speakerID: speaker.id)
                                     }
                                     .accessibilityLabel("\(speaker.name) 이름 제안 확인")
                                     Button("다른 사람") {
-                                        _ = store.rejectSpeakerIdentity(meetingID: meeting.id, speakerID: speaker.id)
+                                        _ = store.voice.rejectIdentity(meetingID: meeting.id, speakerID: speaker.id)
                                     }
                                     .accessibilityLabel("\(speaker.name) 이름 제안 거절")
                                 }
@@ -450,13 +450,13 @@ struct TranscriptView: View {
                             Menu("폴더의 화자") {
                                 ForEach(store.speakerProfiles(in: folderID)) { profile in
                                     Button("\(profile.name)로 확인") {
-                                        _ = store.applySavedSpeaker(profileID: profile.id, meetingID: meeting.id, speakerID: speaker.id)
+                                        _ = store.voice.applySavedSpeaker(profileID: profile.id, meetingID: meeting.id, speakerID: speaker.id)
                                     }
                                 }
                                 Divider()
                                 Button("이 화자 이름 저장…") { savingSpeaker = speaker }
                                     .disabled(store.speakerProfiles(in: folderID).contains { $0.id == speaker.profileMatch?.profileID })
-                                if store.voiceIdentificationAvailable {
+                                if store.voice.isAvailable {
                                     Button("목소리 등록…") {
                                         player.pause()
                                         enrollingSpeaker = speaker

@@ -62,7 +62,7 @@ struct MeetingFolderTransferTests {
             rawDiarization: [.init(start: 0, end: 1, clusterID: "A")])
         try store.acceptInferenceResult(result, meetingID: fixture.first.id, sourceChannelID: "recording")
         let document = try #require(store.transcriptDocuments[fixture.first.id])
-        #expect(store.renameSpeaker(meetingID: fixture.first.id, speakerID: document.speakers[0].id, name: "발화자"))
+        #expect(store.transcripts.renameSpeaker(meetingID: fixture.first.id, speakerID: document.speakers[0].id, name: "발화자"))
         let savedDocument = try #require(store.transcriptDocuments[fixture.first.id])
         let documentURL = TranscriptDocumentStorage(directory: fixture.root.appendingPathComponent("Documents")).fileURL(for: fixture.first.id)
         let originalDocumentData = try Data(contentsOf: documentURL)
@@ -193,8 +193,8 @@ struct MeetingFolderTransferTests {
         #expect(store.createFolder(name: "미분류") == nil)
         #expect(store.createFolder(name: "디자인") == nil)
         #expect(store.createFolder(name: "여러\n줄") == nil)
-        #expect(!store.renameFolder(id: fixture.folderA, name: "제품"))
-        #expect(store.renameFolder(id: fixture.folderA, name: "디자인"))
+        #expect(!store.libraryStore.renameFolder(id: fixture.folderA, name: "제품"))
+        #expect(store.libraryStore.renameFolder(id: fixture.folderA, name: "디자인"))
     }
 
     @Test func orphanFolderDoesNotBecomeAnInvalidDefaultForANewRecording() throws {

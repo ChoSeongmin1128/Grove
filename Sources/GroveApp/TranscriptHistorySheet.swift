@@ -40,12 +40,12 @@ struct TranscriptHistorySheet: View {
         }
         .padding(24).frame(width: 620, height: 450)
         .task {
-            do { archives = try store.previousTranscripts(meetingID: meetingID) }
+            do { archives = try store.transcripts.previousTranscripts(meetingID: meetingID) }
             catch { self.error = "기존 파일은 보존되어 있습니다. \(error.localizedDescription)" }
         }
         .confirmationDialog("선택한 이전 전사로 전환할까요?", isPresented: $confirmsSwitch, titleVisibility: .visible) {
             Button("전환") {
-                if let selected, store.restoreTranscript(selected, meetingID: meetingID) { dismiss() }
+                if let selected, store.transcripts.restore(selected, meetingID: meetingID) { dismiss() }
                 else { error = "전사를 전환하지 못했습니다. 현재 내용은 보존되어 있습니다." }
             }
             Button("취소", role: .cancel) {}

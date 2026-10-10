@@ -316,10 +316,10 @@ struct SpeakerReviewStorageTests {
     @Test func confirmationPersistsAndTitleChangeDoesNotInvalidateIt() throws {
         let (root, store, meeting, id) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(store.confirmUtteranceSpeaker(meetingID: meeting.id, utteranceID: id))
+        #expect(store.transcripts.confirmUtteranceSpeaker(meetingID: meeting.id, utteranceID: id))
         #expect(store.renameMeeting(id: meeting.id, title: "변경한 합성 제목"))
         let reopened = GroveStore(baseDirectory: root)
-        #expect(reopened.speakerReview(meetingID: meeting.id, utteranceID: id)?.isConfirmed == true)
+        #expect(reopened.transcripts.speakerReview(meetingID: meeting.id, utteranceID: id)?.isConfirmed == true)
         #expect(reopened.transcriptDocuments[meeting.id] == store.transcriptDocuments[meeting.id])
     }
 
@@ -330,9 +330,9 @@ struct SpeakerReviewStorageTests {
         let file = TranscriptDocumentStorage(directory: root.appendingPathComponent("Documents")).fileURL(for: meeting.id)
         let originalBytes = try Data(contentsOf: file)
         try FileManager.default.createDirectory(at: file.appendingPathExtension("backup"), withIntermediateDirectories: false)
-        #expect(!store.confirmUtteranceSpeaker(meetingID: meeting.id, utteranceID: id))
+        #expect(!store.transcripts.confirmUtteranceSpeaker(meetingID: meeting.id, utteranceID: id))
         #expect(store.transcriptDocuments[meeting.id] == before)
-        #expect(store.speakerReview(meetingID: meeting.id, utteranceID: id)?.needsReview == true)
+        #expect(store.transcripts.speakerReview(meetingID: meeting.id, utteranceID: id)?.needsReview == true)
         #expect(try Data(contentsOf: file) == originalBytes)
     }
 
@@ -343,10 +343,10 @@ struct SpeakerReviewStorageTests {
         let file = TranscriptDocumentStorage(directory: root.appendingPathComponent("Documents")).fileURL(for: meeting.id)
         let originalBytes = try Data(contentsOf: file)
         try FileManager.default.createDirectory(at: file.appendingPathExtension("backup"), withIntermediateDirectories: false)
-        #expect(!store.reassignSpeaker(meetingID: meeting.id, utteranceID: id, target: .new("새 합성 화자"),
+        #expect(!store.transcripts.reassignSpeaker(meetingID: meeting.id, utteranceID: id, target: .new("새 합성 화자"),
             scope: .utterance, confirmingAnchor: true))
         #expect(store.transcriptDocuments[meeting.id] == before)
-        #expect(store.speakerReview(meetingID: meeting.id, utteranceID: id)?.isConfirmed == false)
+        #expect(store.transcripts.speakerReview(meetingID: meeting.id, utteranceID: id)?.isConfirmed == false)
         #expect(try Data(contentsOf: file) == originalBytes)
     }
 }

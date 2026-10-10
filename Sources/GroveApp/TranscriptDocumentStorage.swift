@@ -17,19 +17,25 @@ struct TranscriptDocumentStorage {
     }
 
     func load(for meetingID: UUID) throws -> TranscriptDocument? {
+        try loadCurrent(for: meetingID)?.document
+    }
+
+    private func loadCurrent(for meetingID: UUID) throws -> (document: TranscriptDocument, data: Data)? {
         let url = fileURL(for: meetingID)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let envelope = try JSONDecoder().decode(Envelope.self, from: Data(contentsOf: url))
+        let data = try Data(contentsOf: url)
+        let envelope = try JSONDecoder().decode(Envelope.self, from: data)
         guard envelope.meetingID == meetingID else { throw TranscriptEditError.invalidDocument }
         try envelope.document.validate()
-        return envelope.document
+        return (envelope.document, data)
     }
 
     func save(_ document: TranscriptDocument, for meetingID: UUID) throws {
-        if let current = try load(for: meetingID), current.revisionID != document.revisionID {
+        let current = try loadCurrent(for: meetingID)
+        if let current, current.document.revisionID != document.revisionID {
             throw TranscriptEditError.invalidDocument
         }
-        try writeCurrent(document, for: meetingID)
+        try write(document, for: meetingID, replacing: current?.data)
     }
 
     func activate(_ document: TranscriptDocument, for meetingID: UUID, rawResult: InferenceResult? = nil) throws {
@@ -38,7 +44,8 @@ struct TranscriptDocumentStorage {
             try rawResult.validate()
             guard rawResult.jobID == document.revisionID else { throw TranscriptEditError.invalidDocument }
         }
-        let current = try load(for: meetingID)
+        let stored = try loadCurrent(for: meetingID)
+        let current = stored?.document
         if current == document { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -51,7 +58,7 @@ struct TranscriptDocumentStorage {
         if let rawResult {
             try preserveRawResult(rawResult, for: meetingID)
         }
-        try writeCurrent(document, for: meetingID)
+        try write(document, for: meetingID, replacing: stored?.data)
     }
 
     func preserveRawResult(_ result: InferenceResult, for meetingID: UUID) throws {
@@ -89,13 +96,12 @@ struct TranscriptDocumentStorage {
         directory.appendingPathComponent("History", isDirectory: true).appendingPathComponent(meetingID.uuidString, isDirectory: true)
     }
 
-    private func writeCurrent(_ document: TranscriptDocument, for meetingID: UUID) throws {
+    /// `previous` is the validated bytes the caller just read; they become the backup.
+    private func write(_ document: TranscriptDocument, for meetingID: UUID, replacing previous: Data?) throws {
         try document.validate()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = fileURL(for: meetingID)
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try load(for: meetingID)
-            let previous = try Data(contentsOf: url)
+        if let previous {
             try previous.write(to: url.appendingPathExtension("backup"), options: .atomic)
         }
         let encoder = JSONEncoder()

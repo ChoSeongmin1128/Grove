@@ -65,7 +65,7 @@ struct MeetingProcessingStatusTests {
         await store.importRecording(from: audio, plan: .init(configuration: .init(expectedSpeakerCount: 4, diarizationPreference: .sortformerStreaming)))
         let old = try #require(store.meetings.first)
         let utterance = try #require(store.transcriptDocuments[old.id]?.utterances.first)
-        #expect(store.updateUtteranceText(meetingID: old.id, utteranceID: utterance.id, text: "사용자 교정 보존"))
+        #expect(store.transcripts.updateUtteranceText(meetingID: old.id, utteranceID: utterance.id, text: "사용자 교정 보존"))
         let corrected = try #require(store.transcriptDocuments[old.id])
         await service.setBehavior(.failure)
         await store.transcribeMeeting(id: old.id, plan: .init(configuration: .init(expectedSpeakerCount: 6, diarizationPreference: .ultra8)))

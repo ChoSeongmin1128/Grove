@@ -141,34 +141,35 @@ struct FolderSpeakerLibraryView: View {
                 Button("팀원 추가") { addingMember = true }.modifier(GroveActionAppearance()).disabled(store.isBusy)
             }
             let profiles = store.speakerProfiles(in: folderID)
-            let hasVoices = profiles.contains { store.voiceProfileIsRegistered($0.id) }
+            let hasVoices = profiles.contains { store.voice.isRegistered($0.id) }
             if !profiles.isEmpty {
-                if store.voiceIdentificationAvailable {
+                if store.voice.isAvailable {
                     Toggle("새 녹음에서 이름 자동 연결", isOn: Binding(
-                        get: { store.automaticSpeakerIdentificationEnabled(folderID: folderID) },
+                        get: { store.voice.automaticIdentificationEnabled(folderID: folderID) },
                         set: { enabled in
-                            if !store.setAutomaticSpeakerIdentification(folderID: folderID, enabled: enabled) {
+                            if !store.voice.setAutomaticIdentification(folderID: folderID, enabled: enabled) {
                                 error = store.alertMessage ?? "설정을 저장하지 못했습니다."
                                 store.alertMessage = nil
                             }
                         }
                     ))
                     .toggleStyle(.checkbox).font(GroveTypography.bodySmall)
-                    .disabled(store.isBusy || deletingVoice || !hasVoices || !store.voiceIdentificationAvailable)
+                    .disabled(store.isBusy || deletingVoice || !hasVoices || !store.voice.isAvailable)
                 }
                 ForEach(profiles) { profile in
-                    let hasVoiceStorage = store.voiceProfileHasStorage(profile.id)
+                    let hasVoiceStorage = store.voice.hasStorage(profile.id)
                     HStack(spacing: 10) {
-                        Image(systemName: store.voiceProfileIsRegistered(profile.id) ? "waveform" : "person")
+                        Image(systemName: store.voice.isRegistered(profile.id) ? "waveform" : "person")
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(profile.name).font(GroveTypography.label)
-                            Text(store.voiceProfileIsRegistered(profile.id) ? "목소리 등록됨"
+                            Text(store.voice.needsReenrollment(profile.id) ? "재등록 필요"
+                                 : store.voice.isRegistered(profile.id) ? "목소리 등록됨"
                                  : hasVoiceStorage ? "등록 정리 필요" : "이름만 저장")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button(store.voiceProfileIsRegistered(profile.id) ? "다시 등록" : "목소리 등록") { enrollingMember = profile }
+                        Button(store.voice.isRegistered(profile.id) ? "다시 등록" : "목소리 등록") { enrollingMember = profile }
                             .modifier(GroveActionAppearance()).controlSize(.regular).disabled(store.isBusy || deletingVoice)
                         Menu {
                             Button("이름 변경...") { renamingMember = profile }
@@ -201,7 +202,7 @@ struct FolderSpeakerLibraryView: View {
         .alert("저장한 이름을 삭제할까요?", isPresented: Binding(get: { removingProfile != nil }, set: { if !$0 { removingProfile = nil } })) {
             Button("취소", role: .cancel) { removingProfile = nil }
             Button("이름 삭제", role: .destructive) {
-                if let profile = removingProfile, !store.removeSpeakerProfile(id: profile.id) {
+                if let profile = removingProfile, !store.voice.removeSpeakerProfile(id: profile.id) {
                     error = store.alertMessage ?? "화자를 삭제하지 못했습니다."
                     store.alertMessage = nil
                 }
@@ -216,7 +217,7 @@ struct FolderSpeakerLibraryView: View {
                 if let profile = removingVoice {
                     deletingVoice = true
                     Task {
-                        if !(await store.removeVoiceEnrollment(profileID: profile.id)) {
+                        if !(await store.voice.removeVoiceEnrollment(profileID: profile.id)) {
                             error = store.alertMessage ?? "등록한 목소리를 삭제하지 못했습니다."
                             store.alertMessage = nil
                         }
@@ -228,7 +229,10 @@ struct FolderSpeakerLibraryView: View {
         } message: {
             Text("목소리로 이 사람을 찾는 데 쓰는 음성 특징을 삭제합니다. 저장한 이름과 기존 전사는 유지됩니다. 다시 자동 식별하려면 목소리를 새로 등록해야 합니다.")
         }
-        .task { await store.refreshVoiceEnrollmentStatus() }
+        .task {
+            await store.voice.refreshEnrollmentStatus()
+            await store.voice.refreshModelCompatibility()
+        }
     }
 }
 
@@ -256,23 +260,23 @@ struct SaveSpeakerProfileSheet: View {
             TextField("화자 이름", text: $name).textFieldStyle(.roundedBorder)
             Toggle("이 화자의 이름과 발화를 확인했습니다", isOn: $confirmed)
                 .toggleStyle(.checkbox)
-            if store.voiceIdentificationAvailable {
+            if store.voice.isAvailable {
                 Text("여기서는 이름만 저장합니다. 음성 특징을 저장하거나 자동 식별에 사용하려면 별도로 ‘목소리 등록’을 선택해 주세요.")
                     .font(.callout).foregroundStyle(.secondary)
             } else { VoiceIdentityAvailabilityNotice() }
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
-                if store.isSavingSpeakerProfile { ProgressView().controlSize(.small); Text("화자 저장 중").font(.caption) }
+                if store.voice.isSavingSpeakerProfile { ProgressView().controlSize(.small); Text("화자 저장 중").font(.caption) }
                 Spacer()
-                Button("취소") { dismiss() }.keyboardShortcut(.cancelAction).disabled(store.isSavingSpeakerProfile)
+                Button("취소") { dismiss() }.keyboardShortcut(.cancelAction).disabled(store.voice.isSavingSpeakerProfile)
                 Button("화자 저장") {
                     Task {
-                        if await store.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: name) { dismiss() }
+                        if await store.voice.saveSpeakerProfile(meetingID: meeting.id, speakerID: speaker.id, name: name) { dismiss() }
                         else { error = store.alertMessage ?? "화자를 저장하지 못했습니다."; store.alertMessage = nil }
                     }
                 }.buttonStyle(.borderedProminent)
                     .disabled(!confirmed || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy)
             }
-        }.padding(24).frame(width: 480).interactiveDismissDisabled(store.isSavingSpeakerProfile)
+        }.padding(24).frame(width: 480).interactiveDismissDisabled(store.voice.isSavingSpeakerProfile)
     }
 }

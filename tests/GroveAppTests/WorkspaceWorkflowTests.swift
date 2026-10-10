@@ -68,7 +68,7 @@ struct WorkspaceWorkflowTests {
         let recorder = AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() })
         let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: recorder)
         store.present(.newMeeting())
-        let task = Task { await store.beginRecording(title: "취소할 녹음", glossaryProfile: "") }
+        let task = Task { await store.beginRecording(title: "취소할 녹음") }
         while prompt.responses.isEmpty { await Task.yield() }
         #expect(store.isStartingCapture)
         store.cancelRecordingStart()
@@ -86,10 +86,10 @@ struct WorkspaceWorkflowTests {
         let prompt = WorkflowPermissionPrompt()
         let device = WorkflowRecordingDevice()
         let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { await prompt.request() }))
-        let first = Task { await store.beginRecording(title: "이전", glossaryProfile: "") }
+        let first = Task { await store.beginRecording(title: "이전") }
         while prompt.responses.isEmpty { await Task.yield() }
         store.cancelRecordingStart()
-        let second = Task { await store.beginRecording(title: "새 시도", glossaryProfile: "") }
+        let second = Task { await store.beginRecording(title: "새 시도") }
         while prompt.responses.count < 2 { await Task.yield() }
         prompt.reply(true)
         await first.value
@@ -128,7 +128,7 @@ struct WorkspaceWorkflowTests {
         let store = GroveStore(baseDirectory: base, inferenceService: PreparedFixtureInference(), recorder: AudioRecorder(makeRecorder: { _, _ in device }, permissionRequester: { true }))
         store.selection = .unfiled
         try FileManager.default.createDirectory(at: index.appendingPathExtension("backup"), withIntermediateDirectories: false)
-        await store.beginRecording(title: "저장 실패", glossaryProfile: "")
+        await store.beginRecording(title: "저장 실패")
         #expect(store.selection == .unfiled)
         #expect(!store.isRecording && !device.isRecording)
         #expect(store.activeMeetingID == nil)

@@ -63,7 +63,7 @@ struct GroveSidebar: View {
             FolderNameEditor(title: "새 폴더", save: { store.createFolder(name: $0) != nil }, name: "")
         }
         .sheet(item: $renamingFolder) { folder in
-            FolderNameEditor(title: "폴더 이름 변경", save: { store.renameFolder(id: folder.id, name: $0) }, name: folder.name)
+            FolderNameEditor(title: "폴더 이름 변경", save: { store.libraryStore.renameFolder(id: folder.id, name: $0) }, name: folder.name)
         }
         .alert("폴더를 삭제할까요?", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } })) {
             Button("취소", role: .cancel) { deletingFolder = nil }
