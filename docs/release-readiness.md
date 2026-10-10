@@ -1,14 +1,14 @@
 # Release readiness
 
-Current source: 0.4.0 / local-beta.25. Actual installed bundle, signing, notarization,
+Current source: 0.4.0 / local-beta.26. Actual installed bundle, signing, notarization,
 model qualification and test receipts belong in the private `HANDOFF.md` entry point.
 Do not reuse an older installed-beta statement as proof of current runtime state.
 
 | Capability | Current boundary |
 | --- | --- |
-| Precision transcription | Bundled MOSS / Nemotron 3; first-run pinned model preparation |
+| Precision transcription | Bundled MOSS / Nemotron 3 (Community-1 for 9+ or exact counts); first-run pinned model preparation |
 | Mac basic transcription | Apple-managed Korean assets; no diarization |
-| Microphone recording | Local capture, pause / resume and original preservation |
+| Microphone recording | ADTS capture that survives a crash, lossless M4A repackaging, pause / resume and original preservation |
 | Calendar | Selected Mac calendars, compact app-running reminders and meeting setup |
 | Team voices | Optional pinned voice model, prompt / free-speech capture and encrypted registration |
 | Attendance | Optional per-recording candidates; independent from actual speaker count |

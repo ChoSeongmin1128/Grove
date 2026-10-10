@@ -39,6 +39,11 @@ inference, proposals, and unverified items.
 - AI summaries and ChatGPT / Claude provider sign-in are not implemented. Provider
   research is not implementation approval. Require a new user request before adding
   provider authentication or transmitting transcripts for summaries.
+- New recordings are captured as ADTS AAC and repackaged without re-encoding to M4A only
+  after the frame count matches. Never delete a capture before the index points at its
+  replacement, and never repackage imported files.
+- New processing offers Nemotron 3 and Community-1 only. Retired engines (Sortformer4,
+  Ultra8, automatic routing) stay readable in saved results but are not run again.
 - Unexpected recording completion and encoding failures terminate only their own capture,
   preserve meeting audio and publish an interrupted state. Pausing is not completion.
 - Prepare playback after the recording file is finalized, including the same detail view
@@ -176,7 +181,7 @@ codesign --verify --deep --strict .work/dist/Grove.app
   immutable snapshots, RTTM/UEM, permission and development/holdout separation.
 
 - [`docs/ultra8-option-and-speaker-count.md`](docs/ultra8-option-and-speaker-count.md):
-  legacy Ultra8 automatic policy, count boundaries, same-engine comparisons, native worker
+  historical; retired Ultra8 automatic policy, count boundaries, same-engine comparisons, native worker
   and historical engine provenance.
 
 - [`docs/microphone-folders-and-speaker-reuse.md`](docs/microphone-folders-and-speaker-reuse.md):

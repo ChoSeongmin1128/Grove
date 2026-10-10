@@ -10,11 +10,11 @@ Audio and meeting metadata stay on the Mac unless the user explicitly exports th
 
 - native SwiftUI macOS app
 - first-run choice between precision transcription and Mac basic transcription
-- microphone-only recording to M4A, with pause/resume
+- microphone-only recording with pause/resume, captured as ADTS AAC so an interrupted
+  recording stays readable, then repackaged without re-encoding to M4A
 - audio and video file import
 - Korean post-meeting transcription with MOSS or Apple SpeechAnalyzer
-- independent diarization: MOSS + Nemotron 3 for a fresh installation, with Ultra8,
-  Community-1 and Sortformer4 remaining selectable
+- independent diarization: Nemotron 3 by default, Community-1 for 9+ speakers or an exact count
 - Calendar reminders from accounts connected to the Mac Calendar app
 - rich-text copy for Notion and divider / meeting-note child page added at a chosen page end
 - in-app model preparation with byte progress, pause / resume, capacity checks, pinned versions, SHA256 and a runtime check
@@ -23,9 +23,9 @@ Audio and meeting metadata stay on the Mac unless the user explicitly exports th
 - utterance text/speaker editing, splitting, undo/redo and TXT/Markdown export
 - original audio preservation, path access and byte-preserving file export
 
-Existing saved model choices are retained. Legacy automatic routing uses Ultra8 for
-unknown count or 1–8, and Community-1 for an entered count of 9+.
-Speaker names are not automatically matched across meetings. Nemotron 3/Ultra8/Sortformer4 count
+Results produced by the retired Sortformer4, Ultra8 and automatic routes remain readable;
+reprocessing them uses Nemotron 3 or Community-1.
+Speaker names are not automatically matched across meetings. Nemotron 3 count
 entry is advisory, not an exact cluster-count constraint. A successful transcription
 or an acknowledged speaker warning does not certify transcription accuracy or approve
 training data. AI summaries and dataset-quality annotation/export are not shipped.
@@ -50,8 +50,8 @@ The packaged application is written to `.work/dist/Grove.app`. Packaging expects
 workers in `.work/native-workers` (or `GROVE_NATIVE_WORKERS_DIR`), including their
 matching resources and license notices. This ignored directory is not part of a fresh
 checkout. See the [MOSS worker](scripts/native-moss-harness/README.md) and
-[Ultra8 worker](scripts/native-ultra8-harness/README.md) build notes; the app also uses
-FluidAudio and speech-swift helpers described in [third-party notices](THIRD_PARTY_NOTICES.md).
+[Nemotron worker](scripts/native-nemotron/README.md) notes; the app also bundles the
+speech-swift Community-1 helper described in [third-party notices](THIRD_PARTY_NOTICES.md).
 Calendar access and Notion credentials are configured in Settings. Notion export sends
 text only when the user clicks Apply; copying does not require a Notion connection.
 Models are stored separately under Grove's Application Support directory and are not
@@ -60,17 +60,10 @@ runtime models are installed or that a release is notarized.
 
 ## Optional glossary experiments
 
-Grove starts with no built-in organization terms or personal names. To test local
-context conditioning, copy [`config/glossary.example.json`](config/glossary.example.json)
-to:
-
-```text
-~/Library/Application Support/Grove/glossary.json
-```
-
-This machine-local file is never required for a clean build and should not be committed.
-Apple/Whisper benchmark scripts retain glossary experiments; the current MOSS app path
-does not inject that glossary. Raw transcription and corrections remain separate records.
+Grove starts with no built-in organization terms or personal names, and the app does not
+apply glossaries. The Apple/Whisper benchmark scripts take a glossary file through
+`--glossary`; [`config/glossary.example.json`](config/glossary.example.json) shows the
+format. Keep real glossaries machine-local and out of Git.
 
 ## Private evaluation data
 

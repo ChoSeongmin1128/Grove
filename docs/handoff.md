@@ -18,6 +18,16 @@ the private installation and evaluation receipts.
   queues to MainActor and bound to the current capture ID. Unexpected stops finalize the
   recorded file, clear active capture and persist an interrupted meeting without starting
   transcription. Enrollment failures discard their temporary capture and allow retry.
+- New recordings are captured as `<id>.capture.aac` (ADTS), which stays readable after a
+  crash. After stop, or at the next launch for an interrupted capture, the AAC packets are
+  repackaged without re-encoding into `<id>.m4a`; the index switches only after the frame
+  count matches, and the capture is removed afterwards. Failure keeps the capture as the
+  meeting audio. Imported `.aac` files are not repackaged.
+- If transcription cannot start after a recording or import, the meeting is marked failed
+  instead of staying in processing until the next launch.
+- Recording and processing hold an idle-sleep activity assertion. Ninety seconds of digital
+  silence (at or below -120 dB; an all-zero input reads -160 dB) shows a warning in the
+  recording bar; pausing or any live signal resets it.
 - Playback observes the original file's finalized state and source paths. A recording
   remaining open through completion gets a prepared player without navigating away;
   transcript edits do not reset playback position or rate.
@@ -30,7 +40,10 @@ the private installation and evaluation receipts.
   speaker labels, and an asynchronous Notion task is not a confirmed created page.
 
 - Team voice enrollment records prompt reading and free speech, checks amplitude / clipping,
-  supports preview and stores encrypted per-span features. The optional 15.3 MB voice
+  supports preview and stores encrypted per-span features. Enrollments made with another
+  voice model are listed as **재등록 필요**. Policy decisions keep the deciding query's best
+  and runner-up scores even when no name is given; the qualification harness records them
+  per query over a 0.60 to 0.90 similarity and 0.05 to 0.20 margin grid. The optional 15.3 MB voice
   model has pinned hashes and its own CoreML readiness check. Automatic naming remains
   gated; independent other-day five-person evaluation data is still required.
 - Optional attendance is remembered per folder and stored separately from speaker-count
@@ -38,7 +51,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version 0.4.0 / local-beta.25. This is a personal local beta, a
+The source targets version 0.4.0 / local-beta.26. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -55,8 +68,11 @@ build identifier and local receipts for actual installation state.
   System-output capture is removed; older dual-channel files remain read-compatible.
 - First-run precision mode uses bundled MOSS + Nemotron 3 and verified model downloads.
   Mac basic transcription uses Apple SpeechAnalyzer with no speaker separation.
-  Existing saved routing is preserved. Legacy automatic mode remains Ultra8 for unknown
-  count / 1–8 and Community-1 for 9+. Exact counts are still a Community-1 capability.
+  New processing offers Nemotron 3 and Community-1 (9+ speakers or an exact count).
+  Community-1 runs only against the pinned model revision: file sizes are checked whenever
+  readiness is shown and SHA256 before each job.
+  Results from the retired Sortformer4, Ultra8 and automatic routes stay readable; their
+  saved options reopen as Community-1 when 9+ or an exact count was saved, otherwise Nemotron 3.
 - Calendar reminders read selected Mac calendars and start microphone recording.
   Home actions use the same neutral bordered controls as detail actions. The root no
   longer forces a fixed dark-green tint onto ordinary native buttons.
@@ -72,7 +88,15 @@ build identifier and local receipts for actual installation state.
   Export progress identifies the current stage. Bounded private diagnostics record request,
   authentication, poll-wait and total export time without content / URLs / credentials.
   First-run downloads support byte progress, pause / resume, capacity and runtime checks.
+  Only an `invalid_grant` refresh response ends a Notion OAuth grant; network or server
+  failures fail that request and keep the connection. A divider whose result was never
+  confirmed can be discarded by the user (**처음부터 다시**) because no page was created.
 - Per-recording options are local drafts; persistent defaults live in Settings.
+- `GroveStore` owns navigation, the meeting index, recording / import / processing and
+  quit coordination. Transcript documents (`TranscriptDocumentStore`), folders / people /
+  defaults (`LibraryStore`) and voice enrollment / identification (`VoiceIdentityCoordinator`)
+  are separate objects. Meter levels and download progress are observed by their own views;
+  the workspace only re-renders on state transitions that change what can be started.
 - Recording names are editable. **원본 파일…** provides path access, Finder reveal and
   byte-preserving export with source/destination protection and cancellation.
   Internal names and full paths are collapsed under **파일 위치**; **사본 저장…** opens
