@@ -33,14 +33,14 @@ struct PipelineLifecycleTests {
         let model = root.appendingPathComponent("local model with spaces")
         let asr = try executable("fixture-asr", at: root, script: #"test "$#" -eq 3 && test "${3##*/}" = 'local model with spaces' || exit 4; printf '%s' '{"hitTokenLimit":false,"segments":[{"start":0,"end":1,"text":"테스트"}]}' > "$2""#)
         let diarizer = try executable("fixture-diarizer", at: root,
-            script: #"echo 'Loading model {' >&2; printf '%s' '{"segments":[{"start":0,"end":1,"speaker":"A"}]}'"#)
+            script: #"while [ $# -gt 0 ]; do [ "$1" = --output ] && out="$2"; shift; done; printf '%s' '{"segments":[{"start":0,"end":1,"speaker":1}]}' > "$out""#)
         let pipeline = NativeInferencePipeline(backend: .init(mossExecutable: asr, mossModelDirectory: model,
-            communityExecutable: diarizer))
+            nemotronExecutable: diarizer, nemotronModel: root.appendingPathComponent("model.gguf")))
         let job = root.appendingPathComponent("job")
         let result = try await pipeline.runRecording(source: input,
-            configuration: .init(diarizationPreference: .community1), directory: job)
+            configuration: .init(diarizationPreference: .nemotron3), directory: job)
         try result.validate()
-        #expect(result.assignments[0].clusterID == "A")
+        #expect(result.assignments[0].clusterID == "1")
         #expect(try Data(contentsOf: input) == original)
         #expect(!FileManager.default.fileExists(atPath: job.appendingPathComponent("analysis.wav").path))
         #expect(FileManager.default.fileExists(atPath: job.appendingPathComponent("moss.json").path))
@@ -55,10 +55,11 @@ struct PipelineLifecycleTests {
         let asr = try executable("fixture-capped", at: root, script: #"printf '%s' '{"hitTokenLimit":true,"segments":[{"start":0,"end":1,"text":"미완료"}]}' > "$2""#)
         let missing = root.appendingPathComponent("must-not-run")
         let pipeline = NativeInferencePipeline(backend: .init(mossExecutable: asr, mossModelDirectory: root,
-            communityExecutable: missing))
+            nemotronExecutable: missing, nemotronModel: root.appendingPathComponent("model.gguf")))
         let job = root.appendingPathComponent("job")
         await #expect(throws: InferenceError.self) {
-            try await pipeline.runRecording(source: input, configuration: .init(expectedSpeakerCount: 1), directory: job)
+            try await pipeline.runRecording(source: input,
+                configuration: .init(expectedSpeakerCount: 1, diarizationPreference: .nemotron3), directory: job)
         }
         #expect(!FileManager.default.fileExists(atPath: job.appendingPathComponent("diarization.log").path))
         #expect(!FileManager.default.fileExists(atPath: job.appendingPathComponent("analysis.wav").path))

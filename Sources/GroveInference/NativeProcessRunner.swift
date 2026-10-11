@@ -4,13 +4,11 @@ import Foundation
 public struct NativeProcessRunner: Sendable {
     public init() {}
 
-    public func run(executable: URL, arguments: [String], directory: URL, log: URL,
-                    standardOutput: URL? = nil) async throws {
+    public func run(executable: URL, arguments: [String], directory: URL, log: URL) async throws {
         guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw InferenceError.missingExecutable(executable.lastPathComponent)
         }
-        let box = ProcessLifetime(executable: executable, arguments: arguments, directory: directory, log: log,
-                                  standardOutput: standardOutput)
+        let box = ProcessLifetime(executable: executable, arguments: arguments, directory: directory, log: log)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -28,17 +26,15 @@ private final class ProcessLifetime: @unchecked Sendable {
     private let arguments: [String]
     private let directory: URL
     private let log: URL
-    private let standardOutput: URL?
     private var process: Process?
     private var cancelled = false
     private var finished = false
 
-    init(executable: URL, arguments: [String], directory: URL, log: URL, standardOutput: URL?) {
+    init(executable: URL, arguments: [String], directory: URL, log: URL) {
         self.executable = executable
         self.arguments = arguments
         self.directory = directory
         self.log = log
-        self.standardOutput = standardOutput
     }
 
     func execute() throws {
@@ -46,17 +42,11 @@ private final class ProcessLifetime: @unchecked Sendable {
         try Data().write(to: log, options: .withoutOverwriting)
         let handle = try FileHandle(forWritingTo: log)
         defer { try? handle.close() }
-        var output = handle
-        if let standardOutput {
-            try Data().write(to: standardOutput, options: .withoutOverwriting)
-            output = try FileHandle(forWritingTo: standardOutput)
-        }
-        defer { if output !== handle { try? output.close() } }
         let task = Process()
         task.executableURL = executable
         task.arguments = arguments
         task.currentDirectoryURL = directory
-        task.standardOutput = output
+        task.standardOutput = handle
         task.standardError = handle
         task.standardInput = FileHandle.nullDevice
         try lock.withLock {

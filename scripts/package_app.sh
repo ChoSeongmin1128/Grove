@@ -18,7 +18,7 @@ binary_path="$build_path/$configuration/Grove"
 workers_path="${GROVE_NATIVE_WORKERS_DIR:-$project_root/.work/native-workers}"
 
 # Local beta uses already-qualified native workers, never a Python/Homebrew runtime.
-for worker in Moss/MossHarness speech Nemotron/bin/nemo-speech; do
+for worker in Moss/MossHarness Nemotron/bin/nemo-speech; do
   if [[ ! -x "$workers_path/$worker" ]]; then
     echo "Missing native worker: $worker. Prepare GROVE_NATIVE_WORKERS_DIR before packaging." >&2
     exit 2
@@ -42,7 +42,6 @@ cp "$project_root/App/Info.plist" "$contents_path/Info.plist"
 cp "$project_root/App/Icon/Grove.icns" "$contents_path/Resources/Grove.icns"
 cp -R "$build_path/$configuration/Grove_GroveApp.bundle" "$contents_path/Resources/"
 cp "$project_root/THIRD_PARTY_NOTICES.md" "$contents_path/Resources/"
-cp "$project_root/ThirdParty/SpeechSwift-LICENSE.txt" "$contents_path/Resources/Licenses/"
 moss_contents="$contents_path/Helpers/Moss.bundle/Contents"
 mkdir -p "$moss_contents/MacOS" "$moss_contents/Resources"
 cp "$workers_path/Moss/MossHarness" "$moss_contents/MacOS/MossHarness"
@@ -52,7 +51,6 @@ for bundle in mlx-swift_Cmlx swift-crypto_Crypto swift-transformers_Hub; do
 done
 ditto "$workers_path/Moss/Licenses" "$contents_path/Resources/Licenses/Moss"
 cp "$workers_path/Moss/Package.resolved" "$contents_path/Resources/Licenses/Moss/Package.resolved"
-cp "$workers_path/speech" "$contents_path/Helpers/speech"
 mkdir -p "$contents_path/Helpers/Nemotron"
 ditto "$workers_path/Nemotron/bin" "$contents_path/Helpers/Nemotron/bin"
 mkdir -p "$contents_path/Helpers/Nemotron/lib"
@@ -63,7 +61,6 @@ while IFS= read -r library; do
   /usr/bin/codesign --force --sign - "$library"
 done < <(find "$contents_path/Helpers/Nemotron/lib" -type f -name '*.dylib')
 /usr/bin/codesign --force --sign - "$contents_path/Helpers/Nemotron/bin/nemo-speech"
-/usr/bin/codesign --force --sign - "$contents_path/Helpers/speech"
 /usr/bin/codesign --force --sign - "$contents_path/Helpers/Moss.bundle"
 printf 'APPL????' > "$contents_path/PkgInfo"
 

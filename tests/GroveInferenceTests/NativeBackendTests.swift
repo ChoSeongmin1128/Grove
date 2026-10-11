@@ -7,7 +7,9 @@ struct NativeBackendTests {
         let audio = URL(fileURLWithPath: "/tmp/input.wav")
         let output = URL(fileURLWithPath: "/tmp/output.json")
         for configuration in [InferenceConfiguration(expectedSpeakerCount: 4, diarizationPreference: .sortformerStreaming),
-                              .init(diarizationPreference: .ultra8), .init(expectedSpeakerCount: 4)] {
+                              .init(diarizationPreference: .ultra8), .init(expectedSpeakerCount: 4),
+                              .init(diarizationPreference: .community1),
+                              .init(expectedSpeakerCount: 5, speakerCountPolicy: .exact)] {
             #expect(throws: InferenceError.self) {
                 try NativeInferenceBackend.diarizationArguments(audio: audio, output: output, configuration: configuration)
             }
@@ -16,16 +18,12 @@ struct NativeBackendTests {
         #expect(throws: InferenceError.self) { try ExternalOutputDecoder.diarization(turns, engine: .ultra8, duration: 2) }
     }
 
-    @Test func knownCountIsAdvisoryUnlessExplicitlyConstrained() throws {
-        let audio = URL(fileURLWithPath: "/tmp/input.wav")
-        let output = URL(fileURLWithPath: "/tmp/output.json")
-        let advisory = try NativeInferenceBackend.diarizationArguments(audio: audio, output: output,
+    @Test func knownCountIsOnlyAdvisory() throws {
+        let advisory = try NativeInferenceBackend.diarizationArguments(audio: URL(fileURLWithPath: "/tmp/input.wav"),
+            output: URL(fileURLWithPath: "/tmp/output.json"),
             configuration: .init(expectedSpeakerCount: 5, diarizationPreference: .nemotron3),
             nemotronModel: URL(fileURLWithPath: "/tmp/model.gguf"))
-        let exact = try NativeInferenceBackend.diarizationArguments(audio: audio, output: output,
-            configuration: .init(expectedSpeakerCount: 5, speakerCountPolicy: .exact))
         #expect(!advisory.contains("--num-speakers"))
-        #expect(exact.suffix(2) == ["--num-speakers", "5"])
     }
 
     @Test func unsupportedExactCountDoesNotSilentlyFallBackToAdvisory() throws {

@@ -96,16 +96,16 @@ public enum InferenceError: Error, LocalizedError, Sendable {
         switch self {
         case .invalidSpeakerCount: "발화자 수는 1명 이상이어야 합니다."
         case .sortformerCapacity: "이 Sortformer 모델은 최대 4명을 지원합니다. 5명 이상은 다인원 엔진을 선택해 주세요."
-        case .ultra8Capacity: "Ultra8은 최대 8명을 지원합니다. 9명 이상은 Community-1을 선택해 주세요."
-        case .nemotronCapacity: "Nemotron 3는 최대 8명을 지원합니다. 9명 이상은 Community-1을 선택해 주세요."
-        case .unsupportedCountConstraint: "이 모델은 인원수 강제를 지원하지 않습니다. 정확한 인원 지정은 Community-1을 선택해 주세요."
+        case .ultra8Capacity: "Ultra8은 최대 8명을 지원합니다."
+        case .nemotronCapacity: "Nemotron 3는 최대 8명까지 구분합니다. 8명 이하로 입력하거나 자동 추정을 선택해 주세요."
+        case .unsupportedCountConstraint: "이 모델은 인원수 강제를 지원하지 않습니다."
         case .invalidOutput(let detail): "처리 결과를 확인할 수 없습니다. \(detail)"
         case .incompleteTranscription: "녹음 전체를 전사하지 못했습니다. 불완전한 결과를 완료된 전사로 저장하지 않았습니다."
         case .missingExecutable(let name): "처리에 필요한 구성 요소가 없습니다: \(name)"
         case .workerFailed(let status): "음성 처리 프로세스가 종료됐습니다. 종료 코드: \(status)"
         case .jobAlreadyRunning: "다른 회의를 처리하고 있습니다. 처리가 끝난 뒤 다시 시도해 주세요."
         case .noSpeech: "전사할 음성을 찾지 못했습니다. 원본 녹음은 보존됩니다."
-        case .unsupportedEngine: "이 화자 분리 엔진은 더 이상 제공하지 않습니다. Nemotron 3 또는 Community-1을 선택해 주세요."
+        case .unsupportedEngine: "이 화자 분리 엔진은 더 이상 제공하지 않습니다. Nemotron 3로 다시 처리해 주세요."
         }
     }
 }

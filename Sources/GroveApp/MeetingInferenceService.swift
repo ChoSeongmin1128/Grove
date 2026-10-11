@@ -28,10 +28,6 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
             try await AppleTranscriptionService.validatePreparation()
         } else if let issue = issue(configuration: configuration, appleReady: false, modelsReady: freshModelsReady) {
             throw InferenceError.invalidOutput(issue)
-        } else if try configuration.resolvedEngine() == .community1 {
-            try await Task.detached(priority: .userInitiated) {
-                try LegacyDiarizationPreparation.validate(engine: .community1, verifyContents: true)
-            }.value
         }
     }
 
@@ -68,16 +64,13 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
     func backend(configuration: InferenceConfiguration) throws -> NativeInferenceBackend {
         let helpers = appBundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
         let moss = helpers.appendingPathComponent("Moss.bundle/Contents/MacOS/MossHarness")
-        let community = helpers.appendingPathComponent("speech")
         let nemotron = helpers.appendingPathComponent("Nemotron/bin/nemo-speech")
         let engine = try configuration.resolvedEngine()
-        try LegacyDiarizationPreparation.validate(engine: engine)
         let diarizer: URL
         switch engine {
         case .none: diarizer = moss
         case .nemotron3: diarizer = nemotron
-        case .community1: diarizer = community
-        case .sortformerStreaming, .ultra8: throw InferenceError.unsupportedEngine
+        case .sortformerStreaming, .ultra8, .community1: throw InferenceError.unsupportedEngine
         }
         for executable in [moss, diarizer] {
             guard FileManager.default.isExecutableFile(atPath: executable.path) else {
@@ -94,7 +87,7 @@ struct BundledMeetingInferenceService: MeetingInferenceRunning {
                 throw InferenceError.invalidOutput("설정의 모델 화면에서 전사 모델을 먼저 준비해 주세요.")
             }
         }
-        return NativeInferenceBackend(mossExecutable: moss, mossModelDirectory: model, communityExecutable: community,
+        return NativeInferenceBackend(mossExecutable: moss, mossModelDirectory: model,
                                       nemotronExecutable: nemotron, nemotronModel: nemotronModel)
     }
 }

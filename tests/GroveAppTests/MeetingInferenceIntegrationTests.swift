@@ -35,9 +35,6 @@ struct MeetingInferenceIntegrationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let service = BundledMeetingInferenceService(appBundle: app, applicationSupport: models)
         let store = GroveStore(baseDirectory: root, inferenceService: service)
-        if let raw = environment["GROVE_BETA_ENGINE"], let engine = MeetingEngineChoice(rawValue: raw) {
-            store.defaultSpeakerOptions.engineChoice = engine
-        }
         if let count = environment["GROVE_BETA_SPEAKER_COUNT"] {
             store.defaultSpeakerOptions.mode = .manualCount
             store.defaultSpeakerOptions.countText = count
@@ -59,13 +56,10 @@ struct MeetingInferenceIntegrationTests {
         #expect(document.utterances.allSatisfy { !$0.rawText.hasPrefix("[S0") })
         let configuration = try #require(meeting.inferenceConfiguration)
         #expect(document.sourceDiarizationEngines?["recording"] == (try configuration.resolvedEngine()))
-        if environment["GROVE_BETA_ENGINE"] == nil && environment["GROVE_BETA_TRANSCRIPTION_ENGINE"] != "apple" {
+        if environment["GROVE_BETA_TRANSCRIPTION_ENGINE"] != "apple" {
             #expect(configuration.diarizationPreference == .nemotron3)
             #expect(try configuration.resolvedEngine() == .nemotron3)
             #expect(configuration.expectedSpeakerCount == environment["GROVE_BETA_SPEAKER_COUNT"].flatMap(Int.init))
-        }
-        if environment["GROVE_BETA_ENGINE"] == "community1" {
-            #expect(meeting.inferenceConfiguration?.diarizationPreference == .community1)
         }
         let utterance = try #require(document.utterances.first)
         #expect(store.transcripts.updateUtteranceText(meetingID: meeting.id, utteranceID: utterance.id, text: "베타 검수 수정"))
@@ -199,21 +193,19 @@ struct MeetingInferenceIntegrationTests {
         #expect(await service.configurations.isEmpty)
     }
 
-    @Test func engineChoicesDoNotClampLargeMeetings() throws {
-        #expect(try MeetingEngineChoice.nemotron3.configuration(count: 8).resolvedEngine() == .nemotron3)
-        #expect(throws: InferenceError.self) { try MeetingEngineChoice.nemotron3.configuration(count: 9) }
-        #expect(try MeetingEngineChoice.community1.configuration(count: 12).expectedSpeakerCount == 12)
+    @Test func nemotronConfigurationStopsAtEightSpeakers() throws {
+        #expect(try MeetingSpeakerOptions.configuration(count: 8).resolvedEngine() == .nemotron3)
+        #expect(throws: InferenceError.self) { try MeetingSpeakerOptions.configuration(count: 9) }
         #expect(MeetingProcessingMode(configuration: .init(expectedSpeakerCount: 8)) == .manualCount)
         #expect(MeetingProcessingMode(configuration: .init(expectedSpeakerCount: 4)) == .manualCount)
     }
 
-    @Test(arguments: [5, 9])
+    @Test(arguments: [5, 8])
     func enteredCountIsPersistedAndInvalidInputDoesNotImport(_ count: Int) async throws {
         let (root, base, audio) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let service = MeetingInferenceFixture()
         let store = GroveStore(baseDirectory: base, inferenceService: service)
-        store.defaultSpeakerOptions.engineChoice = count <= 8 ? .nemotron3 : .community1
         store.defaultSpeakerOptions.mode = .manualCount
         store.defaultSpeakerOptions.countText = "0"
         await store.importRecording(from: audio)
@@ -223,8 +215,8 @@ struct MeetingInferenceIntegrationTests {
         await store.importRecording(from: audio)
         let config = try #require(await service.configurations.first)
         #expect(config.expectedSpeakerCount == count)
-        #expect(config.speakerCountPolicy == (count <= 8 ? .advisory : .exact))
-        #expect(try config.resolvedEngine() == (count <= 8 ? .nemotron3 : .community1))
+        #expect(config.speakerCountPolicy == .advisory)
+        #expect(try config.resolvedEngine() == .nemotron3)
         let reopened = GroveStore(baseDirectory: base, inferenceService: service)
         #expect(reopened.meetings.first?.inferenceConfiguration == config)
     }

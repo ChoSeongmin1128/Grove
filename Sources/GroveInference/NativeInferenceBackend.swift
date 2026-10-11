@@ -3,16 +3,14 @@ import Foundation
 public struct NativeInferenceBackend: Sendable {
     public let mossExecutable: URL
     public let mossModelDirectory: URL
-    public let communityExecutable: URL
     public let nemotronExecutable: URL?
     public let nemotronModel: URL?
     private let runner = NativeProcessRunner()
 
-    public init(mossExecutable: URL, mossModelDirectory: URL, communityExecutable: URL,
+    public init(mossExecutable: URL, mossModelDirectory: URL,
                 nemotronExecutable: URL? = nil, nemotronModel: URL? = nil) {
         self.mossExecutable = mossExecutable
         self.mossModelDirectory = mossModelDirectory
-        self.communityExecutable = communityExecutable
         self.nemotronExecutable = nemotronExecutable
         self.nemotronModel = nemotronModel
     }
@@ -45,13 +43,7 @@ public struct NativeInferenceBackend: Sendable {
         case .nemotron3:
             guard let nemotronExecutable else { throw InferenceError.missingExecutable("Nemotron 3") }
             try await runner.run(executable: nemotronExecutable, arguments: arguments, directory: directory, log: log)
-        case .community1:
-            // The CLI prints its JSON result on stdout; keep stderr progress out of that stream.
-            let stdout = directory.appendingPathComponent("community1.stdout")
-            try await runner.run(executable: communityExecutable, arguments: arguments, directory: directory,
-                                 log: log, standardOutput: stdout)
-            try ExternalOutputDecoder.segmentsObject(from: Data(contentsOf: stdout)).write(to: output, options: .withoutOverwriting)
-        case .sortformerStreaming, .ultra8:
+        case .sortformerStreaming, .ultra8, .community1:
             throw InferenceError.unsupportedEngine
         }
         return try ExternalOutputDecoder.diarization(Data(contentsOf: output), engine: engine, duration: duration)
@@ -67,13 +59,7 @@ public struct NativeInferenceBackend: Sendable {
                     "--preset", "v3-offline", "--format", "json", "--output", output.path,
                     "--onset", "0.5", "--offset", "0.5", "--pad-onset", "0", "--pad-offset", "0",
                     "--min-duration-on", "0", "--min-duration-off", "0", "--no-batching"]
-        case .community1:
-            var arguments = ["diarize", audio.path, "--engine", "community1", "--community1-compute-units", "ane", "--json"]
-            if configuration.speakerCountPolicy == .exact, let count = configuration.expectedSpeakerCount {
-                arguments += ["--num-speakers", String(count)]
-            }
-            return arguments
-        case .sortformerStreaming, .ultra8:
+        case .sortformerStreaming, .ultra8, .community1:
             throw InferenceError.unsupportedEngine
         }
     }

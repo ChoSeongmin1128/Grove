@@ -25,26 +25,15 @@ struct ExternalOutputDecoderTests {
         let output = try ExternalOutputDecoder.moss(moss, duration: 2)
         #expect(output.utterances.map(\.asrClusterID) == ["2", "A"])
         #expect(output.utterances.map(\.asrChunkIndex) == [0, 1])
-        let community = Data(#"{"segments":[{"start":0,"end":1,"speaker":5}]}"#.utf8)
-        #expect(try ExternalOutputDecoder.diarization(community, engine: .community1, duration: 2).first?.clusterID == "5")
+        let nemotron = Data(#"{"segments":[{"start":0,"end":1,"speaker":5}]}"#.utf8)
+        #expect(try ExternalOutputDecoder.diarization(nemotron, engine: .nemotron3, duration: 2).first?.clusterID == "5")
     }
 
     @Test func decoderRejectsAnotherEngineShape() throws {
         let input = Data(#"{"segments":[{"startTimeSeconds":0,"endTimeSeconds":1,"speaker":"speaker_0"}]}"#.utf8)
-        #expect(throws: (any Error).self) { try ExternalOutputDecoder.diarization(input, engine: .community1, duration: 2) }
-    }
-
-    @Test func unclosedBraceInProgressOutputDoesNotHideTheResult() throws {
-        let output = Data("Loading config {\n".utf8) + Data(#"{"segments":[{"start":0,"end":1,"speaker":"A"}]}"#.utf8)
-        let parsed = try ExternalOutputDecoder.segmentsObject(from: output)
-        #expect((try JSONSerialization.jsonObject(with: parsed) as? [String: Any])?["segments"] is [Any])
-    }
-
-    @Test func findsJSONWithoutConfusingTranscriptBracesWithStructure() throws {
-        let output = Data("Loading {progress}\n".utf8) + Data(#"{"segments":[{"text":"괄호 } 와 \"인용\" { 문자"}]}"#.utf8) + Data("\nDone".utf8)
-        let parsed = try ExternalOutputDecoder.segmentsObject(from: output)
-        let object = try JSONSerialization.jsonObject(with: parsed) as? [String: Any]
-        #expect((object?["segments"] as? [Any])?.count == 1)
+        #expect(throws: (any Error).self) { try ExternalOutputDecoder.diarization(input, engine: .nemotron3, duration: 2) }
+        let retired = Data(#"{"segments":[{"start":0,"end":1,"speaker":1}]}"#.utf8)
+        #expect(throws: InferenceError.self) { try ExternalOutputDecoder.diarization(retired, engine: .community1, duration: 2) }
     }
 
     @Test func rejectsPartialMalformedAndOutOfBoundsResults() {
@@ -56,8 +45,7 @@ struct ExternalOutputDecoderTests {
         #expect(throws: InferenceError.self) { try ExternalOutputDecoder.moss(unfinished, duration: 2) }
         let accumulated = Data(#"{"generationTokens":9000,"hitTokenLimit":false,"hasUnparsedText":false,"processedAudioFrames":32000,"inputAudioFrames":32000,"segments":[{"start":0,"end":1,"text":"정상 완료"}]}"#.utf8)
         #expect(throws: Never.self) { try ExternalOutputDecoder.moss(accumulated, duration: 2) }
-        let late = Data(#"{"segments":[{"start":0,"end":20,"speaker":"A"}]}"#.utf8)
-        #expect(throws: InferenceError.self) { try ExternalOutputDecoder.diarization(late, engine: .community1, duration: 2) }
-        #expect(throws: (any Error).self) { try ExternalOutputDecoder.segmentsObject(from: Data("{broken".utf8)) }
+        let late = Data(#"{"segments":[{"start":0,"end":20,"speaker":1}]}"#.utf8)
+        #expect(throws: InferenceError.self) { try ExternalOutputDecoder.diarization(late, engine: .nemotron3, duration: 2) }
     }
 }

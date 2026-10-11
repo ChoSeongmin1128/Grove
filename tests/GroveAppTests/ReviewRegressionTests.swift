@@ -1,5 +1,4 @@
 @preconcurrency import AVFoundation
-import CryptoKit
 import Foundation
 import GroveInference
 import Testing
@@ -29,13 +28,12 @@ private final class ReviewRecordingDevice: AudioRecordingDevice {
 @MainActor
 private final class SelectedPreparationFixture: MeetingInferenceRunning {
     var blockedEngine: TranscriptionEngine? = .apple
-    var blockCommunity = false
     var suspendPreparation = false
     var preparationRequests = 0
     var runs = 0
     var continuation: CheckedContinuation<Void, Error>?
     func preparationIssue(configuration: InferenceConfiguration, appleReady: Bool) -> String? {
-        if configuration.transcriptionEngine == blockedEngine || (blockCommunity && configuration.diarizationPreference == .community1) { return "선택한 모델 준비 필요" }
+        if configuration.transcriptionEngine == blockedEngine { return "선택한 모델 준비 필요" }
         return nil
     }
     func validatePreparation(configuration: InferenceConfiguration) async throws {
@@ -170,8 +168,7 @@ struct ReviewRegressionTests {
         let indexURL = root.appendingPathComponent("meetings.json")
         let savedIndex = try Data(contentsOf: indexURL)
         var options = MeetingSpeakerOptions()
-        options.engineChoice = .community1
-        fixture.blockCommunity = true
+        options.transcriptionEngine = .apple
         await store.transcribeMeeting(id: meeting.id, plan: try options.plan(isDual: false))
         #expect(store.meetings.first == meeting)
         #expect(store.transcriptDocuments[meeting.id]?.revisionID == document.revisionID)
@@ -230,32 +227,6 @@ struct ReviewRegressionTests {
         var options = MeetingSpeakerOptions()
         options.transcriptionEngine = .apple
         #expect(service.preparationIssue(configuration: try options.plan(isDual: false).configuration, appleReady: false) != nil)
-    }
-
-    @Test func community1ChecksPinnedFilesAndRespectsCacheOverrides() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let content = Data("pinned".utf8)
-        let manifest = [Community1Model.File(path: "segmentation.mlmodelc/weights/weight.bin", bytes: content.count,
-            sha256: "c3e85d1be4c7a5f1d0c38d6e9e2fcb2a3a5d1b8b1b5b3df5e8fbc3ef6b6b0c43")]
-        let override = ["QWEN3_CACHE_DIR": root.appendingPathComponent("override").path]
-        #expect(throws: InferenceError.self) {
-            try LegacyDiarizationPreparation.validate(engine: .community1, caches: root, environment: override, files: manifest)
-        }
-        let url = root.appendingPathComponent("override/qwen3-speech/models/aufklarer/Pyannote-Community-1-CoreML/segmentation.mlmodelc/weights/weight.bin")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try content.write(to: url)
-        try LegacyDiarizationPreparation.validate(engine: .community1, caches: root, environment: override, files: manifest)
-        #expect(throws: InferenceError.self) {
-            try LegacyDiarizationPreparation.validate(engine: .community1, caches: root, environment: override, files: manifest, verifyContents: true)
-        }
-        let digest = SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
-        let pinned = [Community1Model.File(path: manifest[0].path, bytes: content.count, sha256: digest)]
-        try LegacyDiarizationPreparation.validate(engine: .community1, caches: root, environment: override, files: pinned, verifyContents: true)
-        #expect(throws: InferenceError.self) {
-            try LegacyDiarizationPreparation.validate(engine: .community1, caches: root, environment: [:], files: pinned)
-        }
-        #expect(Community1Model.files.count == 10 && Community1Model.files.allSatisfy { $0.sha256.count == 64 })
     }
 
     @Test(arguments: [true, false]) func lateCalendarGrantOrDenialCannotOverrideDisable(allowed: Bool) async throws {

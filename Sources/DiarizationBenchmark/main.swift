@@ -28,7 +28,6 @@ struct DiarizationBenchmark {
             let directory = URL(fileURLWithPath: args[2], isDirectory: true)
             let backend = NativeInferenceBackend(mossExecutable: URL(fileURLWithPath: args[4]),
                 mossModelDirectory: URL(fileURLWithPath: args[5], isDirectory: true),
-                communityExecutable: directory.appendingPathComponent("not-used"),
                 nemotronExecutable: URL(fileURLWithPath: args[6]), nemotronModel: URL(fileURLWithPath: args[7]))
             let pipeline = NativeInferencePipeline(backend: backend)
             let started = Date()
@@ -50,23 +49,18 @@ struct DiarizationBenchmark {
             print("Prepared \(prepared.frameCount) frames at \(prepared.sampleRate)Hz; \(prepared.duration)s")
             return
         }
-        guard args.count == 5 || args.count == 6,
-              let preference = DiarizationPreference(rawValue: args[2]), [.nemotron3, .community1].contains(preference),
-              args[3] == "auto" || Int(args[3]) != nil, preference == .community1 || args.count == 6 else {
+        guard args.count == 5, args[2] == "auto" || Int(args[2]) != nil else {
             throw NSError(domain: "GroveBenchmark", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                "Usage: grove-diarization-benchmark INPUT_WAV OUTPUT_DIRECTORY nemotron3|community1 auto|SPEAKER_COUNT EXECUTABLE [NEMOTRON_MODEL]"])
+                "Usage: grove-diarization-benchmark INPUT_WAV OUTPUT_DIRECTORY auto|SPEAKER_COUNT NEMOTRON_EXECUTABLE NEMOTRON_MODEL"])
         }
         let audio = URL(fileURLWithPath: args[0])
         let directory = URL(fileURLWithPath: args[1])
-        let count = Int(args[3])
-        let configuration = InferenceConfiguration(expectedSpeakerCount: count, diarizationPreference: preference,
-            speakerCountPolicy: preference == .community1 && count != nil ? .exact : .advisory)
+        let configuration = InferenceConfiguration(expectedSpeakerCount: Int(args[2]), diarizationPreference: .nemotron3)
         let file = try AVAudioFile(forReading: audio)
         let duration = Double(file.length) / file.processingFormat.sampleRate
-        let executable = URL(fileURLWithPath: args[4])
         let backend = NativeInferenceBackend(mossExecutable: directory.appendingPathComponent("not-used"),
-            mossModelDirectory: directory.appendingPathComponent("not-used-model"), communityExecutable: executable,
-            nemotronExecutable: executable, nemotronModel: args.count == 6 ? URL(fileURLWithPath: args[5]) : nil)
+            mossModelDirectory: directory.appendingPathComponent("not-used-model"),
+            nemotronExecutable: URL(fileURLWithPath: args[3]), nemotronModel: URL(fileURLWithPath: args[4]))
         let start = Date()
         let turns = try await backend.diarize(audio: audio, duration: duration, configuration: configuration, directory: directory)
         let result = Result(durationSeconds: duration, stageWallSeconds: Date().timeIntervalSince(start),

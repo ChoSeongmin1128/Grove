@@ -4,10 +4,9 @@ import Testing
 @testable import GroveApp
 
 struct MeetingSpeakerOptionsTests {
-    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8, 9, 12])
-    func enteredCountChoosesEngineAndIsPassedWithoutClamping(_ count: Int) throws {
+    @Test(arguments: [1, 2, 3, 4, 5, 6, 7, 8])
+    func enteredCountIsRecordedButNotPassedToTheDiarizer(_ count: Int) throws {
         var options = MeetingSpeakerOptions()
-        options.engineChoice = count <= 8 ? .nemotron3 : .community1
         options.mode = .manualCount
         options.countText = String(count)
         let config = try options.plan(isDual: false).configuration
@@ -15,15 +14,9 @@ struct MeetingSpeakerOptionsTests {
         let args = try NativeInferenceBackend.diarizationArguments(audio: URL(fileURLWithPath: "/tmp/input.wav"),
             output: URL(fileURLWithPath: "/tmp/output.json"), configuration: config,
             nemotronModel: URL(fileURLWithPath: "/tmp/model.gguf"))
-        if count <= 8 {
-            #expect(try config.resolvedEngine() == .nemotron3)
-            #expect(config.speakerCountPolicy == .advisory)
-            #expect(!args.contains("--num-speakers"))
-        } else {
-            #expect(try config.resolvedEngine() == .community1)
-            #expect(config.speakerCountPolicy == .exact)
-            #expect(args.suffix(2) == ["--num-speakers", String(count)])
-        }
+        #expect(try config.resolvedEngine() == .nemotron3)
+        #expect(config.speakerCountPolicy == .advisory)
+        #expect(!args.contains("--num-speakers"))
     }
 
     @Test(arguments: ["", " ", "0", "-2", "4.5", "네 명", "999999999999999999999999"])
@@ -65,7 +58,7 @@ struct MeetingSpeakerOptionsTests {
         #expect(try configs["microphone"]?.resolvedEngine() == .nemotron3)
         let reopened = MeetingSpeakerOptions(configuration: plan.configuration, channels: plan.channelConfigurations)
         #expect(try reopened.plan(isDual: true) == plan)
-        let global = MeetingInferencePlan(configuration: try MeetingEngineChoice.nemotron3.configuration(count: 5))
+        let global = MeetingInferencePlan(configuration: try MeetingSpeakerOptions.configuration(count: 5))
         #expect(throws: InferenceError.self) { try global.configurations(for: ["system", "microphone"]) }
         #expect(throws: InferenceError.self) { try plan.configurations(for: ["recording"]) }
     }

@@ -141,11 +141,9 @@ struct ModelSettingsView: View {
                 }
                 if let message = models.message { Text(message).font(.caption).foregroundStyle(.secondary) }
             }
-            Section("모델 선택") {
+            Section("화자 분리") {
                 Text("Nemotron 3는 최대 8명을 자동으로 구분하며 인원수를 강제하지 않습니다. 전사 후 화자 배정을 확인해 주세요. 기존 녹음의 결과는 그대로 유지됩니다.")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("Community-1은 9명 이상이거나 인원을 정확히 지정할 때 쓰는 고급 선택지입니다. 해당 모델을 별도로 준비한 환경에서 사용할 수 있습니다.")
-                    .font(.caption).foregroundStyle(.secondary)
                 Button("모델 폴더 열기") { NSWorkspace.shared.open(models.baseDirectory.appendingPathComponent("Models")) }
             }
         }.formStyle(.grouped)

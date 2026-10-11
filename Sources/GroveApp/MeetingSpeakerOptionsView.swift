@@ -15,9 +15,6 @@ struct MeetingSpeakerOptionsView: View {
                 Text("Grove 모델을 설치하지 않고 macOS 한국어 전사를 사용합니다. 화자 구분은 제공하지 않습니다.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-            Picker("화자 분리 엔진", selection: $options.engineChoice) {
-                ForEach(MeetingEngineChoice.allCases) { engine in Text(engine.label).tag(engine) }
-            }
             Picker("화자 수", selection: $options.mode) {
                 ForEach(MeetingProcessingMode.allCases) { mode in Text(mode.label).tag(mode) }
             }
@@ -36,17 +33,9 @@ struct MeetingSpeakerOptionsView: View {
                     Text(error).font(.caption).foregroundStyle(GroveTheme.evidence)
                 }
             }
-            Text(engineExplanation).font(.caption).foregroundStyle(.secondary)
+            Text("최대 8명까지 자동으로 구분합니다. 입력한 인원은 결과 확인용이며 강제하지 않습니다.")
+                .font(.caption).foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var engineExplanation: String {
-        switch options.engineChoice {
-        case .nemotron3:
-            return "최대 8명까지 자동으로 구분하는 가벼운 모델입니다. 입력 인원은 결과 확인용이며 강제하지 않습니다. 9명 이상이면 Community-1을 선택해 주세요."
-        case .community1:
-            return options.mode == .manualCount ? "입력한 인원수를 화자 분리에 적용합니다." : "인원수를 지정하지 않고 자동으로 추정합니다."
         }
     }
 
