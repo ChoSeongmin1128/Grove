@@ -95,8 +95,9 @@ inference, proposals, and unverified items.
 - Grove commits and pushes use the personal `ChoSeongmin1128` account/repository.
 - Use that account's public noreply commit identity; do not expose a private email or
   change global Git author settings for this project.
-- After completing commit/push work, restore the active `gh` account to `nathan-glorang`
-  and verify the switch. Do not leave the personal account active between tasks.
+- Never change the global `gh` active account (`gh auth switch`, `gh auth login`); other
+  sessions share it. Pushes go over the `github-seongmin` SSH remote. For gh commands use a
+  command-scoped token: `GH_TOKEN="$(gh auth token --user ChoSeongmin1128)" gh ... -R ChoSeongmin1128/Grove`.
 - Inspect the exact staged files and diff before every push. Raw/test meeting data,
   user libraries, local model files and generated result artifacts remain excluded.
 - Personal-meeting-derived benchmark numbers and qualitative error analyses also stay
