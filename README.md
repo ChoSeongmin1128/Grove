@@ -14,17 +14,17 @@ Audio and meeting metadata stay on the Mac unless the user explicitly exports th
   recording stays readable, then repackaged without re-encoding to M4A
 - audio and video file import
 - Korean post-meeting transcription with MOSS or Apple SpeechAnalyzer
-- independent diarization: Nemotron 3 by default, Community-1 for 9+ speakers or an exact count
+- independent diarization with Nemotron 3 (up to eight speakers; an entered count is advisory)
 - Calendar reminders from accounts connected to the Mac Calendar app
 - rich-text copy for Notion and divider / meeting-note child page added at a chosen page end
 - in-app model preparation with byte progress, pause / resume, capacity checks, pinned versions, SHA256 and a runtime check
-- per-recording engine/count options; persistent defaults live in Settings
+- per-recording transcription/count options; persistent defaults live in Settings
 - local folders, recording-title editing, and explicit reuse of saved speaker names
 - utterance text/speaker editing, splitting, undo/redo and TXT/Markdown export
 - original audio preservation, path access and byte-preserving file export
 
-Results produced by the retired Sortformer4, Ultra8 and automatic routes remain readable;
-reprocessing them uses Nemotron 3 or Community-1.
+Results produced by the retired Sortformer4, Ultra8, automatic and Community-1 routes
+remain readable; reprocessing them uses Nemotron 3.
 Speaker names are not automatically matched across meetings. Nemotron 3 count
 entry is advisory, not an exact cluster-count constraint. A successful transcription
 or an acknowledged speaker warning does not certify transcription accuracy or approve
@@ -50,8 +50,8 @@ The packaged application is written to `.work/dist/Grove.app`. Packaging expects
 workers in `.work/native-workers` (or `GROVE_NATIVE_WORKERS_DIR`), including their
 matching resources and license notices. This ignored directory is not part of a fresh
 checkout. See the [MOSS worker](scripts/native-moss-harness/README.md) and
-[Nemotron worker](scripts/native-nemotron/README.md) notes; the app also bundles the
-speech-swift Community-1 helper described in [third-party notices](THIRD_PARTY_NOTICES.md).
+[Nemotron worker](scripts/native-nemotron/README.md) notes and the
+[third-party notices](THIRD_PARTY_NOTICES.md).
 Calendar access and Notion credentials are configured in Settings. Notion export sends
 text only when the user clicks Apply; copying does not require a Notion connection.
 Models are stored separately under Grove's Application Support directory and are not

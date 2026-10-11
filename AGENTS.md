@@ -42,8 +42,9 @@ inference, proposals, and unverified items.
 - New recordings are captured as ADTS AAC and repackaged without re-encoding to M4A only
   after the frame count matches. Never delete a capture before the index points at its
   replacement, and never repackage imported files.
-- New processing offers Nemotron 3 and Community-1 only. Retired engines (Sortformer4,
-  Ultra8, automatic routing) stay readable in saved results but are not run again.
+- New processing uses Nemotron 3 only, and an entered speaker count is advisory. Retired
+  engines (Sortformer4, Ultra8, automatic routing, Community-1) stay readable in saved
+  results but are not run again.
 - Unexpected recording completion and encoding failures terminate only their own capture,
   preserve meeting audio and publish an interrupted state. Pausing is not completion.
 - Prepare playback after the recording file is finalized, including the same detail view

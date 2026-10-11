@@ -51,7 +51,7 @@ the private installation and evaluation receipts.
   can share an identity if no retained overlap evidence conflicts.
 - Calendar reminders use a single 440 x 40 row with title, countdown and recording action.
 
-The source targets version 0.4.0 / local-beta.26. This is a personal local beta, a
+The source targets version 0.4.0 / local-beta.27. This is a personal local beta, a
 source build whose signing / notarization status must be checked from local receipts. Consult `App/Info.plist` for the
 build identifier and local receipts for actual installation state.
 
@@ -68,11 +68,10 @@ build identifier and local receipts for actual installation state.
   System-output capture is removed; older dual-channel files remain read-compatible.
 - First-run precision mode uses bundled MOSS + Nemotron 3 and verified model downloads.
   Mac basic transcription uses Apple SpeechAnalyzer with no speaker separation.
-  New processing offers Nemotron 3 and Community-1 (9+ speakers or an exact count).
-  Community-1 runs only against the pinned model revision: file sizes are checked whenever
-  readiness is shown and SHA256 before each job.
-  Results from the retired Sortformer4, Ultra8 and automatic routes stay readable; their
-  saved options reopen as Community-1 when 9+ or an exact count was saved, otherwise Nemotron 3.
+  New processing uses Nemotron 3 only; an entered speaker count is advisory and counts
+  above eight are rejected before the job starts.
+  Results from the retired Sortformer4, Ultra8, automatic and Community-1 routes stay
+  readable; their saved options reopen as Nemotron 3 with the saved count.
 - Calendar reminders read selected Mac calendars and start microphone recording.
   Home actions use the same neutral bordered controls as detail actions. The root no
   longer forces a fixed dark-green tint onto ordinary native buttons.
