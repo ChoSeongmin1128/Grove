@@ -1,0 +1,74 @@
+# Grove 디자인 시스템
+
+재작성 UI의 공통 글자 규칙, 컨트롤, 반복 뷰와 브라우저 예제를 관리한다. 이 디렉터리가 정본이며 legacy Swift 앱과 사용자 라이브러리는 사용하지 않는다. 새 Tauri 앱은 이 공통 소스를 빌드에 연결한다. 브라우저 예제는 네이티브 기능 검증을 대신하지 않는다.
+
+## 책임
+
+| 파일/경로 | 소유하는 것 |
+| --- | --- |
+| `appearance.css`, `appearance.js` | 역할 색상, 6색과 light/dark/system 선택 |
+| `typography.css` | 시스템/한글/코드 글꼴, 크기/굵기/줄간격/자간 역할 |
+| `components.css` | 버튼, 입력, 필드, 배지, 선택, 오류, 모달, 설정 선택의 기본 스타일 |
+| `components.js` | 버튼/상태/회의 행/사람 행/참석자 항목/전사 발언/회의록 읽기/모달 내용 생성 |
+| `controls.css`, `controls.js` | 선택 메뉴와 날짜/시간의 열기/닫기/선택/초점/키보드 동작 |
+| `style.css`, `prototype/` | 제품 화면 배치, 기능별 구성과 상태/이벤트/보존 정책 |
+| `desktop-preview-*`, `windows-preview/` | 각 플랫폼의 창/알림/녹음 표시와 공통 상태 연결 |
+| `catalog/` | 같은 공통 컴포넌트의 역할/상태/상호작용 예제와 생성 토큰 |
+| `checks/` | 공통 뷰와 소비처, 토큰, Windows 연결의 회귀 검사 |
+| `vendor/` | Lucide 원본, 출처와 라이선스 |
+
+그룹 편집, 화자 지정과 자료 연결 같은 기능별 구성은 해당 화면이 소유한다. 모든 화면을 하나의 범용 컴포넌트로 바꾸지 않는다. 공통 뷰가 회의 상태, 참석자 선택, 저장, 스크롤 복원이나 외부 호출을 소유하지 않는다.
+
+## 글자
+
+| 역할 | 크기 | 줄간격 | 용도 |
+| --- | ---: | ---: | --- |
+| body | 14px | 1.5 | 기본 UI와 입력 |
+| label | 13px | 1.5 | 조작 이름과 짧은 이름 |
+| caption | 12px | 1.5 | 날짜/시각/상태/보조 정보 |
+| aux | 11px | 1.5 | 제품 밖의 검토 도구 메타 정보 |
+| subtitle | 15px | 1.5 | 소제목 |
+| reading | 16px | 1.75 | 별도의 읽기 강조 역할 |
+| heading | 19px | 1.35 | 구역 제목 |
+| title | 24px | 1.35 | 회의 제목 |
+| display | 27px | 1.35 | 페이지 제목 |
+| timer | 13px | 1.5 | UI 글꼴과 `tabular-nums` |
+| code | 12px | 1.5 | 코드 글꼴 |
+
+UI 글꼴은 OS의 `system-ui`와 한글 대체 글꼴을 같은 계약으로 사용한다. 코드 이외의 본문과 타이머에 고정폭 글꼴을 쓰지 않는다. 기존 `--body/--display/--mono`는 호환 alias다. 전사/회의록은 기존 읽기 밀도를 유지해 body 크기와 reading 줄간격을 조합한다. 역할의 실제 계산값은 카탈로그에서 확인한다.
+
+## 공통 뷰
+
+`GroveUI`는 HTML을 반환하고 이벤트는 소비 화면에 남긴다. 일반 사용자 문자열은 `text`나 지정된 데이터 속성으로 전달한다. `html/contentHTML/bodyHTML/actionsHTML`은 앱이 만든 신뢰 가능한 조합에만 사용하고, 그 안의 사용자 문자열은 `GroveUI.escape()`로 처리한다. 속성 이름은 허용된 HTML/ARIA/data 목록만 받는다.
+
+카탈로그와 제품은 `meetingRow/personRow/personOption/utterance/minutes/dialogContent`를 함께 사용한다. 기능별 시간/수정/참석자 선택의 기존 `data-action/data-field/id`를 유지한다. 선택 메뉴와 달력도 같은 `GroveControls`를 사용한다.
+
+스타일을 바꿀 때는 소유 파일을 수정한다. 카탈로그에만 별도 제품 스타일을 덧붙이지 않는다. 간격/반경/높이의 모든 숫자를 하나의 scale로 만들지 않으며, 공통 컴포넌트의 반복 기준과 각 플랫폼 구조의 차이를 구분한다.
+
+## 사용과 검사
+
+Grove 저장소 루트에서 실행한다.
+
+```sh
+node design-system/checks/check-design-contracts.cjs
+node --test design-system/checks/check-components.cjs
+node design-system/checks/check-windows-bridge.cjs
+node design-system/catalog/build-tokens.cjs
+node design-system/catalog/check-tokens.cjs
+node design-system/build-preview.cjs --output .work/design-system-preview
+python3 -m http.server 8792 --bind 127.0.0.1 --directory .work/design-system-preview
+```
+
+`/catalog/`, `/prototype/`, `/windows-preview/`에서 검토한다. 소스 변경 후 생성 토큰을 검토하고 다시 만든다. `tokens.json`을 직접 편집하지 않는다. 생성기는 원본 아래 출력, 심볼릭 링크, 소유 표식 없는 기존 출력과 무관한 파일이 있는 출력을 거부한다.
+
+저장은 `grove-design-system-v1-*` 전용 namespace다. 원래 v3 시안의 데이터를 자동으로 가져오지 않는다. 카탈로그는 페이지 메모리, Windows는 분리된 시연 세션을 사용한다. 실제 마이크/외부 계정/OS 알림은 사용하지 않는다.
+
+## 제품 범위
+
+현재 MVP 우선순위는 녹음과 음성 보존, 한국어 전사, 회의 안의 기본 화자 구분, 전사에 근거한 요약이다. 자료 질문/연결 자료 검색/지식 보강 예제는 후속 범위이며 취소한 기능은 아니다. 실시간 전사의 MVP 필수 여부는 미결이다. 등록 화자 자동 이름 연결은 기본 화자 구분과 별도다.
+
+## 검증 경계
+
+코드 검사는 공통 소유권, 이벤트 속성/문자열 처리, 토큰 참조/변경 일치, 테마와 Windows 명령의 출처/녹음 소유 ID를 확인한다. 브라우저의 입력/포커스/선택/읽기 밀도와 열린 메뉴/달력 검사는 별도다.
+
+실제 Windows 글꼴 선택, 125/150/200% 디스플레이 배율, 고대비/Narrator와 macOS VoiceOver/OS 권한/패널/다중 모니터는 아직 네이티브 검증되지 않았다. 웹의 계산된 `font-family` 문자열은 각 글자에 실제 선택된 폰트의 증거가 아니다. 로고, 설정의 최종 항목과 모델은 미확정이다. 새 앱의 첫 native slice는 Tauri/Rust로 구현 중이다.

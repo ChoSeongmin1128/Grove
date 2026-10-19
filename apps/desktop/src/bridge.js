@@ -1,0 +1,56 @@
+import { invoke, convertFileSrc, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+
+const unavailable = 'Grove 앱에서 열어 주세요.';
+let latestSnapshot = null;
+
+function call(command, args = {}) {
+  if (!isTauri()) return Promise.reject(new Error(unavailable));
+  return invoke(command, args).catch((error) => {
+    throw new Error(typeof error === 'string' ? error : '요청을 처리하지 못했습니다. 다시 시도해 주세요.');
+  });
+}
+
+function accept(snapshot) {
+  if (!latestSnapshot || snapshot.revision >= latestSnapshot.revision) latestSnapshot = snapshot;
+  return latestSnapshot;
+}
+
+export const readSnapshot = () => call('read_snapshot').then(accept);
+export const createMeeting = (title, notes = '') => call('create_meeting', { title, notes });
+export const updateMeeting = (id, title, notes) => call('update_meeting', { id, title, notes });
+export const listDevices = () => call('list_devices');
+export const startRecording = (meetingId, deviceId = null) => call('start_recording', { meetingId, deviceId }).then(accept);
+export const pauseRecording = (sessionId) => call('pause_recording', { sessionId }).then(accept);
+export const resumeRecording = (sessionId) => call('resume_recording', { sessionId }).then(accept);
+export const stopRecording = (sessionId) => call('stop_recording', { sessionId }).then(accept);
+export const showRecorder = () => call('show_recorder');
+export const hideRecorder = () => call('hide_recorder');
+export const hideMain = () => call('hide_main');
+export const openMeeting = (meetingId, error = null) => call('open_meeting', { meetingId, error });
+export const requestQuit = (sessionId = null) => call('request_quit', { sessionId });
+export const audioUrl = async (meetingId) => convertFileSrc(await call('audio_file', { meetingId }));
+
+export async function subscribeSnapshots(callback) {
+  if (!isTauri()) return () => {};
+  return listen('grove://snapshot', (event) => {
+    const snapshot = event.payload;
+    if (latestSnapshot && snapshot.revision < latestSnapshot.revision) return;
+    callback(accept(snapshot));
+  });
+}
+
+export async function subscribeOpenMeeting(callback) {
+  if (!isTauri()) return () => {};
+  return listen('grove://open-meeting', (event) => callback(event.payload.meetingId, event.payload.error));
+}
+
+export async function subscribeQuitRequest(callback) {
+  if (!isTauri()) return () => {};
+  return listen('grove://quit-requested', (event) => callback(event.payload));
+}
+
+export async function subscribeCloseRequest(callback) {
+  if (!isTauri()) return () => {};
+  return listen('grove://close-requested', () => callback());
+}

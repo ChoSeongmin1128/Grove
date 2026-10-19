@@ -1,12 +1,31 @@
 # Grove
 
-Grove is a local-first macOS meeting recorder and transcription app.
-Audio and meeting metadata stay on the Mac unless the user explicitly exports them.
+Grove is a local meeting recorder being rewritten for macOS and Windows.
+Audio and meeting metadata stay on the device unless the user explicitly exports them.
+
+## Native rewrite
+
+The new [desktop application](apps/desktop/README.md) uses Tauri and a shared
+[Rust recording core](crates/grove-core/README.md). It has its own application identity
+and storage; it does not import the legacy library automatically.
+
+The first development slice contains meeting creation, notes, microphone selection,
+recording/pause/stop, PCM preservation, interrupted-file recovery, WAV playback and
+a compact recording window. Transcription, diarization and summaries are not yet
+connected. Native macOS and Windows acceptance results must be recorded separately.
+
+The Swift source below is retained temporarily as the legacy implementation.
 
 > Grove is a local beta, not a production-ready recorder or a self-contained model
 > distribution. Packaging requires prepared native workers; the app can download and verify the default model weights.
 
-## Current capabilities
+## Rewrite design system
+
+The [design system](design-system/README.md) contains shared UI, interactive examples,
+and macOS/Windows browser prototypes for the rewrite. It is separate from the current
+native app described below. Native Windows recording is not implemented by these examples.
+
+## Legacy Swift capabilities
 
 - native SwiftUI macOS app
 - first-run choice between precision transcription and Mac basic transcription
@@ -30,13 +49,13 @@ entry is advisory, not an exact cluster-count constraint. A successful transcrip
 or an acknowledged speaker warning does not certify transcription accuracy or approve
 training data. AI summaries and dataset-quality annotation/export are not shipped.
 
-## Requirements
+## Legacy Swift requirements
 
 - macOS 26 or newer
 - Apple Silicon
 - Swift 6.2 / Xcode 26
 
-## Build
+## Legacy Swift build
 
 ```bash
 swift test

@@ -1,0 +1,245 @@
+mod capture;
+mod engine;
+mod store;
+
+use engine::Engine;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+
+pub type Result<T> = std::result::Result<T, CoreError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CoreError {
+    #[error("{0}")]
+    InvalidInput(String),
+    #[error("회의를 찾을 수 없습니다.")]
+    MeetingNotFound,
+    #[error("이미 녹음 중인 회의가 있습니다.")]
+    RecordingBusy,
+    #[error("현재 녹음과 다른 요청입니다.")]
+    StaleSession,
+    #[error("{0}")]
+    InvalidState(String),
+    #[error("{0}")]
+    Audio(String),
+    #[error("저장할 수 없습니다: {0}")]
+    Storage(String),
+    #[error("이미 이 저장소를 사용하는 Grove가 있습니다.")]
+    StoreBusy,
+    #[error("Grove가 종료되어 요청을 처리할 수 없습니다.")]
+    Unavailable,
+}
+
+impl From<std::io::Error> for CoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Storage(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MeetingStatus {
+    Draft,
+    Recording,
+    Paused,
+    Completed,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionState {
+    Recording,
+    Paused,
+    Completed,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AudioArtifact {
+    pub session_id: String,
+    pub relative_path: String,
+    pub frames: u64,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Meeting {
+    pub id: String,
+    pub title: String,
+    pub notes: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub status: MeetingStatus,
+    pub audio: Option<AudioArtifact>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSnapshot {
+    pub id: String,
+    pub meeting_id: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub state: SessionState,
+    pub elapsed_ms: u64,
+    pub saved_frames: u64,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub revision: u64,
+    pub meetings: Vec<Meeting>,
+    pub session: Option<SessionSnapshot>,
+}
+
+type Job = Box<dyn FnOnce(&mut Engine) + Send>;
+
+enum Command {
+    Run(Job),
+    Shutdown,
+}
+
+struct HandleInner {
+    commands: mpsc::SyncSender<Command>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl Drop for HandleInner {
+    fn drop(&mut self) {
+        let _ = self.commands.send(Command::Shutdown);
+        if let Ok(worker) = self.worker.get_mut() {
+            if let Some(worker) = worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CoreHandle {
+    inner: Arc<HandleInner>,
+}
+
+impl CoreHandle {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        let (commands, incoming) = mpsc::sync_channel(32);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let worker = thread::Builder::new()
+            .name("grove-core".into())
+            .spawn(move || {
+                let mut engine = match Engine::open(root) {
+                    Ok(engine) => {
+                        let _ = ready_tx.send(Ok(()));
+                        engine
+                    }
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                        return;
+                    }
+                };
+                loop {
+                    engine.poll_capture();
+                    match incoming.recv_timeout(std::time::Duration::from_millis(40)) {
+                        Ok(Command::Run(job)) => job(&mut engine),
+                        Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+                engine.shutdown();
+            })?;
+        ready_rx.recv().map_err(|_| CoreError::Unavailable)??;
+        Ok(Self {
+            inner: Arc::new(HandleInner {
+                commands,
+                worker: Mutex::new(Some(worker)),
+            }),
+        })
+    }
+
+    fn call<T: Send + 'static>(
+        &self,
+        action: impl FnOnce(&mut Engine) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let (reply, result) = mpsc::sync_channel(1);
+        self.inner
+            .commands
+            .send(Command::Run(Box::new(move |engine| {
+                engine.poll_capture();
+                let _ = reply.send(action(engine));
+            })))
+            .map_err(|_| CoreError::Unavailable)?;
+        result.recv().map_err(|_| CoreError::Unavailable)?
+    }
+
+    pub fn list_meetings(&self) -> Result<Vec<Meeting>> {
+        self.call(|engine| Ok(engine.meetings()))
+    }
+
+    pub fn create_meeting(&self, title: &str, notes: &str) -> Result<Meeting> {
+        let (title, notes) = (title.to_owned(), notes.to_owned());
+        self.call(move |engine| engine.create_meeting(title, notes))
+    }
+
+    pub fn update_meeting(&self, id: &str, title: &str, notes: &str) -> Result<Meeting> {
+        let (id, title, notes) = (id.to_owned(), title.to_owned(), notes.to_owned());
+        self.call(move |engine| engine.update_meeting(&id, title, notes))
+    }
+
+    pub fn devices(&self) -> Result<Vec<Device>> {
+        self.call(|engine| engine.devices())
+    }
+
+    pub fn start(&self, meeting_id: &str, device_id: &str) -> Result<Snapshot> {
+        let (meeting_id, device_id) = (meeting_id.to_owned(), device_id.to_owned());
+        self.call(move |engine| engine.start(&meeting_id, &device_id))
+    }
+
+    pub fn pause(&self, session_id: &str) -> Result<Snapshot> {
+        let session_id = session_id.to_owned();
+        self.call(move |engine| engine.pause(&session_id))
+    }
+
+    pub fn resume(&self, session_id: &str) -> Result<Snapshot> {
+        let session_id = session_id.to_owned();
+        self.call(move |engine| engine.resume(&session_id))
+    }
+
+    pub fn stop(&self, session_id: &str) -> Result<Snapshot> {
+        let session_id = session_id.to_owned();
+        self.call(move |engine| engine.stop(&session_id))
+    }
+
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        self.call(|engine| Ok(engine.snapshot()))
+    }
+
+    pub fn prepare_shutdown(&self, expected_session_id: Option<&str>) -> Result<Snapshot> {
+        let expected_session_id = expected_session_id.map(str::to_owned);
+        self.call(move |engine| engine.prepare_shutdown(expected_session_id.as_deref()))
+    }
+
+    pub fn audio_path(&self, meeting_id: &str) -> Result<PathBuf> {
+        let meeting_id = meeting_id.to_owned();
+        self.call(move |engine| engine.audio_path(&meeting_id))
+    }
+}

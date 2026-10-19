@@ -6,7 +6,31 @@ machine, recordings or evaluation results. Machine-local installation receipts a
 detailed validation logs remain in ignored `.work/`. The root `HANDOFF.md` points to
 the private installation and evaluation receipts.
 
-## Current source
+## Native rewrite source
+
+- `apps/desktop` is the new Grove Tauri app, with identity
+  `io.github.choseongmin1128.grove.desktop`. It uses only its own application data
+  directory. Legacy app/data archival receipts remain private.
+- `crates/grove-core` owns meetings and recording on a dedicated command thread.
+  A bounded callback queue and separate file writer retain native PCM; finalization
+  creates a distinct float32 WAV. Original audio survives conversion failures.
+- Current UI supports meeting creation/search, title/notes editing, microphone choice,
+  pause/resume/stop, finalized playback and a 236 x 44 compact control window.
+  Shared controls, fonts, icons and appearance come from `design-system` at build time.
+- Notes are flushed before switching, hiding or quitting. Delayed saves cannot discard
+  newer input. A native atomic shutdown operation checks the active session and fences
+  new recording starts before the app exits.
+- Synthetic tests cover ownership, persistence, queue overflow, partial-write failure,
+  recovery and delayed UI saves. These tests do not establish actual microphone capture,
+  power-loss durability, long-duration performance or Windows behavior.
+- Models, transcription, summaries, diarization, identity matching, Calendar and Notion
+  are not wired into this app. No weights are downloaded automatically. No notch panel
+  or platform-specific nonactivating floating-window contract is implemented yet.
+- A macOS development bundle builds. Windows-native CI is prepared separately;
+  actual Windows execution, installer, permissions and driver tests remain pending.
+  This is not a release distribution or replacement for qualified recording tests.
+
+## Legacy Swift source
 
 - One workspace window owns navigation, its toolbar and recording / import / file-management
   dialogs. Recording and import begin after setup dismissal. Empty transcript states accept

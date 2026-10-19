@@ -40,6 +40,7 @@
 *.local.json
 
 # Generated build products
+/.work/
 /.build/
 /dist/
 /.swiftpm/
@@ -50,3 +51,10 @@
 .DS_Store
 xcuserdata/
 *.xcuserstate
+
+# Cross-platform rewrite dependencies and generated assets
+/apps/desktop/node_modules/
+/apps/desktop/dist/
+/apps/desktop/.generated/
+/apps/desktop/src-tauri/gen/
+/target/

@@ -1,0 +1,22 @@
+body.windows-design {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body.windows-design > .reviewbar,
+body.windows-design > #review,
+body.windows-design > #desktop-root {
+  display: none !important;
+}
+
+body.windows-design > #app,
+body.windows-design .app-shell {
+  height: 100vh;
+  min-height: 0;
+}
+
+body.windows-design .workspace {
+  min-height: 0;
+}

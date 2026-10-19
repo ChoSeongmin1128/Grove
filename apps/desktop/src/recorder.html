@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Grove 녹음</title>
+    <link rel="stylesheet" href="/shared/appearance.css">
+    <link rel="stylesheet" href="/shared/typography.css">
+    <link rel="stylesheet" href="/shared/components.css">
+    <link rel="stylesheet" href="/shared/desktop-preview.css">
+    <link rel="stylesheet" href="/style.css">
+    <script src="/shared/icons.js"></script>
+    <script src="/shared/components.js"></script>
+  </head>
+  <body class="recorder-page desktop-preview desktop-stage">
+    <main class="recorder desktop-recorder" aria-label="녹음 제어">
+      <div class="desktop-overlay-row">
+        <button id="open-meeting" class="desktop-overlay-grip desktop-button" type="button" title="회의 열기"><span id="recorder-status" class="desktop-overlay-state" role="status"><span class="desktop-state-dot" aria-hidden="true"></span></span><span id="recorder-time" class="desktop-timer">녹음 대기</span></button>
+        <div class="desktop-overlay-controls"><div id="recorder-controls" class="desktop-overlay-primary"></div><button id="hide-recorder" class="desktop-button" type="button" title="녹음 제어창 숨기기" aria-label="녹음 제어창 숨기기"></button></div>
+      </div>
+      <p id="recorder-error" class="sr-only" role="alert"></p>
+    </main>
+    <script type="module" src="/recorder.js"></script>
+  </body>
+</html>

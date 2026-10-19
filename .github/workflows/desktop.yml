@@ -1,0 +1,86 @@
+name: Desktop checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_windows_installer:
+        description: Build an unsigned Windows NSIS installer without installing or publishing it
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/desktop.yml'
+      - '.cargo/config.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/grove-core/**'
+      - 'apps/desktop/**'
+      - 'design-system/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  native:
+    name: Native checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [macos-15, windows-2025]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Prepare native Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustc -Vv
+          cargo -V
+          node --version
+          npm --version
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Check frontend behavior
+        working-directory: apps/desktop
+        run: npm test
+      - name: Build shared frontend
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Test recording core with synthetic input
+        run: cargo test -p grove-core --locked -- --test-threads=1
+      - name: Check native desktop host
+        run: cargo check -p grove-desktop --locked
+      - name: Build Windows installer
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.build_windows_installer
+        working-directory: apps/desktop
+        run: npm run tauri -- build --bundles nsis --ci --no-sign -- --locked
+      - name: Check Windows installer output
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.build_windows_installer
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path '.work/rust-target/release/bundle/nsis' -Filter '*.exe' -File -ErrorAction Stop)
+          if ($installers.Count -eq 0) { throw 'No NSIS installer was produced.' }
+          $installers | Select-Object Name, Length

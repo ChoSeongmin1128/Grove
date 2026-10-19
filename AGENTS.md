@@ -2,6 +2,47 @@
 
 This file applies to the entire repository.
 
+## Native rewrite
+
+- `apps/desktop/` is the new Grove application. `crates/grove-core/` owns its
+  platform-independent storage and recording state; CPAL provides native microphone
+  input on macOS and Windows. Browser prototypes do not establish native support.
+- The new identity is `io.github.choseongmin1128.grove.desktop`, with storage resolved
+  from that application's data directory. Never probe, migrate or initialize the
+  legacy `Grove` library implicitly. The old installed app and data are archived
+  outside active application locations; do not launch the archive during validation.
+- New capture preserves native PCM and creates a separate float32 WAV for playback.
+  The legacy AAC/M4A and model rules below apply to the retained Swift implementation,
+  not this new format. Never discard original PCM after playback conversion.
+- The first native slice provides meetings, notes, microphone recording and playback.
+  Models, summaries, speaker matching and integrations are not connected. Do not
+  fabricate transcripts or summary results to make these screens appear complete.
+- Model selection will prefer qualified GPU paths and retain CPU compatibility.
+  Initial diarization support targets up to eight actual speakers; more attendees
+  must not block recording or transcription. Preserve transcription on speaker-stage failure.
+- Validate this scope with `cargo test -p grove-core --locked`, the desktop JavaScript
+  tests and a native Tauri build, sequentially. Windows needs a Windows runner/device;
+  a macOS or WSL build does not establish Windows recording, permissions or packaging.
+- A development bundle is not a signed/notarized distribution. Native capture,
+  device interruption, shutdown and long recordings require hardware acceptance tests.
+
+## Rewrite design system
+
+- `design-system/` owns the shared browser design system and examples for the rewrite.
+  Its target platforms are macOS and Windows. The existing Swift app rules below
+  continue to describe the retained legacy Swift implementation.
+- Edit shared controls and styles at their canonical source, then rebuild the preview.
+  Do not fix only the catalog while leaving the product example different.
+- `design-system/typography.css` owns font families and text roles;
+  `components.css` owns shared control styles; `components.js` owns repeated views.
+  Feature state and event handlers stay in their consuming screen. Keep platform
+  font contracts shared and preserve explicit component layout when composing icons.
+- Check opened menus, calendar navigation and confirmation, focus restoration,
+  content padding and narrow-window boundaries. Initial closed screenshots are not
+  interaction verification. Browser checks do not establish native OS behavior.
+- Legacy code retention is temporary. Moving code or renaming an installed app must
+  preserve the existing library and keep the new app's identity and storage separate.
+
 ## Document trust
 
 Documents under `docs/` are wholly or partly AI-assisted working notes. Read them
@@ -17,7 +58,7 @@ If documentation and code differ, the code explains current behavior but does no
 automatically define the correct product requirement. Separate verified facts,
 inference, proposals, and unverified items.
 
-## Product boundaries
+## Legacy Swift product boundaries
 
 - Grove is a general-purpose local macOS meeting recorder and transcription app.
 - New recording is microphone-only. Do not reintroduce computer/system-output capture;
@@ -78,7 +119,16 @@ inference, proposals, and unverified items.
 - Before every public push, inspect `git status`, tracked files, and staged diffs for
   private names, paths, credentials, and media.
 
-## Installation and artifacts
+## Native installation and artifacts
+
+- `/Applications/Grove.app` is the macOS installation target, not proof that the
+  new app is installed. Development bundles stay in `.work/rust-target`.
+- Build/test instructions for the new app are in `apps/desktop/README.md`.
+  Never install or launch an archived legacy app as part of rewrite validation.
+- Keep generated native builds, dependencies and preview output under ignored
+  `.work/`; a fresh checkout must not depend on this machine's Git excludes.
+
+## Legacy Swift installation and artifacts
 
 - The canonical installed app is `/Applications/Grove.app`.
 - Validate tests, release packaging, code signing, and a smoke test before replacing it.
@@ -108,7 +158,7 @@ inference, proposals, and unverified items.
   scope; exclude unrelated idle gaps. Record first-use/cache, priority and memory-pressure
   conditions. A worker-stage sum is not a measured GUI save / rendering duration.
 
-## Resume and MVP integration rules
+## Legacy Swift resume and integration rules
 
 - Read root `HANDOFF.md` first when available. It points to the private `.local` handoff;
   `docs/handoff.md` describes source behavior, not machine-local installation receipts.
@@ -149,7 +199,19 @@ inference, proposals, and unverified items.
 6. Update `docs/handoff.md` with results, remaining risks, and whether the installed app
    changed.
 
-Default validation:
+New desktop validation, run sequentially:
+
+```bash
+cargo test -p grove-core --locked -- --test-threads=1
+npm --prefix apps/desktop test
+npm --prefix apps/desktop run build
+cargo check -p grove-desktop --locked
+```
+
+A native bundle build and hardware acceptance remain separate gates; follow
+`apps/desktop/README.md` on the target operating system.
+
+Legacy Swift validation:
 
 ```bash
 swift test
