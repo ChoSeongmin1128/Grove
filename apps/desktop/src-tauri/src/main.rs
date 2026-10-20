@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use grove_core::{CoreHandle, Device, Meeting, Snapshot};
+mod processing;
+use grove_core::{CoreHandle, Device, Meeting, Snapshot, Transcript, TranscriptVersion};
+use processing::{Processing, Progress};
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -8,11 +10,13 @@ use std::sync::{
 };
 use std::time::Duration;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 
 struct DesktopState {
     core: CoreHandle,
     quitting: Arc<AtomicBool>,
     polling: Arc<AtomicBool>,
+    processing: Arc<Processing>,
 }
 
 fn require_main(window: &WebviewWindow) -> Result<(), String> {
@@ -141,6 +145,10 @@ async fn start_recording(
     device_id: Option<String>,
 ) -> Result<Snapshot, String> {
     require_main(&window)?;
+    let processing = state.processing.snapshot();
+    if processing.status == "running" && processing.kind == "import" {
+        return Err("음성 가져오기가 끝난 뒤 녹음을 시작해 주세요.".into());
+    }
     let snapshot = on_core(state.core.clone(), move |core| {
         let selected = match device_id {
             Some(id) => id,
@@ -305,15 +313,121 @@ async fn request_quit(
     session_id: Option<String>,
 ) -> Result<(), String> {
     require_main(&window)?;
-    let snapshot = on_core(state.core.clone(), move |core| {
+    let processing = state.processing.clone();
+    tauri::async_runtime::spawn_blocking(move || processing.shutdown())
+        .await
+        .map_err(|_| "음성 처리를 종료하지 못했습니다.".to_string())?;
+    let result = on_core(state.core.clone(), move |core| {
         core.prepare_shutdown(session_id.as_deref())
     })
-    .await?;
+    .await;
+    let snapshot = match result {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            state.processing.resume();
+            return Err(error);
+        }
+    };
     publish(&app, &snapshot);
     state.quitting.store(true, Ordering::Release);
     state.polling.store(false, Ordering::Release);
     app.exit(0);
     Ok(())
+}
+
+#[tauri::command]
+fn processing_status(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<Progress, String> {
+    require_main(&window)?;
+    Ok(state.processing.snapshot())
+}
+#[tauri::command]
+fn prepare_model(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<Progress, String> {
+    require_main(&window)?;
+    state.processing.prepare_model()
+}
+#[tauri::command]
+async fn import_audio(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<Option<Progress>, String> {
+    require_main(&window)?;
+    if !state.processing.snapshot().supported {
+        return Err("이 기기의 음성 가져오기가 아직 준비되지 않았습니다.".into());
+    }
+    let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
+    if active_session(&snapshot).is_some() {
+        return Err("녹음을 마친 뒤 음성을 가져와 주세요.".into());
+    }
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("음성", &["wav", "m4a", "mp3", "aac", "aiff", "aif", "caf"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|_| "파일 선택 창을 열지 못했습니다.")?;
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let source = source
+        .into_path()
+        .map_err(|_| "로컬 음성 파일을 선택해 주세요.")?;
+    state
+        .processing
+        .import(state.core.clone(), source)
+        .map(Some)
+}
+#[tauri::command]
+async fn transcribe_audio(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+) -> Result<Progress, String> {
+    require_main(&window)?;
+    let processing = state.processing.clone();
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || processing.transcribe(core, meeting_id))
+        .await
+        .map_err(|_| "전사를 시작하지 못했습니다.".to_string())?
+}
+#[tauri::command]
+fn cancel_processing(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    job_id: String,
+) -> Result<(), String> {
+    require_main(&window)?;
+    state.processing.cancel(&job_id)
+}
+#[tauri::command]
+async fn read_transcript(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+) -> Result<Option<Transcript>, String> {
+    require_main(&window)?;
+    on_core(state.core.clone(), move |core| core.transcript(&meeting_id)).await
+}
+#[tauri::command]
+async fn save_transcript(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+    expected: TranscriptVersion,
+    texts: Vec<String>,
+) -> Result<Transcript, String> {
+    require_main(&window)?;
+    on_core(state.core.clone(), move |core| {
+        core.edit_transcript(&meeting_id, expected, texts)
+    })
+    .await
 }
 
 fn tray_icon() -> tauri::image::Image<'static> {
@@ -331,6 +445,7 @@ fn tray_icon() -> tauri::image::Image<'static> {
 
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             show_main(app)
         }))
@@ -348,16 +463,25 @@ fn main() {
             hide_recorder,
             hide_main,
             open_meeting,
-            request_quit
+            request_quit,
+            processing_status,
+            prepare_model,
+            import_audio,
+            transcribe_audio,
+            cancel_processing,
+            read_transcript,
+            save_transcript
         ])
         .setup(|app| {
             let root = app.path().app_data_dir()?;
-            let core = CoreHandle::open(root)?;
+            let core = CoreHandle::open(&root)?;
+            let processing = Processing::new(root, app.path().resource_dir()?);
             let polling = Arc::new(AtomicBool::new(true));
             app.manage(DesktopState {
                 core: core.clone(),
                 quitting: Arc::new(AtomicBool::new(false)),
                 polling: polling.clone(),
+                processing: processing.clone(),
             });
             let menu = tauri::menu::Menu::with_items(
                 app,
@@ -392,6 +516,7 @@ fn main() {
                 while polling.load(Ordering::Acquire) {
                     if let Ok(snapshot) = core.snapshot() {
                         publish(&handle, &snapshot);
+                        let _ = handle.emit_to("main", "grove://processing", processing.snapshot());
                     }
                     std::thread::sleep(Duration::from_millis(750));
                 }

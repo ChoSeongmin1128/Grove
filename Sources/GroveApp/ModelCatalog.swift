@@ -8,9 +8,17 @@ enum ModelGroup: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum MossModel {
-    static let repository = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
-    static let revision = "704aa4a9c304e8520be88901e0d1960158ef5b15"
-    static let workerRuntime = "mlx-audio-0.1.3"
+    static let manifest = try! JSONDecoder().decode(Manifest.self, from: Data(contentsOf: Bundle.module.url(forResource: "moss", withExtension: "json", subdirectory: "Models")!))
+    struct Manifest: Decodable, Sendable {
+        struct File: Decodable, Sendable { let name: String; let bytes: Int64; let sha256: String }
+        let repository: String
+        let revision: String
+        let runtime: String
+        let files: [File]
+    }
+    static let repository = manifest.repository
+    static let revision = manifest.revision
+    static let workerRuntime = manifest.runtime
     static let requiredFiles = ["config.json", "tokenizer.json", "tokenizer_config.json", "processor_config.json", "model-00000-of-00001.safetensors"]
     static func directory(in base: URL) -> URL {
         base.appendingPathComponent("Models/hub/models--\(repository.replacingOccurrences(of: "/", with: "--"))/snapshots/\(revision)", isDirectory: true)
@@ -60,18 +68,6 @@ enum ModelCatalog {
         .voice("FBank.mlmodelc/metadata.json", bytes: 3409, sha256: "2623785f5d186893b82d01e84aa33a7704ef763c3309e02055f22dc9d871ce9a"),
         .voice("FBank.mlmodelc/model.mil", bytes: 15667, sha256: "27aaeb21569e81bdbe2eef87789f50a37cfea800039bd134448a9417de2f30ed"),
         .voice("FBank.mlmodelc/weights/weight.bin", bytes: 1776896, sha256: "9e83fdd3ea78064b078069e4d9141603c61c47a27fd19e7e3142ff7476f8db36"),
-        .moss("added_tokens.json", bytes: 707, sha256: "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"),
-        .moss("config.json", bytes: 2335, sha256: "2b2b7a6e61334152bdd7ecf8a4da3073b4940a097e193d1d2b22093e77535234"),
-        .moss("generation_config.json", bytes: 107, sha256: "e53a4b3ce4f944230cf1ca8fed0c42f4ff0d8c1443eaf98b5315d987334dd9e4"),
-        .moss("merges.txt", bytes: 1671853, sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
-        .moss("model-00000-of-00001.safetensors", bytes: 1817113576, sha256: "9a0ceb4ab7330357db3ff583dba8d83625d5b733b00e1d55d6970e11b07026c4"),
-        .moss("model.safetensors.index.json", bytes: 65401, sha256: "0345ac5d8f360abe4e9adadb5fecd38e7730052b75f64bb58182818b1544cc36"),
-        .moss("preprocessor_config.json", bytes: 315, sha256: "ba2e601484abc80f4cded977f9a4fd4a53175b7d35c2f2511f0cfc3a32ad2499"),
-        .moss("processor_config.json", bytes: 292, sha256: "a978c2dd54a65b576c3dae4b654fe9bcbac1184c6db2df0afb2c90fcdc872ae7"),
-        .moss("special_tokens_map.json", bytes: 613, sha256: "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"),
-        .moss("tokenizer.json", bytes: 11423222, sha256: "bcf03774334462d6e34b5005cb11120a62275f146ee2953e68731ecdbce84fbb"),
-        .moss("tokenizer_config.json", bytes: 503, sha256: "61d04c96104177240688396655ae3f7cf38ce2ea036db867a1d2b6883e27c3d5"),
-        .moss("vocab.json", bytes: 2776833, sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
         .init(group: .nemotron3, repository: "nvidia/Nemotron-3-Diarization", revision: NemotronModel.revision, name: NemotronModel.fileName, bytes: 107012128, sha256: NemotronModel.sha256),
-    ]
+    ] + MossModel.manifest.files.map { .moss($0.name, bytes: $0.bytes, sha256: $0.sha256) }
 }

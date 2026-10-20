@@ -11,8 +11,11 @@ and storage; it does not import the legacy library automatically.
 
 The first development slice contains meeting creation, notes, microphone selection,
 recording/pause/stop, PCM preservation, interrupted-file recovery, WAV playback and
-a compact recording window. Transcription, diarization and summaries are not yet
-connected. Native macOS and Windows acceptance results must be recorded separately.
+a compact recording window. With packaged workers, Apple silicon/macOS 26 also
+supports local audio import, explicit pinned MOSS model preparation, transcription
+and separately versioned corrections. Windows transcription, independent diarization
+and summaries remain unconnected. Native macOS and Windows acceptance results must
+be recorded separately.
 
 The Swift source below is retained temporarily as the legacy implementation.
 

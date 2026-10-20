@@ -43,6 +43,10 @@ A UI host should call them off its event/render thread.
 | `pause(session_id)`, `resume(session_id)`, `stop(session_id)` | `Snapshot` |
 | `snapshot()` | `Snapshot` |
 | `audio_path(meeting_id)` | Validated `PathBuf` for finalized playback |
+| `import_audio(title, original, prepared_wav)` | `Meeting`; original plus mono 16 kHz PCM/playback |
+| `transcript(meeting_id)` | `Option<Transcript>` |
+| `commit_transcript(meeting_id, expected_version, raw)` | `Transcript`; validated complete MOSS output |
+| `edit_transcript(meeting_id, expected_version, texts)` | `Transcript`; separate correction revision |
 | `prepare_shutdown(expected_session_id)` | `Snapshot` |
 
 DTOs serialize as camelCase. Dates are Unix epoch milliseconds. `Snapshot.revision`
@@ -55,6 +59,13 @@ meeting rows retain durable state, while `session` starts empty.
 one command. `None` requires there to be no active session. The host may exit after
 success; a failed final metadata save clears the shutdown fence and returns an error.
 The main window and floating controls should hide independently of this method.
+
+Transcripts bind to the finalized audio session. Commits reject incomplete coverage,
+unparsed output, token caps, invalid timestamps and stale expected versions. Raw output
+is retained even when it cannot become the active transcript. Corrections preserve
+segment identities, times and original text; optimistic versions reject stale edits.
+Import retains the original file and its hash separately from normalized PCM/playback.
+The host owns format conversion, model preparation and worker cancellation.
 
 Only one recording can own a store. Session commands require the exact current ID;
 stale IDs cannot control a newer recording. Existing recordings cannot be overwritten

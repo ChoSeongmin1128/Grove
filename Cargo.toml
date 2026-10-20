@@ -2,6 +2,9 @@
 members = ["crates/grove-core", "apps/desktop/src-tauri"]
 resolver = "2"
 
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

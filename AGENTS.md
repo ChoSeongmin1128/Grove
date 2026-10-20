@@ -14,9 +14,11 @@ This file applies to the entire repository.
 - New capture preserves native PCM and creates a separate float32 WAV for playback.
   The legacy AAC/M4A and model rules below apply to the retained Swift implementation,
   not this new format. Never discard original PCM after playback conversion.
-- The first native slice provides meetings, notes, microphone recording and playback.
-  Models, summaries, speaker matching and integrations are not connected. Do not
-  fabricate transcripts or summary results to make these screens appear complete.
+- The native app provides meetings, notes, microphone recording and playback. With
+  packaged workers, Apple silicon/macOS 26 supports native file import and local MOSS
+  transcription, explicit pinned model preparation and separately versioned corrections.
+  Windows transcription, independent diarization, summaries, speaker matching and
+  integrations remain unconnected. Do not fabricate transcripts or summary results.
 - Model selection will prefer qualified GPU paths and retain CPU compatibility.
   Initial diarization support targets up to eight actual speakers; more attendees
   must not block recording or transcription. Preserve transcription on speaker-stage failure.

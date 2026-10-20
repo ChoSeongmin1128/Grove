@@ -83,3 +83,17 @@ body { overflow: hidden; }
 }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
 @media (forced-colors: active) { .meeting-item[aria-current="true"] { outline: 2px solid Highlight; } }
+
+.library-actions { padding: 0 16px 12px; }
+.library-actions button { width: 100%; }
+.processing-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid var(--border); }
+.processing-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.processing-notice progress { width: 140px; accent-color: var(--accent); }
+.transcript-section { border-bottom: 1px solid var(--border); padding: 21px 0; }
+.transcript-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.transcript-heading .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.transcript-row { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 12px; padding: 12px 0; }
+.transcript-row > button { align-self: start; }
+.transcript-row textarea { width: 100%; min-height: 74px; resize: vertical; font-size: var(--text-body-size); line-height: var(--leading-reading); }
+.transcript-row details { margin-top: 6px; color: var(--text-secondary); font-size: var(--text-caption-size); }
+.transcript-row details p { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }

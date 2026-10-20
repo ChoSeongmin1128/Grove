@@ -15,7 +15,7 @@ let package = Package(
         .executableTarget(name: "AppleBenchmark"),
         .target(name: "GroveInference"),
         .executableTarget(name: "DiarizationBenchmark", dependencies: ["GroveInference"]),
-        .executableTarget(name: "GroveApp", dependencies: ["GroveInference"], resources: [.copy("Resources/Fonts")]),
+        .executableTarget(name: "GroveApp", dependencies: ["GroveInference"], resources: [.copy("Resources/Fonts"), .copy("Resources/Models")]),
         .testTarget(name: "GroveInferenceTests", dependencies: ["GroveInference"]),
         .testTarget(name: "GroveAppTests", dependencies: ["GroveApp"]),
     ]

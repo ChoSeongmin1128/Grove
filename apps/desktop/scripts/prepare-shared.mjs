@@ -11,3 +11,5 @@ for (const name of ['appearance.css', 'typography.css', 'components.css', 'contr
   await copyFile(resolve(source, name), resolve(target, name));
 }
 await cp(resolve(source, 'vendor/lucide'), resolve(target, 'vendor/lucide'), { recursive: true });
+
+await mkdir(resolve(app, '.generated/native'), { recursive: true });

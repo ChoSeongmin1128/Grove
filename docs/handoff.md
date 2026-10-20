@@ -17,15 +17,35 @@ the private installation and evaluation receipts.
 - Current UI supports meeting creation/search, title/notes editing, microphone choice,
   pause/resume/stop, finalized playback and a 236 x 44 compact control window.
   Shared controls, fonts, icons and appearance come from `design-system` at build time.
+- An empty input-device list disables new recording and explains how to refresh after
+  connecting a microphone. It does not disable pause/stop for an existing session.
 - Notes are flushed before switching, hiding or quitting. Delayed saves cannot discard
   newer input. A native atomic shutdown operation checks the active session and fences
   new recording starts before the app exits.
+- Apple silicon/macOS 26 can import audio with the native picker when the audio and
+  MOSS workers are packaged. Original bytes/hash, normalized PCM and playback remain
+  separate. The base recorder retains its macOS 13 minimum.
+- Explicit model preparation downloads the pinned MOSS snapshot and checks each size
+  and SHA256. The manifest is shared with the retained Swift catalog. Workers and matching
+  Metal resources are packaged; runtime developer tools and audio uploads are unnecessary.
+- Transcription binds complete output to the finalized audio session. Raw output,
+  initial transcript and correction revisions remain separate. Stale edits/reruns cannot
+  replace current corrections. Text editing, timestamp playback and reopen are connected;
+  UI transitions and quit flush pending edits, including composition completion.
+- Processing is cancellable. Normal quit cancels/joins workers before shutting down the
+  core. Failure or cancellation keeps audio and prior transcripts. Interrupted model
+  downloads are retained; partial-byte resume is not implemented.
+- Model hash verification checks cancellation between read blocks. The development
+  profile optimizes SHA256, and PCM import uses buffered reads/writes with an explicit
+  flush and sync before finalization.
 - Synthetic tests cover ownership, persistence, queue overflow, partial-write failure,
-  recovery and delayed UI saves. These tests do not establish actual microphone capture,
-  power-loss durability, long-duration performance or Windows behavior.
-- Models, transcription, summaries, diarization, identity matching, Calendar and Notion
-  are not wired into this app. No weights are downloaded automatically. No notch panel
-  or platform-specific nonactivating floating-window contract is implemented yet.
+  recovery, transcript version conflicts, cancellation and delayed UI saves. These tests
+  do not establish actual microphone capture, power-loss durability, long-duration
+  performance or Windows behavior.
+- Summaries, independent diarization, identity matching, Calendar and Notion remain
+  unconnected. Windows transcription is not implemented. No weights are downloaded
+  automatically. No notch panel or platform-specific nonactivating floating-window
+  contract is implemented yet.
 - A macOS development bundle builds. Windows-native CI is prepared separately;
   actual Windows execution, installer, permissions and driver tests remain pending.
   This is not a release distribution or replacement for qualified recording tests.

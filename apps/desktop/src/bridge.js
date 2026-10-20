@@ -54,3 +54,15 @@ export async function subscribeCloseRequest(callback) {
   if (!isTauri()) return () => {};
   return listen('grove://close-requested', () => callback());
 }
+
+export const processingStatus = () => call('processing_status');
+export const prepareModel = () => call('prepare_model');
+export const importAudio = () => call('import_audio');
+export const transcribeAudio = (meetingId) => call('transcribe_audio', { meetingId });
+export const cancelProcessing = (jobId) => call('cancel_processing', { jobId });
+export const readTranscript = (meetingId) => call('read_transcript', { meetingId });
+export const saveTranscript = (meetingId, expected, texts) => call('save_transcript', { meetingId, expected, texts });
+export async function subscribeProcessing(callback) {
+  if (!isTauri()) return () => {};
+  return listen('grove://processing', (event) => callback(event.payload));
+}

@@ -53,6 +53,9 @@
         "type": "downloadBootstrapper",
         "silent": true
       }
+    },
+    "resources": {
+      "../.generated/native/": "native/"
     }
   }
 }

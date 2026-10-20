@@ -17,6 +17,7 @@
     <div class="workspace">
       <aside class="library" aria-label="회의 목록">
         <header class="library-header"><strong class="brand">Grove</strong><button id="create-meeting" class="primary with-icon" type="button" disabled>새 회의</button></header>
+        <div class="library-actions"><button id="import-audio" type="button" class="quiet small" disabled>음성 가져오기</button></div>
         <label class="search-field"><span class="sr-only">회의 검색</span><input id="search" type="search" placeholder="회의 검색" autocomplete="off"></label>
         <div class="library-heading"><h2>회의</h2><span id="meeting-count" class="muted type-caption"></span></div>
         <nav id="meeting-list" class="meeting-list" aria-label="저장한 회의"></nav>
@@ -24,6 +25,7 @@
       </aside>
       <main class="main-content">
         <div id="error" class="notice app-error" role="alert" hidden><span id="error-message"></span><button id="retry-save" class="small" type="button" hidden>다시 저장</button><button id="dismiss-error" class="quiet small" type="button" aria-label="오류 안내 닫기">닫기</button></div>
+        <div id="processing" class="processing-notice" role="status" hidden><span id="processing-message"></span><progress id="processing-progress" hidden></progress><button id="cancel-processing" type="button" class="quiet small">취소</button></div>
         <section id="welcome" class="welcome"><div class="welcome-icon" aria-hidden="true"></div><h1>회의를 시작하세요</h1><p id="welcome-message">새 회의를 만들어 녹음하고 메모를 남기세요.</p><button id="welcome-create" class="primary with-icon" type="button" disabled>새 회의</button></section>
         <section id="meeting-detail" class="meeting-detail" hidden aria-label="회의 내용">
           <header class="detail-header"><div class="detail-context"><span id="meeting-date" class="muted type-caption"></span><span id="meeting-status"></span></div><label class="sr-only" for="meeting-title">회의 제목</label><input id="meeting-title" class="meeting-title" type="text" placeholder="회의 제목" maxlength="200" autocomplete="off"><div class="detail-actions"><span id="save-status" class="muted type-caption" role="status"></span><button id="save" class="quiet small" type="button" disabled>저장</button></div></header>
@@ -32,6 +34,10 @@
             <div id="recording-controls" class="recording-controls"></div>
             <p id="recording-message" class="muted type-caption" hidden></p>
             <div id="audio-region" class="audio-region" hidden><audio id="audio-player" controls preload="metadata" aria-label="회의 녹음 재생"></audio><p id="audio-message" class="muted type-caption"></p></div>
+          </section>
+          <section id="transcript-section" class="transcript-section" aria-label="전사">
+            <div class="section-heading transcript-heading"><h2>전사</h2><div class="row"><button id="prepare-model" type="button" class="small">전사 모델 준비</button><button id="transcribe" type="button" class="small primary" disabled>전사 시작</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button></div></div>
+            <p id="transcript-message" class="muted type-caption"></p><div id="transcript-rows"></div>
           </section>
           <section class="notes-section"><div class="section-heading"><h2><label for="meeting-notes">메모</label></h2></div><textarea id="meeting-notes" placeholder="안건이나 기억할 내용을 적어 두세요." spellcheck="false"></textarea></section>
         </section>

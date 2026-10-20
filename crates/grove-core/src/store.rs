@@ -209,6 +209,7 @@ impl Store {
             status: MeetingStatus::Draft,
             audio: None,
             error: None,
+            transcript_id: None,
         };
         let relative = Path::new("meetings").join(&meeting.id);
         let directory = checked_path(&self.root, &relative)?;
@@ -523,7 +524,7 @@ pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
         .map_err(|_| CoreError::Storage("저장 정보의 형식이 올바르지 않습니다.".into()))
 }
 
-fn write_json(root: &Path, relative: &Path, value: &impl Serialize) -> Result<()> {
+pub(crate) fn write_json(root: &Path, relative: &Path, value: &impl Serialize) -> Result<()> {
     let destination = checked_path(root, relative)?;
     let parent = relative
         .parent()
@@ -575,7 +576,7 @@ fn validate_existing(path: &Path) -> Result<()> {
     }
 }
 
-fn ensure_directory(path: &Path) -> Result<()> {
+pub(crate) fn ensure_directory(path: &Path) -> Result<()> {
     if !path.is_absolute()
         || path
             .components()

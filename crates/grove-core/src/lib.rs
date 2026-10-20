@@ -1,6 +1,8 @@
 mod capture;
 mod engine;
 mod store;
+mod transcript;
+pub use transcript::{Transcript, TranscriptSegment, TranscriptVersion};
 
 use engine::Engine;
 use serde::{Deserialize, Serialize};
@@ -78,6 +80,8 @@ pub struct Meeting {
     pub status: MeetingStatus,
     pub audio: Option<AudioArtifact>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub transcript_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -198,6 +202,36 @@ impl CoreHandle {
     pub fn create_meeting(&self, title: &str, notes: &str) -> Result<Meeting> {
         let (title, notes) = (title.to_owned(), notes.to_owned());
         self.call(move |engine| engine.create_meeting(title, notes))
+    }
+
+    pub fn import_audio(&self, title: &str, source: &Path, prepared: &Path) -> Result<Meeting> {
+        let (title, source, prepared) = (title.to_owned(), source.to_owned(), prepared.to_owned());
+        self.call(move |engine| engine.import_audio(title, source, prepared))
+    }
+
+    pub fn transcript(&self, id: &str) -> Result<Option<Transcript>> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.transcript(&id))
+    }
+
+    pub fn commit_transcript(
+        &self,
+        id: &str,
+        expected: Option<TranscriptVersion>,
+        raw: Vec<u8>,
+    ) -> Result<Transcript> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.commit_transcript(&id, expected, raw))
+    }
+
+    pub fn edit_transcript(
+        &self,
+        id: &str,
+        expected: TranscriptVersion,
+        texts: Vec<String>,
+    ) -> Result<Transcript> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.edit_transcript(&id, expected, texts))
     }
 
     pub fn update_meeting(&self, id: &str, title: &str, notes: &str) -> Result<Meeting> {

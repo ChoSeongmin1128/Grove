@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub(crate) struct Engine {
-    store: Store,
-    meetings: BTreeMap<String, StoredMeeting>,
-    capture: Option<Capture>,
+    pub(crate) store: Store,
+    pub(crate) meetings: BTreeMap<String, StoredMeeting>,
+    pub(crate) capture: Option<Capture>,
     last_session: Option<SessionSnapshot>,
     revision: u64,
-    quitting: bool,
+    pub(crate) quitting: bool,
 }
 
 impl Engine {
