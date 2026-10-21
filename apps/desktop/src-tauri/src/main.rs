@@ -12,8 +12,8 @@ mod storage_space;
 mod summary;
 mod summary_failure;
 use grove_core::{
-    CoreHandle, Device, Meeting, Snapshot, SummaryView, Transcript, TranscriptSpeaker,
-    TranscriptVersion,
+    CoreHandle, Device, Meeting, Snapshot, SummaryView, Transcript, TranscriptHistory,
+    TranscriptSpeaker, TranscriptVersion,
 };
 use processing::{Processing, Progress};
 use serde::Serialize;
@@ -257,6 +257,57 @@ async fn read_snapshot(
 struct SearchResults {
     ids: Vec<String>,
     unavailable: usize,
+    hits: Vec<SearchHit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchHit {
+    meeting_id: String,
+    kind: &'static str,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    segment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcript_version: Option<TranscriptVersion>,
+}
+
+fn search_excerpt(text: &str, query: &str) -> String {
+    // Map the folded byte offset back to the original character without storing
+    // an index for every byte of a long transcript or splitting Korean text.
+    let offset = text.to_lowercase().find(query).unwrap_or(0);
+    let mut folded_bytes = 0;
+    let mut match_index = 0;
+    for (index, character) in text.chars().enumerate() {
+        match_index = index;
+        let next = folded_bytes + character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if offset < next {
+            break;
+        }
+        folded_bytes = next;
+    }
+    let start = match_index.saturating_sub(32);
+    let mut excerpt: String = text.chars().skip(start).take(100).collect();
+    if start > 0 {
+        excerpt.insert_str(0, "...");
+    }
+    if text.chars().skip(start + 100).next().is_some() {
+        excerpt.push_str("...");
+    }
+    excerpt
+}
+
+fn search_hit(meeting_id: &str, kind: &'static str, text: &str, query: &str) -> SearchHit {
+    SearchHit {
+        meeting_id: meeting_id.into(),
+        kind,
+        text: search_excerpt(text, query),
+        index: None,
+        segment_id: None,
+        transcript_version: None,
+    }
 }
 
 #[tauri::command]
@@ -275,42 +326,81 @@ async fn search_meetings(
     let mut result = SearchResults {
         ids: Vec::new(),
         unavailable: 0,
+        hits: Vec::new(),
     };
     for meeting in snapshot.meetings {
         if !include_deleted && meeting.deleted_at.is_some() {
             continue;
         }
-        if query.is_empty()
-            || meeting.title.to_lowercase().contains(&query)
-            || meeting.notes.to_lowercase().contains(&query)
+        if query.is_empty() {
+            result.ids.push(meeting.id);
+            continue;
+        }
+        if let Some((kind, text)) = [
+            ("title", meeting.title.as_str()),
+            ("notes", meeting.notes.as_str()),
+        ]
+        .into_iter()
+        .find(|(_, text)| text.to_lowercase().contains(&query))
         {
+            result
+                .hits
+                .push(search_hit(&meeting.id, kind, text, &query));
             result.ids.push(meeting.id);
             continue;
         }
         let id = meeting.id.clone();
         let transcript = on_core(state.core.clone(), move |core| core.transcript(&id)).await;
         let mut unavailable = transcript.is_err();
-        let matched = transcript.ok().flatten().is_some_and(|transcript| {
-            transcript
+        let matched = transcript.ok().flatten().and_then(|transcript| {
+            if let Some((index, segment)) = transcript
                 .segments
                 .iter()
-                .any(|segment| segment.text.to_lowercase().contains(&query))
-                || transcript
-                    .speakers
-                    .iter()
-                    .any(|speaker| speaker.name.to_lowercase().contains(&query))
+                .enumerate()
+                .find(|(_, segment)| segment.text.to_lowercase().contains(&query))
+            {
+                let mut hit = search_hit(&meeting.id, "transcript", &segment.text, &query);
+                hit.index = Some(index);
+                hit.segment_id = Some(segment.id.clone());
+                hit.transcript_version = Some(transcript.version.clone());
+                return Some(hit);
+            }
+            transcript
+                .speakers
+                .iter()
+                .find(|speaker| speaker.name.to_lowercase().contains(&query))
+                .map(|speaker| {
+                    let mut hit = search_hit(&meeting.id, "speaker", &speaker.name, &query);
+                    if let Some((index, segment)) =
+                        transcript.segments.iter().enumerate().find(|(_, segment)| {
+                            segment.speaker_id.as_deref() == Some(speaker.id.as_str())
+                        })
+                    {
+                        hit.index = Some(index);
+                        hit.segment_id = Some(segment.id.clone());
+                    }
+                    hit.transcript_version = Some(transcript.version.clone());
+                    hit
+                })
         });
-        if matched {
+        if let Some(hit) = matched {
             result.ids.push(meeting.id);
+            result.hits.push(hit);
         } else {
             let id = meeting.id.clone();
             let summary = on_core(state.core.clone(), move |core| core.summary(&id)).await;
             unavailable |= summary.is_err();
-            if summary
+            if let Some(summary) = summary
                 .ok()
                 .flatten()
-                .is_some_and(|summary| summary.document.text.to_lowercase().contains(&query))
+                .filter(|summary| summary.document.text.to_lowercase().contains(&query))
             {
+                result.hits.push(search_hit(
+                    &meeting.id,
+                    "summary",
+                    &summary.document.text,
+                    &query,
+                ));
                 result.ids.push(meeting.id);
             }
         }
@@ -934,6 +1024,44 @@ async fn read_transcript(
     on_core(state.core.clone(), move |core| core.transcript(&meeting_id)).await
 }
 #[tauri::command]
+async fn read_transcript_history(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+) -> Result<TranscriptHistory, String> {
+    require_main(&window)?;
+    on_core(state.core.clone(), move |core| {
+        core.transcript_history(&meeting_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn restore_transcript(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+    expected: TranscriptVersion,
+    target: TranscriptVersion,
+) -> Result<Transcript, String> {
+    require_main(&window)?;
+    let processing = state.processing.clone();
+    let core = state.core.clone();
+    let document = tauri::async_runtime::spawn_blocking(move || {
+        processing.transcript_restore(&meeting_id, || {
+            core.restore_transcript(&meeting_id, expected, target)
+        })
+    })
+    .await
+    .map_err(|_| "이전 기록을 적용하지 못했습니다.".to_string())?
+    .map_err(|error| error.to_string())?;
+    let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
+    publish(&app, &snapshot);
+    Ok(document)
+}
+
+#[tauri::command]
 async fn save_transcript(
     window: WebviewWindow,
     state: tauri::State<'_, DesktopState>,
@@ -1019,6 +1147,8 @@ fn main() {
             transcribe_audio,
             cancel_processing,
             read_transcript,
+            read_transcript_history,
+            restore_transcript,
             save_transcript,
             save_speakers,
             prepare_summary_model,
@@ -1134,4 +1264,32 @@ fn main() {
                 .store(false, Ordering::Release);
         }
     });
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn search_excerpt_bounds_unicode_context_without_byte_slicing() {
+        let text = format!("{}한국어 검색{}", "앞".repeat(150), "뒤".repeat(150));
+        let excerpt = search_excerpt(&text, "한국어");
+        assert!(excerpt.contains("한국어 검색"));
+        assert!(excerpt.starts_with("...") && excerpt.ends_with("..."));
+        assert!(excerpt.chars().count() <= 106);
+        let expanded = format!("{}İstanbul 모임", "앞".repeat(80));
+        assert!(search_excerpt(&expanded, "i\u{307}stanbul").contains("İstanbul"));
+    }
+
+    #[test]
+    fn search_hit_exposes_bounded_context_and_optional_anchor_only() {
+        let hit = search_hit("meeting", "notes", "회의 안건", "안건");
+        let value = serde_json::to_value(hit).unwrap();
+        assert_eq!(value["meetingId"], "meeting");
+        assert_eq!(value["kind"], "notes");
+        assert_eq!(value["text"], "회의 안건");
+        assert!(value.get("index").is_none());
+        assert!(value.get("segmentId").is_none());
+        assert!(value.get("transcriptVersion").is_none());
+    }
 }

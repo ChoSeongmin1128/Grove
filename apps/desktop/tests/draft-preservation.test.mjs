@@ -8,6 +8,7 @@ const uiSource = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8'
 const librarySource = await readFile(new URL('../src/library-ui.js', import.meta.url), 'utf8');
 const searchSource = await readFile(new URL('../src/meeting-search.js', import.meta.url), 'utf8');
 const detailSource = await readFile(new URL('../src/meeting-detail-ui.js', import.meta.url), 'utf8');
+const actionsSource = await readFile(new URL('../src/transcript-actions.js', import.meta.url), 'utf8');
 const feedbackSource = await readFile(new URL('../src/processing-feedback.js', import.meta.url), 'utf8');
 const componentsSource = await readFile(new URL('../../../design-system/components.js', import.meta.url), 'utf8');
 const tick = () => new Promise(setImmediate);
@@ -25,14 +26,40 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
       id, value: '', dataset: {}, readOnly: false, disabled: false, hidden: false,
       innerHTML: '', textContent: '', scrollTop: 0, listeners: new Map(),
       addEventListener(name, callback) { this.listeners.set(name, callback); },
-      querySelectorAll() { return []; }, querySelector() { return null; },
+      querySelectorAll(selector) {
+        if (this.id !== 'transcript-rows') return [];
+        if (selector === 'textarea') return this.children.filter(child => child.tagName === 'TEXTAREA');
+        const names = [...selector.matchAll(/\[([\w-]+)\]/g)].map(match => match[1]);
+        return this.children.filter(child => names.some(name => child.attributes.has(name)));
+      },
+      querySelector(selector) {
+        if (this.id !== 'transcript-rows') return null;
+        const match = selector.match(/^\[([\w-]+)="([^"]+)"\]$/);
+        return match ? this.children.find(child => child.attributes.get(match[1]) === match[2]) || null : null;
+      },
+      children: [], attributes: new Map(), isConnected: true,
+      get ownerDocument() { return document; },
+      classList: { add() {}, remove() {}, toggle() {} }, contains() { return false; },
       focus() { document.activeElement = this; }, blur() { document.activeElement = document.body; },
       select() {}, pause() {}, play() { return Promise.resolve(); }, load() {}, setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; }, getAttribute(name) { return this[name] ?? null; }, showModal() { this.open = true; }, close() { this.open = false; this.listeners.get('close')?.(); },
     });
     const node = elements.get(id);
     if (!Object.hasOwn(node, 'htmlWrites')) {
       let html = node.innerHTML; node.htmlWrites = 0;
-      Object.defineProperty(node, 'innerHTML', { get: () => html, set(value) { html = value; node.htmlWrites++; } });
+      Object.defineProperty(node, 'innerHTML', { get: () => html, set(value) {
+        html = value; node.htmlWrites++;
+        if (node.id !== 'transcript-rows') return;
+        node.children = [...value.matchAll(/<(textarea|button)\b([^>]*)>([\s\S]*?)<\/\1>/g)].map((match, index) => {
+          const child = element(`transcript-child-${index}`);
+          child.tagName = match[1].toUpperCase();
+          child.attributes = new Map([...match[2].matchAll(/([\w-]+)="([^"]*)"/g)].map(attribute => [attribute[1], attribute[2]]));
+          child.dataset = Object.fromEntries([...child.attributes].filter(([name]) => name.startsWith('data-')).map(([name, content]) => [name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), content]));
+          child.readOnly = /\breadonly\b/.test(match[2]);
+          child.disabled = /\bdisabled\b/.test(match[2]);
+          child.value = match[3].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+          return child;
+        });
+      } });
     }
     return node;
   };
@@ -93,6 +120,10 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
     ${detailSource.replace(/^export /gm, '')}
     ${feedbackSource.replace(/^export /gm, '')}
     ${searchSource.replace(/^export /gm, '')}
+    ${actionsSource.replace(/^import .*;\n/gm, '').replace(/^export /gm, '')}
+    let restoreForTest;
+    const createTranscriptActions = mountTranscriptActions;
+    mountTranscriptActions = options => { restoreForTest = options.onRestored; return createTranscriptActions(options); };
     ${librarySource.slice(0, librarySource.indexOf('export function mountLibrary')).replace(/^export /gm, '')}
     const mountLibrary = () => ({ render() {}, resetSelection() {}, toggleSelection() {}, show: async () => {} });
     const mountSpeakers = ({getState}) => ({render() {}, reset() {}, open: async () => {}, label: segment => getState().transcriptDraft?.doc?.speakers?.find(speaker=>speaker.id === segment.speakerId)?.name || '화자 미지정'});
@@ -100,12 +131,17 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
     const bridge = testBridge;
     const { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance, documentExport } = testUI;
     ${executable}
-    return { state, detail, selectMeeting, saveDraft, onEdit, onQuitRequest, refreshDevices, acceptSnapshot, saveTranscript, loadTranscript, acceptProcessing, loadSummary, renderSummary, createMeeting, openSetup, openSettings, changeMicrophone, changeMeetingDate, render, prepareAudio, exportDocument, editTranscriptRow, completeTranscriptRow, cancelTranscriptRow, cancelProcessing };
+    return { state, detail, restoreTranscript: restoreForTest, selectMeeting, saveDraft, finishEditing, onEdit, onQuitRequest, refreshDevices, acceptSnapshot, saveTranscript, loadTranscript, acceptProcessing, loadSummary, renderSummary, createMeeting, openSetup, openSettings, changeMicrophone, changeMeetingDate, render, prepareAudio, exportDocument, editTranscriptRow, completeTranscriptRow, cancelTranscriptRow, cancelProcessing };
   })()`, context);
   await tick();
   return {
     app, element, updates, exits, bridge, transcriptUpdates, savedTranscript: () => transcript,
-    editTranscript(text) { element('transcript-rows').listeners.get('input')({ target: { dataset: { segment: '0' }, value: text } }); },
+    focused: () => document.activeElement?.id,
+    editTranscript(text) {
+      const target = element('transcript-rows').querySelector('[data-segment="0"]') || { dataset: { segment: '0' } };
+      target.value = text;
+      element('transcript-rows').listeners.get('input')({ target });
+    },
     close: () => closeRequest(),
     setDevices(value) { devices = value; return app.refreshDevices(); },
     saved: () => snapshot.meetings.find((meeting) => meeting.id === 'a'),
@@ -265,6 +301,69 @@ test('late transcript loading cannot replace the newly selected meeting', async 
   assert.equal(page.app.state.transcriptDraft.doc, null);
 });
 
+test('an old transcript read cannot replace a correction saved on the same draft while the read waited', async () => {
+  const original = transcriptDocument();
+  const page = await openApp(original);
+  const pending = deferred();
+  page.bridge.readTranscript = async () => pending.promise;
+  const draft = page.app.state.transcriptDraft;
+  const loading = page.app.loadTranscript('a');
+  page.editTranscript('읽기 대기 중 확정한 수정');
+  const saving = page.app.saveTranscript();
+  await tick();
+  page.transcriptUpdates[0].pending.resolve();
+  await saving;
+  assert.equal(page.app.state.transcriptDraft, draft);
+  assert.equal(draft.dirty, false);
+  assert.equal(draft.doc.version.revision, 1);
+  pending.resolve(original);
+  await loading;
+  assert.equal(page.app.state.transcriptDraft, draft);
+  assert.equal(draft.doc.version.revision, 1);
+  assert.equal(draft.doc.segments[0].text, '읽기 대기 중 확정한 수정');
+});
+
+test('an old transcript read cannot replace a draft adopted through the restore callback', async () => {
+  const original = transcriptDocument();
+  const page = await openApp(original);
+  const pending = deferred();
+  page.bridge.readTranscript = async () => pending.promise;
+  const before = page.app.state.transcriptDraft;
+  const loading = page.app.loadTranscript('a');
+  const restored = structuredClone(original);
+  restored.version = { id: 'restored-transcript', revision: 3 };
+  restored.segments[0].text = '이전 기록에서 되돌린 문장';
+  await page.app.restoreTranscript(restored, 'a');
+  const adopted = page.app.state.transcriptDraft;
+  assert.notEqual(adopted, before);
+  assert.equal(adopted.doc, restored);
+  assert.equal(adopted.dirty, false);
+  pending.resolve(original);
+  await loading;
+  assert.equal(page.app.state.transcriptDraft, adopted);
+  assert.equal(page.app.state.transcriptDraft.doc, restored);
+  assert.match(page.element('transcript-rows').innerHTML, /이전 기록에서 되돌린 문장/);
+});
+
+test('a transcript read still adopts its result when the draft owner and version are unchanged', async () => {
+  const original = transcriptDocument();
+  const page = await openApp(original);
+  const pending = deferred();
+  page.bridge.readTranscript = async () => pending.promise;
+  const before = page.app.state.transcriptDraft;
+  const loading = page.app.loadTranscript('a');
+  const result = structuredClone(original);
+  result.version.revision = 2;
+  result.segments[0].text = '정상적으로 다시 읽은 문장';
+  pending.resolve(result);
+  await loading;
+  assert.notEqual(page.app.state.transcriptDraft, before);
+  assert.equal(page.app.state.transcriptDraft.doc, result);
+  assert.equal(page.app.state.transcriptLoaded, true);
+  assert.equal(page.app.state.transcriptLoadError, false);
+  assert.match(page.element('transcript-rows').innerHTML, /정상적으로 다시 읽은 문장/);
+});
+
 test('quit commits an active transcript composition before requesting native exit', async () => {
   const page = await openApp(transcriptDocument());
   const input = page.element('segment-input');
@@ -303,7 +402,7 @@ test('late summary response cannot leak into another meeting', async () => {
   pending.resolve({ document: { id: 'summary-a', text: '회의 A 내용', sourceVersion: transcriptDocument().version }, stale: false });
   await loading;
   assert.equal(page.app.state.summary, null);
-  assert.equal(page.element('summary-content').innerHTML, '');
+  assert.doesNotMatch(page.element('summary-content').innerHTML, /회의 A 내용|data-summary-seek/);
 });
 
 test('summary rendering escapes model output and removes stale source links', async () => {
@@ -569,6 +668,24 @@ test('settings wait for pending meeting edits and return from model management t
   assert.equal(page.element('settings').id, 'settings');
 });
 
+test('summary preparation returns to its meeting and focuses summary when the original preparation button disappears', async () => {
+  const page = await openApp(transcriptDocument(), { revision: 1, status: 'idle', supported: true, modelReady: true, summarySupported: true, summaryReady: false });
+  await page.app.detail.select('summary');
+  assert.equal(page.element('prepare-summary').hidden, false);
+  await page.element('prepare-summary').listeners.get('click')();
+  assert.equal(page.app.state.setupFromSettings, false);
+  assert.equal(page.element('setup-back').textContent, '회의로 돌아가기');
+  await page.app.acceptProcessing({ ...page.app.state.processing, revision: 2, summaryReady: true });
+  assert.equal(page.element('prepare-summary').hidden, true);
+  assert.equal(page.element('summarize').disabled, false);
+  page.element('setup-back').listeners.get('click')();
+  assert.equal(page.element('setup-screen').hidden, true);
+  assert.equal(page.element('meeting-detail').hidden, false);
+  assert.equal(Boolean(page.element('settings-dialog').open), false);
+  assert.equal(page.app.detail.active(), 'summary');
+  assert.equal(page.focused(), 'summarize');
+});
+
 test('settings category keyboard navigation includes appearance and leaves editing state intact', async () => {
   const page = await openApp();
   await page.app.openSettings();
@@ -808,6 +925,67 @@ test('row completion failure preserves the editor and cancellation only discards
   assert.equal(page.app.state.transcriptDraft.dirty, false);
   assert.equal(page.app.state.transcriptDraft.doc.segments[0].text, '모델 원문');
   assert.doesNotMatch(page.element('transcript-rows').innerHTML, /textarea/);
+});
+
+test('successful finishEditing closes the transcript editor only after its correction persists', async () => {
+  const page = await openApp(transcriptDocument());
+  await page.app.editTranscriptRow(0);
+  page.editTranscript('전환 전에 확정할 수정');
+  let actionCalls = 0;
+  const finishing = page.app.finishEditing(() => { actionCalls++; return 'finished'; });
+  await tick();
+  assert.equal(page.app.state.transcriptEditing, 0);
+  assert.equal(actionCalls, 0);
+  assert.match(page.element('transcript-rows').innerHTML, /<textarea/);
+  page.transcriptUpdates[0].pending.resolve();
+  assert.equal(await finishing, 'finished');
+  assert.equal(actionCalls, 1);
+  assert.equal(page.app.state.transcriptEditing, null);
+  assert.equal(page.app.state.transcriptDraft.dirty, false);
+  assert.equal(page.savedTranscript().segments[0].text, '전환 전에 확정할 수정');
+  assert.doesNotMatch(page.element('transcript-rows').innerHTML, /<textarea|data-transcript-cancel=/);
+});
+
+test('returning after a successful tab transition cannot offer cancellation of an already saved edit', async () => {
+  const page = await openApp(transcriptDocument());
+  await page.app.detail.select('transcript');
+  await page.app.editTranscriptRow(0);
+  page.editTranscript('탭을 옮겨 저장된 문장');
+  const changing = page.app.detail.select('summary');
+  await tick();
+  assert.equal(page.app.detail.active(), 'transcript');
+  assert.equal(page.app.state.transcriptEditing, 0);
+  page.transcriptUpdates[0].pending.resolve();
+  assert.equal(await changing, true);
+  assert.equal(page.app.detail.active(), 'summary');
+  await page.app.detail.select('transcript');
+  assert.equal(page.app.state.transcriptEditing, null);
+  assert.match(page.element('transcript-rows').innerHTML, /탭을 옮겨 저장된 문장/);
+  assert.doesNotMatch(page.element('transcript-rows').innerHTML, /<textarea|data-transcript-cancel=/);
+  await page.app.cancelTranscriptRow();
+  assert.equal(page.app.state.transcriptDraft.doc.segments[0].text, '탭을 옮겨 저장된 문장');
+  assert.equal(page.transcriptUpdates.length, 1);
+});
+
+test('failed transcript persistence keeps the current tab and its cancellable editor intact', async () => {
+  const page = await openApp(transcriptDocument());
+  await page.app.detail.select('transcript');
+  await page.app.editTranscriptRow(0);
+  page.editTranscript('저장 실패 때 남겨야 하는 문장');
+  const changing = page.app.detail.select('summary');
+  await tick();
+  page.transcriptUpdates[0].pending.reject(Error('저장 실패'));
+  assert.equal(await changing, false);
+  assert.equal(page.app.detail.active(), 'transcript');
+  assert.equal(page.app.state.transcriptEditing, 0);
+  assert.equal(page.app.state.transcriptDraft.dirty, true);
+  assert.equal(page.app.state.transcriptDraft.doc.segments[0].text, '저장 실패 때 남겨야 하는 문장');
+  assert.equal(page.savedTranscript().segments[0].text, '모델 원문');
+  assert.equal(page.element('meeting-notes').readOnly, false);
+  const editor = page.element('transcript-rows').querySelector('[data-segment="0"]');
+  assert.equal(editor.value, '저장 실패 때 남겨야 하는 문장');
+  assert.equal(editor.readOnly, false);
+  assert.match(page.element('transcript-rows').innerHTML, /data-transcript-cancel=/);
 });
 
 test('cancellation after a flushed edit preserves the last successfully saved row', async () => {

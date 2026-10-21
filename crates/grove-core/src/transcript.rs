@@ -70,6 +70,24 @@ pub struct Transcript {
     pub segments: Vec<TranscriptSegment>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptHistoryEntry {
+    pub version: TranscriptVersion,
+    pub updated_at: u64,
+    pub segment_count: usize,
+    pub speaker_count: usize,
+    pub edited: bool,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptHistory {
+    pub entries: Vec<TranscriptHistoryEntry>,
+    pub unavailable: usize,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MossOutput {
@@ -481,6 +499,208 @@ impl Engine {
             ));
         }
         Ok(Some((doc, bytes)))
+    }
+
+    // History reads only complete documents below this meeting's transcript directory.
+    // It does not recover partial runs or reconstruct missing source associations.
+    pub fn transcript_history(&self, id: &str) -> Result<TranscriptHistory> {
+        self.require_active_meeting(id)?;
+        let relative = Path::new("meetings").join(id).join("transcripts");
+        let path = store::checked_path(&self.store.root, &relative)?;
+        if !path.exists() {
+            return Ok(TranscriptHistory::default());
+        }
+        let current = self.meetings[id].meeting.transcript_id.as_deref();
+        let mut history = TranscriptHistory::default();
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let Some(transcript_id) = entry.file_name().to_str().map(str::to_owned) else {
+                history.unavailable += 1;
+                continue;
+            };
+            if store::validate_id(&transcript_id).is_err() {
+                history.unavailable += 1;
+                continue;
+            }
+            match self.history_document(id, &transcript_id) {
+                Ok((document, edited, updated_at)) => {
+                    history.entries.push(TranscriptHistoryEntry {
+                        current: current == Some(transcript_id.as_str()),
+                        version: document.version,
+                        updated_at,
+                        segment_count: document.segments.len(),
+                        speaker_count: document.speakers.len(),
+                        edited,
+                    })
+                }
+                Err(_) => history.unavailable += 1,
+            }
+        }
+        history.entries.sort_by(|a, b| {
+            b.current
+                .cmp(&a.current)
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+                .then_with(|| a.version.id.cmp(&b.version.id))
+        });
+        Ok(history)
+    }
+
+    fn history_document(&self, id: &str, transcript_id: &str) -> Result<(Transcript, bool, u64)> {
+        let meeting = &self
+            .meetings
+            .get(id)
+            .ok_or(CoreError::MeetingNotFound)?
+            .meeting;
+        let audio = meeting
+            .audio
+            .as_ref()
+            .ok_or_else(|| CoreError::Storage("원음 정보가 없습니다.".into()))?;
+        let directory = transcript_dir(id, transcript_id)?;
+        let current_path = store::checked_path(&self.store.root, &directory.join("current.json"))?;
+        let current_bytes = read_bytes(&self.store.root, &directory.join("current.json"))?;
+        let document: Transcript = serde_json::from_slice(&current_bytes)
+            .map_err(|_| CoreError::Storage("음성 기록을 읽을 수 없습니다.".into()))?;
+        let initial_bytes = read_bytes(&self.store.root, &directory.join("initial.json"))?;
+        let initial: Transcript = serde_json::from_slice(&initial_bytes)
+            .map_err(|_| CoreError::Storage("원본 음성 기록을 읽을 수 없습니다.".into()))?;
+        let raw = read_bytes(&self.store.root, &directory.join("raw.json"))?;
+        let duration = audio.frames as f64 / audio.sample_rate as f64;
+        let samples = source_position(duration, u64::MAX)
+            .ok_or_else(|| CoreError::Storage("원음 시각이 올바르지 않습니다.".into()))?;
+        let source = document.source.as_ref().ok_or_else(|| {
+            CoreError::Storage("음성 기록의 원본 연결을 확인할 수 없습니다.".into())
+        })?;
+        let valid_source = source.projector_version == PROJECTOR_VERSION
+            && source.raw_sha256 == sha256(&raw)
+            && match source.association.as_str() {
+                "direct" => initial.source.as_ref() == Some(source),
+                LEGACY_ASSOCIATION => initial.source.is_none(),
+                _ => false,
+            };
+        if !valid_source
+            || document.version.id != transcript_id
+            || initial.version.id != transcript_id
+            || initial.version.revision != 0
+            || document.source_session_id != audio.session_id
+            || initial.source_session_id != document.source_session_id
+            || initial.model != document.model
+            || initial.model_revision != document.model_revision
+            || document.segments.is_empty()
+            || initial.segments.len() != document.segments.len()
+        {
+            return Err(CoreError::Storage(
+                "음성 기록의 원본 연결을 확인할 수 없습니다.".into(),
+            ));
+        }
+        let projection = MossOutput::decode(&raw, duration, &audio.session_id, transcript_id)?;
+        if projection.model != initial.model || projection.segments.len() != initial.segments.len()
+        {
+            return Err(CoreError::Storage(
+                "모델 원본과 발언의 연결을 확인할 수 없습니다.".into(),
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        for (index, ((original, current), projected)) in initial
+            .segments
+            .iter()
+            .zip(&document.segments)
+            .zip(&projection.segments)
+            .enumerate()
+        {
+            store::validate_id(&original.id)?;
+            if !ids.insert(&original.id)
+                || original.id != current.id
+                || original.original_text != current.original_text
+                || original.text != original.original_text
+                || projected.original_text != original.original_text
+                || current.source_index != u32::try_from(index).ok()
+                || (source.association == "direct" && original.source_index != current.source_index)
+                || !same_playback_range(original, current, samples)
+                || !same_playback_range(projected, original, samples)
+                || current.text.contains('\0')
+                || current.text.len() > 2 * 1024 * 1024
+            {
+                return Err(CoreError::Storage(
+                    "수정본과 원본 발언의 연결을 확인할 수 없습니다.".into(),
+                ));
+            }
+        }
+        validate_speakers(
+            &document.speakers,
+            &document
+                .segments
+                .iter()
+                .map(|segment| segment.speaker_id.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        let edited = document
+            .segments
+            .iter()
+            .any(|segment| segment.text != segment.original_text)
+            || document.speakers != projection.speakers
+            || document
+                .segments
+                .iter()
+                .map(|segment| &segment.speaker_id)
+                .ne(projection
+                    .segments
+                    .iter()
+                    .map(|segment| &segment.speaker_id));
+        let updated_at = store::open_read(&current_path)?
+            .metadata()?
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| CoreError::Storage("저장 시각을 확인할 수 없습니다.".into()))?
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        Ok((document, edited, updated_at))
+    }
+
+    pub fn restore_transcript(
+        &mut self,
+        id: &str,
+        expected: TranscriptVersion,
+        target: TranscriptVersion,
+    ) -> Result<Transcript> {
+        if self.quitting {
+            return Err(CoreError::Unavailable);
+        }
+        self.require_active_meeting(id)?;
+        if self.capture.is_some() {
+            return Err(CoreError::RecordingBusy);
+        }
+        store::validate_id(&expected.id)?;
+        store::validate_id(&target.id)?;
+        let current_id = self.meetings[id]
+            .meeting
+            .transcript_id
+            .as_deref()
+            .ok_or_else(|| CoreError::InvalidState("음성 기록이 없습니다.".into()))?;
+        let (current, _, _) = self.history_document(id, current_id)?;
+        if current.version != expected {
+            return Err(CoreError::InvalidState(
+                "음성 기록이 변경되었습니다. 이전 기록을 다시 열어 주세요.".into(),
+            ));
+        }
+        if target.id == expected.id {
+            return Err(CoreError::InvalidState(
+                "현재 사용 중인 음성 기록입니다.".into(),
+            ));
+        }
+        let (document, _, _) = self.history_document(id, &target.id)?;
+        if document.version != target {
+            return Err(CoreError::InvalidState(
+                "선택한 이전 기록이 변경되었습니다. 목록을 다시 열어 주세요.".into(),
+            ));
+        }
+        // A -> B -> A is a new revision, so an old A request cannot pass expected-version checks.
+        let restored = self.save_transcript_edit(id, document)?;
+        let mut stored = self.meetings[id].clone();
+        stored.meeting.transcript_id = Some(restored.version.id.clone());
+        stored.meeting.updated_at = store::now();
+        self.store.save(&stored)?;
+        self.meetings.insert(id.into(), stored);
+        Ok(restored)
     }
 
     pub fn upgrade_transcript_sources(&mut self) -> Result<TranscriptUpgradeReport> {
@@ -1750,6 +1970,277 @@ pub(crate) mod tests {
                 .unwrap()
                 .association,
             "direct"
+        );
+    }
+    #[test]
+    fn retranscription_history_restores_edits_and_speakers_as_a_new_revision() {
+        let (_temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        let edited = engine
+            .edit_transcript(&id, first.version.clone(), vec!["수정한 문장".into()])
+            .unwrap();
+        let mut speakers = edited.speakers.clone();
+        speakers[0].name = "참석자".into();
+        let edited = engine
+            .edit_speakers(
+                &id,
+                edited.version.clone(),
+                speakers,
+                edited
+                    .segments
+                    .iter()
+                    .map(|segment| segment.speaker_id.clone())
+                    .collect(),
+            )
+            .unwrap();
+        let second = engine
+            .commit_transcript(&id, Some(edited.version.clone()), output())
+            .unwrap();
+        let root = engine.store.root.clone();
+        let old_directory = root.join(transcript_dir(&id, &edited.version.id).unwrap());
+        let second_path = root
+            .join(transcript_dir(&id, &second.version.id).unwrap())
+            .join("current.json");
+        let second_bytes = std::fs::read(&second_path).unwrap();
+        let raw = std::fs::read(old_directory.join("raw.json")).unwrap();
+        let initial = std::fs::read(old_directory.join("initial.json")).unwrap();
+        let audio = std::fs::read(engine.audio_path(&id).unwrap()).unwrap();
+        let history = engine.transcript_history(&id).unwrap();
+        assert_eq!(history.unavailable, 0);
+        assert_eq!(history.entries.len(), 2);
+        assert_eq!(history.entries[0].version, second.version);
+        assert!(history.entries[0].current && !history.entries[0].edited);
+        assert!(history.entries[1].edited && !history.entries[1].current);
+        let restored = engine
+            .restore_transcript(&id, second.version.clone(), edited.version.clone())
+            .unwrap();
+        assert_eq!(restored.version.id, edited.version.id);
+        assert_eq!(restored.version.revision, edited.version.revision + 1);
+        assert_eq!(restored.source, edited.source);
+        assert_eq!(restored.segments[0].id, edited.segments[0].id);
+        assert_eq!(
+            restored.segments[0].source_index,
+            edited.segments[0].source_index
+        );
+        assert_eq!(restored.segments[0].text, "수정한 문장");
+        assert_eq!(restored.speakers[0].name, "참석자");
+        assert_eq!(std::fs::read(&second_path).unwrap(), second_bytes);
+        assert_eq!(std::fs::read(old_directory.join("raw.json")).unwrap(), raw);
+        assert_eq!(
+            std::fs::read(old_directory.join("initial.json")).unwrap(),
+            initial
+        );
+        assert_eq!(
+            std::fs::read(engine.audio_path(&id).unwrap()).unwrap(),
+            audio
+        );
+        assert!(engine
+            .edit_transcript(&id, edited.version, vec!["stale".into()])
+            .is_err());
+        drop(engine);
+        let engine = Engine::open(root).unwrap();
+        assert_eq!(
+            engine.transcript(&id).unwrap().unwrap().version,
+            restored.version
+        );
+        assert_eq!(engine.transcript_history(&id).unwrap().entries.len(), 2);
+    }
+
+    #[test]
+    fn history_restore_requires_both_current_and_target_versions() {
+        let (_temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        let second = engine
+            .commit_transcript(&id, Some(first.version.clone()), output())
+            .unwrap();
+        let changed = engine
+            .edit_transcript(&id, second.version.clone(), vec!["새 수정".into()])
+            .unwrap();
+        assert!(engine
+            .restore_transcript(&id, second.version, first.version.clone())
+            .is_err());
+        assert_eq!(
+            engine.transcript(&id).unwrap().unwrap().version,
+            changed.version
+        );
+        let restored = engine
+            .restore_transcript(&id, changed.version.clone(), first.version.clone())
+            .unwrap();
+        assert!(engine
+            .restore_transcript(&id, restored.version.clone(), first.version)
+            .is_err());
+        let second_again = engine
+            .restore_transcript(&id, restored.version, changed.version.clone())
+            .unwrap();
+        assert_eq!(second_again.version.revision, changed.version.revision + 1);
+        let current = engine.transcript(&id).unwrap().unwrap();
+        assert!(engine
+            .restore_transcript(
+                &id,
+                current.version.clone(),
+                TranscriptVersion {
+                    id: "../outside".into(),
+                    revision: 0
+                }
+            )
+            .is_err());
+        assert_eq!(
+            engine.transcript(&id).unwrap().unwrap().version,
+            current.version
+        );
+    }
+
+    #[test]
+    fn history_rejects_damaged_source_identity_without_repair_or_partial_activation() {
+        for corruption in ["raw", "id", "session", "sourceIndex", "original", "time"] {
+            let (_temp, mut engine, id, _) = setup();
+            let first = engine.commit_transcript(&id, None, output()).unwrap();
+            let second = engine
+                .commit_transcript(&id, Some(first.version.clone()), output())
+                .unwrap();
+            let directory = engine
+                .store
+                .root
+                .join(transcript_dir(&id, &first.version.id).unwrap());
+            let current = directory.join("current.json");
+            let before_current = std::fs::read(&current).unwrap();
+            if corruption == "raw" {
+                std::fs::write(directory.join("raw.json"), b"{broken}").unwrap();
+            } else {
+                let mut value: serde_json::Value = serde_json::from_slice(&before_current).unwrap();
+                match corruption {
+                    "id" => value["version"]["id"] = Uuid::new_v4().to_string().into(),
+                    "session" => value["sourceSessionId"] = Uuid::new_v4().to_string().into(),
+                    "sourceIndex" => value["segments"][0]["sourceIndex"] = 1.into(),
+                    "original" => value["segments"][0]["originalText"] = "다른 원문".into(),
+                    "time" => value["segments"][0]["start"] = 0.001.into(),
+                    _ => unreachable!(),
+                }
+                std::fs::write(&current, serde_json::to_vec(&value).unwrap()).unwrap();
+            }
+            let damaged = std::fs::read(&current).unwrap();
+            let history = engine.transcript_history(&id).unwrap();
+            assert_eq!(history.entries.len(), 1, "{corruption}");
+            assert_eq!(history.unavailable, 1, "{corruption}");
+            assert!(
+                engine
+                    .restore_transcript(&id, second.version.clone(), first.version.clone())
+                    .is_err(),
+                "{corruption}"
+            );
+            assert_eq!(
+                engine.transcript(&id).unwrap().unwrap().version,
+                second.version
+            );
+            assert_eq!(std::fs::read(&current).unwrap(), damaged);
+        }
+    }
+
+    #[test]
+    fn history_is_read_only_and_does_not_guess_legacy_or_incomplete_documents() {
+        let (_temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        let (directory, legacy) = make_legacy(&engine, &id, true);
+        assert_eq!(engine.transcript_history(&id).unwrap().unavailable, 1);
+        assert_eq!(
+            std::fs::read(directory.join("current.json")).unwrap(),
+            legacy
+        );
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().upgraded, 1);
+        assert_eq!(engine.transcript_history(&id).unwrap().entries.len(), 1);
+        let current = engine.transcript(&id).unwrap().unwrap();
+        assert!(engine
+            .commit_transcript(&id, Some(current.version), b"invalid".to_vec())
+            .is_err());
+        let history = engine.transcript_history(&id).unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].version.id, first.version.id);
+        assert_eq!(history.unavailable, 1);
+        engine.trash_meetings(&[id.clone()]).unwrap();
+        assert!(engine.transcript_history(&id).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_never_follows_transcript_directory_or_document_links() {
+        use std::os::unix::fs::symlink;
+        let (temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        let second = engine
+            .commit_transcript(&id, Some(first.version.clone()), output())
+            .unwrap();
+        let directory = engine
+            .store
+            .root
+            .join(transcript_dir(&id, &first.version.id).unwrap());
+        let raw = directory.join("raw.json");
+        let preserved = temp.path().join("linked-source.json");
+        std::fs::rename(&raw, &preserved).unwrap();
+        symlink(&preserved, &raw).unwrap();
+        let external = temp.path().join("outside");
+        std::fs::create_dir(&external).unwrap();
+        std::fs::write(external.join("current.json"), b"secret").unwrap();
+        let link_id = Uuid::new_v4().to_string();
+        let link = engine
+            .store
+            .root
+            .join(transcript_dir(&id, &link_id).unwrap());
+        symlink(&external, link).unwrap();
+        let history = engine.transcript_history(&id).unwrap();
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.unavailable, 2);
+        assert!(engine
+            .restore_transcript(&id, second.version.clone(), first.version)
+            .is_err());
+        assert_eq!(
+            engine.transcript(&id).unwrap().unwrap().version,
+            second.version
+        );
+        assert_eq!(
+            std::fs::read(external.join("current.json")).unwrap(),
+            b"secret"
+        );
+    }
+    #[test]
+    fn restore_rejects_recording_shutdown_and_deleted_meetings_before_writing() {
+        let (_temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        let second = engine
+            .commit_transcript(&id, Some(first.version.clone()), output())
+            .unwrap();
+        let recording = engine.create_meeting("녹음 중".into(), "".into()).unwrap();
+        let manifest = Manifest::new(
+            &recording.id,
+            "synthetic",
+            "시험 입력",
+            16000,
+            1,
+            Encoding::I16,
+        );
+        let raw = engine.store.prepare_capture(&manifest).unwrap();
+        let (capture, sink) =
+            crate::capture::Capture::prepare(&engine.store.root, manifest, raw).unwrap();
+        engine.capture = Some(capture);
+        assert!(matches!(
+            engine.restore_transcript(&id, second.version.clone(), first.version.clone()),
+            Err(CoreError::RecordingBusy)
+        ));
+        engine.capture = None;
+        drop(sink);
+        engine.quitting = true;
+        assert!(matches!(
+            engine.restore_transcript(&id, second.version.clone(), first.version.clone()),
+            Err(CoreError::Unavailable)
+        ));
+        engine.quitting = false;
+        engine.trash_meetings(&[id.clone()]).unwrap();
+        assert!(matches!(
+            engine.restore_transcript(&id, second.version.clone(), first.version),
+            Err(CoreError::MeetingNotFound)
+        ));
+        assert_eq!(
+            engine.transcript(&id).unwrap().unwrap().version,
+            second.version
         );
     }
 }

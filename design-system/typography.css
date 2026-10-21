@@ -25,6 +25,8 @@
   --tracking-title: -.9px;
 }
 
+:root:lang(ko) { word-break: keep-all; overflow-wrap: anywhere; }
+
 body,
 .type-body {
   font: var(--weight-regular) var(--text-body-size)/var(--leading-ui) var(--font-ui);

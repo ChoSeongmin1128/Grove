@@ -343,6 +343,30 @@ impl Processing {
         commit()
     }
 
+    pub fn transcript_restore<T>(
+        &self,
+        meeting_id: &str,
+        action: impl FnOnce() -> grove_core::Result<T>,
+    ) -> grove_core::Result<T> {
+        // Hold the same ownership gate used by new jobs and capture startup through commit.
+        let running = self.running.lock().unwrap();
+        self.worker_ready()
+            .map_err(grove_core::CoreError::InvalidState)?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(grove_core::CoreError::Unavailable);
+        }
+        if running
+            .as_ref()
+            .is_some_and(|job| !job.handle.is_finished())
+            && self.progress.lock().unwrap().meeting_id.as_deref() == Some(meeting_id)
+        {
+            return Err(grove_core::CoreError::InvalidState(
+                "이 회의의 처리가 끝난 뒤 이전 기록으로 되돌려 주세요.".into(),
+            ));
+        }
+        action()
+    }
+
     pub fn meeting_removal<T>(
         &self,
         core: &CoreHandle,
@@ -1167,6 +1191,47 @@ mod tests {
         let process = Processing::new(root.clone(), root.clone());
         (temporary, process)
     }
+    #[test]
+    fn restoring_transcripts_rejects_related_processing_without_cancelling_it() {
+        let (_temp, process) = setup();
+        let (release, wait) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let handle = thread::spawn(move || {
+            wait.recv().unwrap();
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "summary".into(),
+            cancel: cancel.clone(),
+            handle,
+            import_existing: None,
+        });
+        process.update(|progress| progress.meeting_id = Some("meeting-a".into()));
+        assert!(process
+            .transcript_restore("meeting-a", || -> grove_core::Result<()> {
+                panic!("a related running job must hold restore ownership")
+            })
+            .is_err());
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(process.transcript_restore("meeting-b", || Ok(())).is_ok());
+        release.send(()).unwrap();
+        process
+            .running
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .handle
+            .join()
+            .unwrap();
+        assert!(process.transcript_restore("meeting-a", || Ok(())).is_ok());
+        process.cleanup_failed();
+        assert!(process
+            .transcript_restore("meeting-a", || -> grove_core::Result<()> {
+                panic!("unconfirmed worker termination must block restore")
+            })
+            .is_err());
+    }
+
     #[test]
     fn shutdown_rejects_new_jobs_even_without_a_running_worker() {
         let (_temp, process) = setup();

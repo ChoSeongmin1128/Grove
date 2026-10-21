@@ -119,7 +119,7 @@
   function enhanceDate(input) {
     if (controls.has(input)) return;
     const record = base(input, "date"), timed = input.type === "datetime-local";
-    let month, pending, time;
+    let month, pending, time, focusedDate;
     const allowed = (value) => (!input.min || value >= input.min.slice(0, 10)) && (!input.max || value <= input.max.slice(0, 10));
     const save = (value) => {
       if (timed && value) {
@@ -131,10 +131,14 @@
     };
     function render(focusKey) {
       const today = dateKey(new Date()), first = dateAt(month.getFullYear(), month.getMonth(), 1), start = dateAt(first.getFullYear(), first.getMonth(), 1 - first.getDay());
-      const days = Array.from({ length: 42 }, (_, index) => { const date = dateAt(start.getFullYear(), start.getMonth(), start.getDate() + index), key = dateKey(date); return `<button type="button" role="gridcell" data-date="${key}" tabindex="${key === (focusKey || pending || today) ? 0 : -1}" aria-label="${key}" aria-selected="${key === pending}"${allowed(key) ? "" : " disabled"} class="${date.getMonth() !== month.getMonth() ? "is-outside " : ""}${key === today ? "is-today " : ""}${key === pending ? "is-selected" : ""}">${date.getDate()}</button>`; });
+      const dates = Array.from({ length: 42 }, (_, index) => dateAt(start.getFullYear(), start.getMonth(), start.getDate() + index));
+      const available = dates.filter(date => allowed(dateKey(date))), preferred = focusKey || focusedDate || pending || today;
+      const entry = available.find(date => dateKey(date) === preferred) || available.find(date => date.getMonth() === month.getMonth()) || available[0];
+      focusedDate = entry ? dateKey(entry) : null;
+      const days = dates.map(date => { const key = dateKey(date); return `<button type="button" role="gridcell" data-date="${key}" tabindex="${key === focusedDate && allowed(key) ? 0 : -1}" aria-label="${key}" aria-selected="${key === pending}"${allowed(key) ? "" : " disabled"} class="${date.getMonth() !== month.getMonth() ? "is-outside " : ""}${key === today ? "is-today " : ""}${key === pending ? "is-selected" : ""}">${date.getDate()}</button>`; });
       record.popup.innerHTML = `<div class="grove-calendar-heading"><button type="button" data-month="-1" aria-label="이전 달">${icon("chevron-left")}</button><strong class="grove-calendar-month" aria-live="polite">${month.getFullYear()}년 ${month.getMonth() + 1}월</strong><button type="button" data-month="1" aria-label="다음 달">${icon("chevron-right")}</button></div><div class="grove-calendar-weekdays" aria-hidden="true">${["일", "월", "화", "수", "목", "금", "토"].map((day) => `<span>${day}</span>`).join("")}</div><div class="grove-calendar-grid" role="grid" aria-label="날짜">${Array.from({ length: 6 }, (_, week) => `<div class="grove-calendar-week" role="row" style="display:contents">${days.slice(week * 7, week * 7 + 7).join("")}</div>`).join("")}</div>${timed ? `<label class="grove-calendar-time">시간<input type="text" inputmode="numeric" aria-label="시간" placeholder="09:00" value="${esc(time)}" maxlength="5"></label>` : ""}<p class="grove-calendar-error" role="alert" hidden>선택 가능한 날짜와 시간을 확인해 주세요.</p><div class="grove-calendar-footer"><button type="button" class="grove-calendar-clear quiet" data-calendar="clear">지우기</button><button type="button" class="grove-calendar-today quiet" data-calendar="today"${allowed(today) ? "" : " disabled"}>오늘</button>${timed ? '<button type="button" class="primary" data-calendar="apply">적용</button>' : ""}</div>`;
       place(record);
-      if (focusKey) record.popup.querySelector(`[data-date="${focusKey}"]:not(:disabled)`)?.focus({ preventScroll: true });
+      if (focusKey) record.popup.querySelector(`[data-date="${focusedDate}"]:not(:disabled)`)?.focus({ preventScroll: true });
     }
     record.refresh = () => {
       const date = parseDate(input.value), value = date ? `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}${timed ? " " + input.value.slice(11, 16) : ""}` : "날짜 선택";
@@ -144,6 +148,7 @@
     };
     record.open = () => {
       pending = input.value.slice(0, 10); time = input.value.slice(11, 16) || "09:00";
+      focusedDate = pending || dateKey(new Date());
       month = parseDate(input.value) || new Date();
       if (input.min && dateKey(month) < input.min.slice(0, 10)) month = parseDate(input.min) || month;
       if (input.max && dateKey(month) > input.max.slice(0, 10)) month = parseDate(input.max) || month;
@@ -157,7 +162,12 @@
     record.popup.addEventListener("click", (event) => {
       const button = event.target.closest("button"); if (!button || button.disabled) return;
       if (button.dataset.date) { pending = button.dataset.date; if (timed) render(pending); else save(pending); }
-      else if (button.dataset.month) { month = dateAt(month.getFullYear(), month.getMonth() + +button.dataset.month, 1); render(); record.popup.querySelector(`[data-month="${button.dataset.month}"]`)?.focus({ preventScroll: true }); }
+      else if (button.dataset.month) {
+        const day = parseDate(focusedDate)?.getDate() || 1;
+        month = dateAt(month.getFullYear(), month.getMonth() + +button.dataset.month, 1);
+        focusedDate = dateKey(dateAt(month.getFullYear(), month.getMonth(), Math.min(day, dateAt(month.getFullYear(), month.getMonth() + 1, 0).getDate())));
+        render(); record.popup.querySelector(`[data-month="${button.dataset.month}"]`)?.focus({ preventScroll: true });
+      }
       else if (button.dataset.calendar === "clear") save("");
       else if (button.dataset.calendar === "today") { pending = dateKey(new Date()); if (timed) { month = new Date(); render(pending); } else save(pending); }
       else if (button.dataset.calendar === "apply") { if (pending) save(pending); }

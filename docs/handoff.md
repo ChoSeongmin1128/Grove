@@ -8,6 +8,25 @@ the private installation and evaluation receipts.
 
 ## Native rewrite source
 
+- Rebuilding an existing voice record requires confirmation; verified previous runs are
+  available in Previous records. Restore compares both current and target versions,
+  makes a new revision, preserves raw/initial/audio, and leaves the existing summary stale.
+  History lists the latest corrected document for each recognition run, not every edit.
+- Content search shows matching context in the library and opens the matching section/
+  utterance. Detail search highlights literal matches and moves through transcript,
+  summary and notes. Transcript search anchors validate version and segment identity;
+  delayed reads cannot replace a newer saved/restored document.
+- Speaker changes on a reading row edit only that utterance, with range-limited replay.
+  Full speaker management separates names/merges from utterance assignment. Its footer
+  remains outside the single scrolling body. Completed meeting headers/player/toolbars
+  are compact; settings keeps fixed navigation and dimensions across categories.
+- Shared summary rendering separates headings, paragraphs and lists, escapes raw markup,
+  and retains only validated source controls. Korean text wraps at word boundaries with
+  a fallback for long unspaced text. Month navigation preserves a keyboard date entry
+  without changing the selected date until confirmation. Familiar secondary actions
+  (copy, search, settings, close and search navigation) use shared icons with Korean
+  accessible names/tooltips; generation, export-format and destructive actions retain text.
+
 - Meeting details use top-level Summary / Voice record / Notes tabs, with the shared
   header/recorder/player outside the scrolling content. Initial result loads choose a
   default once; explicit user choices, edits, playback and per-panel reading positions
@@ -33,6 +52,8 @@ the private installation and evaluation receipts.
 - Native voice records default to compact reading rows, with timestamps for playback.
   Only the selected row becomes an auto-sizing editor. Completion waits for persistence;
   failure keeps the editor/input, and cancellation restores the last saved text.
+  Successful save before navigation also closes the editor, so returning cannot expose
+  a stale cancellation action.
   Original recognition text is disclosed only on corrected rows. Shared markup/styles
   live in `design-system/components.js` and `components.css`.
 - Processing shows a shared activity indicator and actual backend stages, with real

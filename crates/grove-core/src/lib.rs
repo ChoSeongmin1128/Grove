@@ -7,8 +7,8 @@ mod transcript;
 pub use library::Folder;
 pub use summary::{Summary, SummaryDraft, SummaryProvenance, SummaryView};
 pub use transcript::{
-    Transcript, TranscriptSegment, TranscriptSource, TranscriptSpeaker, TranscriptUpgradeReport,
-    TranscriptVersion,
+    Transcript, TranscriptHistory, TranscriptHistoryEntry, TranscriptSegment, TranscriptSource,
+    TranscriptSpeaker, TranscriptUpgradeReport, TranscriptVersion,
 };
 
 use engine::Engine;
@@ -263,6 +263,21 @@ impl CoreHandle {
     pub fn transcript(&self, id: &str) -> Result<Option<Transcript>> {
         let id = id.to_owned();
         self.call(move |engine| engine.transcript(&id))
+    }
+
+    pub fn transcript_history(&self, id: &str) -> Result<TranscriptHistory> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.transcript_history(&id))
+    }
+
+    pub fn restore_transcript(
+        &self,
+        id: &str,
+        expected: TranscriptVersion,
+        target: TranscriptVersion,
+    ) -> Result<Transcript> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.restore_transcript(&id, expected, target))
     }
 
     pub fn commit_transcript(

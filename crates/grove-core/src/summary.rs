@@ -200,4 +200,28 @@ mod tests {
             )
             .is_err());
     }
+    #[test]
+    fn restored_transcript_keeps_summary_and_rejects_in_flight_old_source() {
+        let (_temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        let second = engine
+            .commit_transcript(&id, Some(first.version.clone()), output())
+            .unwrap();
+        let summary = engine
+            .commit_summary(&id, draft(second.clone(), None, "기존 요약"))
+            .unwrap();
+        let old_result = draft(second.clone(), Some(summary.id.clone()), "늦은 새 요약");
+        engine
+            .restore_transcript(&id, second.version, first.version)
+            .unwrap();
+        let view = engine.summary(&id).unwrap().unwrap();
+        assert!(view.stale);
+        assert_eq!(view.document.id, summary.id);
+        assert_eq!(view.document.text, "기존 요약");
+        assert!(engine.commit_summary(&id, old_result).is_err());
+        assert_eq!(
+            engine.summary(&id).unwrap().unwrap().document.id,
+            summary.id
+        );
+    }
 }

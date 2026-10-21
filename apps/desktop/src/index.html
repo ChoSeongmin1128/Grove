@@ -10,6 +10,9 @@
     <link rel="stylesheet" href="/shared/components.css">
     <link rel="stylesheet" href="/shared/controls.css">
     <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/speakers.css">
+    <link rel="stylesheet" href="/transcript-actions.css">
+    <link rel="stylesheet" href="/document-tools.css">
     <script src="/shared/icons.js"></script>
     <script src="/shared/components.js"></script>
     <script src="/shared/controls.js"></script>
@@ -22,10 +25,10 @@
         <label class="search-field"><span class="sr-only">회의 검색</span><input id="search" class="text-input text-input--compact" type="search" placeholder="회의 검색" autocomplete="off"></label>
         <div class="library-heading"><h2>회의</h2><button id="new-folder" class="quiet small" type="button" aria-label="새 폴더">새 폴더</button></div>
         <nav id="folder-list" class="folder-list" aria-label="회의 분류"></nav>
-        <footer class="library-footer"><button id="settings" class="quiet small" type="button">설정</button></footer>
+        <footer class="library-footer"><button id="settings" class="quiet small icon" type="button" data-ui-icon="settings" aria-label="설정" title="설정"><span class="sr-only">설정</span></button></footer>
       </aside>
       <main class="main-content">
-        <div id="error" class="notice app-error" role="alert" hidden><span id="error-message"></span><button id="retry-save" class="small" type="button" hidden>다시 저장</button><button id="dismiss-error" class="quiet small" type="button" aria-label="오류 안내 닫기">닫기</button></div>
+        <div id="error" class="notice app-error" role="alert" hidden><span id="error-message"></span><button id="retry-save" class="small" type="button" hidden>다시 저장</button><button id="dismiss-error" class="quiet small icon" type="button" data-ui-icon="x" aria-label="오류 안내 닫기" title="오류 안내 닫기"><span class="sr-only">오류 안내 닫기</span></button></div>
         <div id="processing" class="processing-notice" hidden><span id="processing-spinner" class="activity-spinner" aria-hidden="true"></span><span id="processing-result-icon" class="processing-result-icon" aria-hidden="true" hidden></span><div class="processing-copy" role="status"><strong id="processing-title"></strong><span id="processing-message"></span></div><progress id="processing-progress" aria-label="모델 다운로드 진행률" hidden></progress><span id="processing-percent" class="type-caption" hidden></span><button id="cancel-processing" type="button" class="quiet small">취소</button><p id="processing-warning" class="processing-warning type-caption" role="status" hidden></p></div>
         <section id="setup-screen" class="setup-screen" aria-labelledby="setup-title" hidden>
           <div class="setup-content">
@@ -52,13 +55,11 @@
           <nav id="meeting-list" class="meeting-list" aria-label="저장한 회의"></nav><span id="meeting-count" class="sr-only"></span>
         </section>
         <section id="welcome" class="welcome" hidden><div class="welcome-icon" aria-hidden="true"></div><h1>회의를 시작하세요</h1><p id="welcome-message">새 회의를 만들어 녹음하고 메모를 남기세요.</p><button id="welcome-create" class="primary with-icon" type="button" disabled>새 회의</button></section>
-        <section id="meeting-detail" class="meeting-detail" hidden aria-label="회의 내용">
+        <section id="meeting-detail" class="meeting-detail" tabindex="-1" hidden aria-label="회의 내용">
           <header class="detail-header"><div class="detail-library-actions"><div class="detail-return"><button id="library-back" type="button" class="quiet small">회의 목록</button><span class="detail-path-divider" aria-hidden="true">/</span><span class="sr-only">보관 폴더: </span><span id="meeting-folder-context" class="detail-folder-context"></span></div><div class="row"><button id="meeting-move" type="button" class="quiet small">폴더 이동</button><button id="meeting-trash" type="button" class="quiet small danger-text">휴지통으로 이동</button></div></div>
-            <div class="detail-context"><div class="meeting-day-field"><label for="meeting-day">회의 날짜</label><input id="meeting-day" data-field="meeting-day" type="date"></div><span id="meeting-status"></span></div>
+            <div class="detail-title-row"><label class="sr-only" for="meeting-title">회의 제목</label><input id="meeting-title" class="text-input text-input--title meeting-title" type="text" placeholder="회의 제목" maxlength="200" autocomplete="off"><span id="meeting-status"></span></div>
+            <div class="detail-context"><div class="meeting-day-field"><label class="sr-only" for="meeting-day">회의 날짜</label><input id="meeting-day" data-field="meeting-day" type="date"></div><div class="meeting-timestamps muted type-caption"><span id="recorded-at" hidden></span></div><div class="detail-actions"><span id="save-spinner" class="activity-spinner" aria-hidden="true" hidden></span><span id="save-status" class="muted type-caption" role="status" hidden></span></div></div>
             <span id="meeting-date-message" class="meeting-date-message type-caption" role="status" hidden></span>
-            <label class="sr-only" for="meeting-title">회의 제목</label><input id="meeting-title" class="text-input text-input--title meeting-title" type="text" placeholder="회의 제목" maxlength="200" autocomplete="off">
-            <div class="meeting-timestamps muted type-caption"><span id="recorded-at" hidden></span></div>
-            <div class="detail-actions"><span id="save-spinner" class="activity-spinner" aria-hidden="true" hidden></span><span id="save-status" class="muted type-caption" role="status" hidden></span></div>
           </header>
           <section class="recording-section" aria-label="녹음">
             <div class="recording-toolbar"><div class="recording-heading"><span id="recording-icon" aria-hidden="true"></span><h2>녹음</h2><span id="recording-time" class="type-timer" hidden>00:00</span></div><div class="recording-actions"><div id="recording-controls" class="recording-controls"></div></div></div>
@@ -81,27 +82,29 @@
               <script type="module" src="/audio-player.js"></script>
             </div>
           </section>
-          <nav id="detail-tabs" class="content-tabs" role="tablist" aria-label="회의 내용">
+          <div class="detail-tab-bar"><nav id="detail-tabs" class="content-tabs" role="tablist" aria-label="회의 내용">
             <button id="detail-summary-tab" type="button" role="tab" data-detail-tab="summary" aria-selected="true" aria-controls="summary-section">요약</button>
             <button id="detail-transcript-tab" type="button" role="tab" data-detail-tab="transcript" aria-selected="false" aria-controls="transcript-section" tabindex="-1">음성 기록</button>
             <button id="detail-notes-tab" type="button" role="tab" data-detail-tab="notes" aria-selected="false" aria-controls="notes-section" tabindex="-1">메모</button>
-          </nav>
+          </nav><button id="document-search-toggle" type="button" class="quiet small icon" aria-expanded="false" aria-controls="document-search" data-ui-icon="search" aria-label="내용 검색" title="내용 검색"><span class="sr-only">내용 검색</span></button></div>
+          <div id="document-search" class="document-search" role="search" aria-label="회의 내용 검색" hidden><label><span class="sr-only">검색어</span><input id="document-query" class="text-input text-input--compact" type="search" placeholder="회의 내용 검색" autocomplete="off"></label><span id="document-search-count" class="type-caption muted" role="status"></span><button id="document-search-prev" type="button" class="quiet small icon" data-ui-icon="chevron-up" aria-label="이전 검색 결과" title="이전 검색 결과"><span class="sr-only">이전 검색 결과</span></button><button id="document-search-next" type="button" class="quiet small icon" data-ui-icon="chevron-down" aria-label="다음 검색 결과" title="다음 검색 결과"><span class="sr-only">다음 검색 결과</span></button><button id="document-search-close" type="button" class="quiet small icon" data-ui-icon="x" aria-label="내용 검색 닫기" title="내용 검색 닫기"><span class="sr-only">내용 검색 닫기</span></button></div>
           <div class="detail-panels">
             <section id="summary-section" class="summary-section detail-panel" role="tabpanel" aria-labelledby="detail-summary-tab" tabindex="0">
-              <div class="section-heading detail-panel-toolbar"><h2 class="sr-only">회의록</h2><div class="row"><button id="prepare-summary" type="button" class="small" hidden>요약 기능 준비</button><button id="summarize" type="button" class="small primary" disabled>요약하기</button><button id="copy-summary" type="button" class="small quiet" disabled>복사</button><details id="summary-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
+              <div class="section-heading detail-panel-toolbar"><h2 class="sr-only">회의록</h2><div class="row"><button id="prepare-summary" type="button" class="small" hidden>요약 기능 준비</button><button id="summarize" type="button" class="small primary" disabled>요약하기</button><button id="copy-summary" type="button" class="small quiet icon" disabled data-ui-icon="copy" aria-label="요약 복사" title="요약 복사"><span class="sr-only">요약 복사</span></button><details id="summary-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
               <p id="summary-message" class="muted type-caption" role="status"></p><div id="summary-content" class="summary-content"></div>
             </section>
             <section id="transcript-section" class="transcript-section detail-panel" role="tabpanel" aria-labelledby="detail-transcript-tab" tabindex="0" hidden>
-              <div class="section-heading transcript-heading detail-panel-toolbar"><h2 class="sr-only">음성 기록</h2><div class="row"><button id="speakers-button" type="button" class="small quiet" hidden>화자 편집</button><button id="transcribe" type="button" class="small primary" disabled>텍스트로 변환</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button><button id="copy-transcript" type="button" class="small quiet" hidden>복사</button><details id="transcript-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
+              <div class="section-heading transcript-heading detail-panel-toolbar"><h2 class="sr-only">음성 기록</h2><div class="row"><button id="speakers-button" type="button" class="small quiet" hidden>화자 편집</button><button id="transcribe" type="button" class="small primary" disabled>텍스트로 변환</button><button id="transcript-history" type="button" class="small quiet" hidden>이전 기록</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button><button id="copy-transcript" type="button" class="small quiet icon" hidden data-ui-icon="copy" aria-label="음성 기록 복사" title="음성 기록 복사"><span class="sr-only">음성 기록 복사</span></button><details id="transcript-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
               <p id="transcript-message" class="muted type-caption"></p><div id="transcript-rows"></div>
             </section>
-            <section id="notes-section" class="notes-section detail-panel" role="tabpanel" aria-labelledby="detail-notes-tab" tabindex="0" hidden><div class="section-heading"><h2 class="sr-only"><label for="meeting-notes">메모</label></h2></div><textarea id="meeting-notes" class="text-input" placeholder="안건이나 기억할 내용을 적어 두세요." spellcheck="false"></textarea></section>
+            <section id="notes-section" class="notes-section detail-panel" role="tabpanel" aria-labelledby="detail-notes-tab" tabindex="0" hidden><div class="section-heading"><h2 class="sr-only"><label for="meeting-notes">메모</label></h2></div><div id="notes-search-preview" class="notes-search-preview" role="region" tabindex="0" aria-label="메모 검색 결과" hidden></div><textarea id="meeting-notes" class="text-input" placeholder="안건이나 기억할 내용을 적어 두세요." spellcheck="false"></textarea></section>
           </div>
         </section>
       </main>
     </div>
+    <span id="copy-feedback" class="sr-only" role="status"></span>
     <dialog id="settings-dialog" class="settings-dialog app-settings-dialog" aria-labelledby="settings-title">
-      <header class="settings-header"><h2 id="settings-title">설정</h2><button id="settings-close" class="quiet small" type="button">닫기</button></header>
+      <header class="settings-header"><h2 id="settings-title">설정</h2><button id="settings-close" class="quiet small icon" type="button" data-ui-icon="x" aria-label="설정 닫기" title="설정 닫기"><span class="sr-only">설정 닫기</span></button></header>
       <div class="app-settings-body">
         <nav class="app-settings-tabs" role="tablist" aria-label="설정 분류" aria-orientation="vertical">
           <button id="settings-appearance-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-appearance-panel">화면</button>
@@ -166,6 +169,7 @@
     </dialog>
     <dialog id="speaker-dialog" class="speaker-dialog" aria-labelledby="speaker-dialog-title"><div id="speaker-dialog-body"></div></dialog>
     <dialog id="library-dialog" class="library-dialog" aria-labelledby="library-dialog-title"><div id="library-dialog-body"></div></dialog>
+    <dialog id="transcript-actions-dialog" class="library-dialog transcript-actions-dialog" aria-labelledby="transcript-actions-title"><div id="transcript-actions-body"></div></dialog>
     <dialog id="quit-dialog" class="quit-dialog" aria-labelledby="quit-title"></dialog>
     <script type="module" src="/main.js"></script>
   </body>

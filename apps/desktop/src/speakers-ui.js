@@ -11,7 +11,7 @@ function speakerLabel(doc, segment) {
 }
 
 function copyWorking(doc) {
-  return { version: { ...doc.version }, speakers: copySpeakers(doc.speakers), assignments: assignmentsOf(doc), segments: doc.segments.map(segment => ({ id: segment.id, start: segment.start, text: segment.text })) };
+  return { version: { ...doc.version }, speakers: copySpeakers(doc.speakers), assignments: assignmentsOf(doc), segments: doc.segments.map(segment => ({ id: segment.id, start: segment.start, end: segment.end, text: segment.text })) };
 }
 
 function validateNames(speakers) {
@@ -45,7 +45,7 @@ function mergeSpeakers(working, from, into) {
   return { ...working, speakers: working.speakers.filter(speaker => speaker.id !== from).map(speaker => ({ ...speaker })), assignments: working.assignments.map(id => id === from ? into : id) };
 }
 
-export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, showError, byId }) {
+export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, showError, byId, onPlay, onPause, isPlaying = () => false, canPlay = () => true }) {
   const dialog = byId('speaker-dialog');
   const body = byId('speaker-dialog-body');
   const trigger = byId('speakers-button');
@@ -67,7 +67,9 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
   }
 
   const blocked = view => !view || !view.state.connected || view.state.busy || (view.state.processing?.status === 'running' && view.state.processing.meetingId === view.id);
-  const unchanged = () => editing && sameState(editing.base, editing.working);
+  const unchanged = () => editing && sameState(editing.base, editing.working) && (editing.mode !== 'single' || editing.assignmentTarget === (editing.base.assignments[editing.singleIndex] || ''));
+  const nameId = id => `speaker-name-${encodeURIComponent(id)}`;
+  const mergeId = id => `speaker-merge-${encodeURIComponent(id)}`;
 
   function undoFor(view) {
     const record = view && undoByMeeting.get(view.id);
@@ -90,12 +92,34 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
 
   function focusField(id) {
     const input = byId(id);
-    (input?.closest?.('.grove-select')?.querySelector('button') || input)?.focus({ preventScroll: true });
+    const node = input?.closest?.('.grove-select')?.querySelector('button') || input;
+    if (node && !node.disabled) node.focus({ preventScroll: true });
+    return node;
+  }
+
+  function stopListening() {
+    if (!editing?.listeningId) return;
+    editing.listeningId = null;
+    try { onPause?.(); } catch (error) { showError(error); }
+  }
+
+  function syncPlayback() {
+    if (!editing || !dialog.open) return;
+    const view = current();
+    const unavailable = blocked(view) || view.id !== editing.id || !sameVersion(view.doc.version, editing.base.version);
+    body.querySelectorAll('[data-speaker-play]').forEach(button => {
+      const playing = editing.listeningId === button.dataset.speakerPlay && isPlaying();
+      button.innerHTML = `${icon(playing ? 'pause' : 'play')}<span>${playing ? '일시정지' : '다시 듣기'}</span>`;
+      button.setAttribute('aria-pressed', String(playing));
+      button.disabled = saving || unavailable || !onPlay || !canPlay();
+    });
   }
 
   function close() {
     globalThis.GroveControls?.close();
+    stopListening();
     editing = null;
+    composing = false;
     if (dialog.open) dialog.close();
     focusReturn();
   }
@@ -109,37 +133,54 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
     save.disabled = saving || stale || blocked(view) || unchanged();
     save.innerHTML = saving ? '<span class="activity-spinner" aria-hidden="true"></span>저장 중' : '저장';
     const apply = byId('speaker-assign');
-    apply.disabled = saving || stale || !editing.selected.size;
+    const changesSelection = editing.assignmentTarget === newSpeakerValue || editing.working.assignments.some((id, index) => editing.selected.has(editing.working.segments[index].id) && (id || '') !== editing.assignmentTarget);
+    if (apply) apply.disabled = saving || stale || blocked(view) || !editing.selected.size || !changesSelection;
     const undo = byId('speaker-undo');
     undo.hidden = !undoFor(view);
     undo.disabled = saving || stale || blocked(view) || !unchanged();
     const merge = byId('speaker-merge-apply');
-    if (merge) merge.disabled = saving || stale || !byId('speaker-merge-target')?.value;
+    if (merge) merge.disabled = saving || stale || blocked(view) || !byId('speaker-merge-target')?.value;
     if (stale) message('음성 기록이 변경되었습니다. 수정을 취소하고 화자 편집을 다시 열어 주세요.', true);
     globalThis.GroveControls?.enhanceAll(body);
     body.querySelectorAll('select').forEach(input => globalThis.GroveControls?.refresh(input));
+    syncPlayback();
   }
 
-  function draw() {
-    const { working, selected, mergingId } = editing;
+  function viewPosition() {
+    const active = document.activeElement;
+    return { scroll: byId('speaker-editor-scroll')?.scrollTop || 0, focus: active?.id || active?.dataset?.field, start: active?.selectionStart, end: active?.selectionEnd };
+  }
+
+  function draw({ focus, scroll, restore = true } = {}) {
+    const position = viewPosition();
+    const { working, selected, mergingId, mode } = editing;
+    body.dataset.speakerMode = mode;
     const countFor = id => working.assignments.filter(assignment => assignment === id).length;
-    const selectedAssignments = [...new Set(working.assignments.filter((_, index) => selected.has(working.segments[index].id)))];
-    const selectedSpeaker = selectedAssignments.length === 1 ? selectedAssignments[0] : null;
-    const options = working.speakers.map(speaker => `<option value="${escape(speaker.id)}"${speaker.id === selectedSpeaker ? ' selected' : ''}>${escape(speaker.name)}</option>`).join('');
-    const source = working.speakers.find(speaker => speaker.id === mergingId);
-    body.innerHTML = `<header class="speaker-dialog-header"><h2 id="speaker-dialog-title">화자 편집</h2><button type="button" class="icon-button quiet" data-speaker-close aria-label="닫기">${icon('x')}</button></header>
-      <section class="speaker-names" aria-labelledby="speaker-names-title"><h3 id="speaker-names-title">화자 이름</h3>${working.speakers.some(speaker => speaker.id.startsWith('moss:chunk:')) ? '<p class="muted type-caption">처리 구간마다 화자가 나뉩니다. 같은 사람의 발언은 합칠 수 있습니다.</p>' : ''}<div class="speaker-name-list">${working.speakers.map((speaker, index) => `<div class="speaker-name-row"><label for="speaker-name-${index}" class="sr-only">화자 ${index + 1} 이름</label><input class="text-input" id="speaker-name-${index}" data-speaker-name="${escape(speaker.id)}" value="${escape(speaker.name)}" maxlength="256" autocomplete="off"><button type="button" class="quiet small" data-speaker-pick="${escape(speaker.id)}">발언 ${countFor(speaker.id)}개 선택</button>${working.speakers.length > 1 ? `<button type="button" class="quiet small" data-speaker-merge="${escape(speaker.id)}" aria-label="${escape(speaker.name)} 다른 화자와 합치기">합치기</button>` : ''}</div>`).join('') || '<p class="muted type-caption">발언을 선택해 화자를 지정하세요.</p>'}</div>
-      ${source ? `<div class="speaker-merge-panel"><label for="speaker-merge-target">${escape(source.name)}의 발언을 합칠 화자</label><div class="speaker-assignment-controls"><select id="speaker-merge-target" data-field="speaker-merge-target"><option value="">화자 선택</option>${working.speakers.filter(speaker => speaker.id !== source.id).map(speaker => `<option value="${escape(speaker.id)}">${escape(speaker.name)}</option>`).join('')}</select><button type="button" id="speaker-merge-apply">합치기</button><button type="button" class="quiet" data-speaker-merge-cancel>취소</button></div></div>` : ''}</section>
-      <section class="speaker-assignment" aria-labelledby="speaker-assignment-title"><div class="speaker-selection-header"><h3 id="speaker-assignment-title">발언 선택 <span id="speaker-selected-count">${selected.size}개</span></h3><button type="button" class="quiet small" data-speaker-select-all>전체 선택</button><button type="button" class="quiet small" data-speaker-clear>선택 해제</button></div>
-      <div class="speaker-segment-list">${working.segments.map((segment, index) => `<label class="speaker-segment"><input type="checkbox" data-speaker-segment="${escape(segment.id)}"${selected.has(segment.id) ? ' checked' : ''}><span class="speaker-segment-time">${escape(duration(segment.start * 1000))}</span><span class="speaker-segment-content"><span class="speaker-segment-name" data-speaker-current="${escape(working.assignments[index] || '')}">${escape(working.speakers.find(speaker => speaker.id === working.assignments[index])?.name || '화자 미지정')}</span><span class="speaker-segment-text">${escape(segment.text || '(내용 없음)')}</span></span></label>`).join('')}</div>
-      <div class="speaker-assignment-controls"><label for="speaker-assignment-target" class="sr-only">선택한 발언의 화자</label><select id="speaker-assignment-target" data-field="speaker-assignment-target"><option value="">화자 미지정</option>${options}<option value="${newSpeakerValue}">새 화자</option></select><label for="speaker-new-name" class="sr-only">새 화자 이름</label><input class="text-input" id="speaker-new-name" placeholder="새 화자 이름" value="${escape(nextSpeakerName(working.speakers))}" maxlength="256" autocomplete="off" hidden><button type="button" id="speaker-assign">선택 발언에 적용</button></div></section>
-      <p id="speaker-editor-message" class="speaker-editor-message type-caption" role="status" hidden></p><footer class="speaker-dialog-actions"><button type="button" id="speaker-undo" class="quiet">이전 화자 수정 되돌리기</button><button type="button" data-speaker-close>취소</button><button type="button" id="speaker-save" class="primary">저장</button></footer>`;
+    const options = working.speakers.map(speaker => `<option value="${escape(speaker.id)}"${speaker.id === editing.assignmentTarget ? ' selected' : ''}>${escape(speaker.name)}</option>`).join('');
+    const single = mode === 'single';
+    const segment = single ? working.segments[editing.singleIndex] : null;
+    const mergePanel = source => `<div class="speaker-merge-panel"><label for="speaker-merge-target">${escape(source.name)}의 발언 ${countFor(source.id)}개를 합칠 화자</label><div class="speaker-assignment-controls"><select id="speaker-merge-target" data-field="speaker-merge-target"><option value="">화자 선택</option>${working.speakers.filter(speaker => speaker.id !== source.id).map(speaker => `<option value="${escape(speaker.id)}">${escape(speaker.name)}</option>`).join('')}</select><button type="button" id="speaker-merge-apply">합치기</button><button type="button" class="quiet" id="speaker-merge-cancel" data-speaker-merge-cancel>취소</button></div></div>`;
+    const names = mode === 'names' ? `${working.speakers.some(speaker => speaker.id.startsWith('moss:chunk:')) ? '<p class="speaker-chunk-note muted type-caption">같은 사람이 여러 화자로 표시되면 합칠 수 있습니다.</p>' : ''}<div class="speaker-name-list">${working.speakers.map((speaker, index) => `<div class="speaker-name-item"><div class="speaker-name-row"><label for="${escape(nameId(speaker.id))}" class="sr-only">화자 ${index + 1} 이름</label><input class="text-input" id="${escape(nameId(speaker.id))}" data-speaker-name="${escape(speaker.id)}" value="${escape(speaker.name)}" maxlength="256" autocomplete="off"><button type="button" class="quiet small" data-speaker-pick="${escape(speaker.id)}">발언 ${countFor(speaker.id)}개</button>${working.speakers.length > 1 ? `<button type="button" class="quiet small" id="${escape(mergeId(speaker.id))}" data-speaker-merge="${escape(speaker.id)}" aria-label="${escape(speaker.name)} 다른 화자와 합치기" aria-expanded="${speaker.id === mergingId}">합치기</button>` : ''}</div>${speaker.id === mergingId ? mergePanel(speaker) : ''}</div>`).join('') || '<p class="muted type-caption">발언별 변경에서 화자를 지정하세요.</p>'}</div>` : '';
+    const utterances = mode === 'utterances' ? `<div class="speaker-segment-list">${working.segments.map((item, index) => `<label class="speaker-segment"><input type="checkbox" id="speaker-segment-${escape(encodeURIComponent(item.id))}" data-speaker-segment="${escape(item.id)}"${selected.has(item.id) ? ' checked' : ''}><span class="speaker-segment-time">${escape(duration(item.start * 1000))}</span><span class="speaker-segment-content"><span class="speaker-segment-name" data-speaker-current="${escape(working.assignments[index] || '')}">${escape(working.speakers.find(speaker => speaker.id === working.assignments[index])?.name || '화자 미지정')}</span><span class="speaker-segment-text">${escape(item.text || '(내용 없음)')}</span></span></label>`).join('')}</div>` : '';
+    const singleContext = segment ? `<section class="speaker-current-utterance" aria-labelledby="speaker-current-title"><div class="speaker-utterance-meta"><h3 id="speaker-current-title">${editing.singleIndex + 1}번 발언</h3><span class="speaker-segment-time">${escape(duration(segment.start * 1000))}</span><button type="button" id="speaker-listen" class="quiet small" data-speaker-play="${escape(segment.id)}" aria-pressed="false">${icon('play')}<span>다시 듣기</span></button></div><p class="speaker-segment-name">현재 ${escape(working.speakers.find(speaker => speaker.id === working.assignments[editing.singleIndex])?.name || '화자 미지정')}</p><p class="speaker-utterance-text">${escape(segment.text || '(내용 없음)')}</p></section>` : '';
+    const assignment = mode === 'names' ? '' : `<section class="speaker-assignment" aria-labelledby="speaker-assignment-title"><div class="speaker-selection-header"><h3 id="speaker-assignment-title">${single ? '변경할 화자' : '선택한 발언 <span id="speaker-selected-count">' + selected.size + '개</span>'}</h3>${single ? '' : '<button type="button" class="quiet small" data-speaker-select-all>전체 선택</button><button type="button" class="quiet small" data-speaker-clear>선택 해제</button>'}</div><div class="speaker-assignment-controls"><label for="speaker-assignment-target" class="sr-only">${single ? '이 발언의 화자' : '선택한 발언의 화자'}</label><select id="speaker-assignment-target" data-field="speaker-assignment-target"><option value=""${editing.assignmentTarget === '' ? ' selected' : ''}>화자 미지정</option>${options}<option value="${newSpeakerValue}"${editing.assignmentTarget === newSpeakerValue ? ' selected' : ''}>새 화자</option></select><label for="speaker-new-name" class="sr-only">새 화자 이름</label><input class="text-input" id="speaker-new-name" placeholder="새 화자 이름" value="${escape(editing.newName)}" maxlength="256" autocomplete="off"${editing.assignmentTarget === newSpeakerValue ? '' : ' hidden'}>${single ? '' : '<button type="button" id="speaker-assign">선택 발언에 적용</button>'}</div></section>`;
+    globalThis.GroveControls?.close();
+    body.innerHTML = `<header class="speaker-dialog-header"><h2 id="speaker-dialog-title">${single ? '발언 화자 변경' : '화자 관리'}</h2><button type="button" id="speaker-close" class="icon-button quiet" data-speaker-close aria-label="닫기">${icon('x')}</button></header>${single ? '' : `<nav class="speaker-editor-views" aria-label="화자 관리 보기"><button type="button" id="speaker-view-names" class="quiet small" data-speaker-view="names" aria-pressed="${mode === 'names'}">이름과 병합</button><button type="button" id="speaker-view-utterances" class="quiet small" data-speaker-view="utterances" aria-pressed="${mode === 'utterances'}">발언별 변경</button></nav>`}
+      ${mode === 'utterances' ? assignment : ''}<div id="speaker-editor-scroll" class="speaker-dialog-scroll">${single ? singleContext : mode === 'names' ? names : utterances}</div>${single ? assignment : ''}
+      <p id="speaker-editor-message" class="speaker-editor-message type-caption" role="status" hidden></p><footer class="speaker-dialog-actions"><button type="button" id="speaker-undo" class="quiet small">이전 수정 되돌리기</button><button type="button" id="speaker-cancel" data-speaker-close>취소</button><button type="button" id="speaker-save" class="primary">저장</button></footer>`;
     globalThis.GroveControls?.enhanceAll(body);
     controls();
+    const viewport = byId('speaker-editor-scroll');
+    if (viewport) viewport.scrollTop = scroll ?? position.scroll;
+    if (restore && dialog.open) {
+      const focused = focusField(focus || position.focus || 'speaker-save');
+      if (!focus && focused?.setSelectionRange && position.start != null) focused.setSelectionRange(position.start, position.end);
+    }
   }
 
   function selectionChanged() {
-    byId('speaker-selected-count').textContent = `${editing.selected.size}개`;
+    const count = byId('speaker-selected-count');
+    if (count) count.textContent = `${editing.selected.size}개`;
     body.querySelectorAll('[data-speaker-segment]').forEach(input => { input.checked = editing.selected.has(input.dataset.speakerSegment); });
     controls();
   }
@@ -160,11 +201,12 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
         if (request !== operation || blocked(latest) || latest.id !== meetingId) return;
         if (segmentId && !latest.doc.segments.some(segment => segment.id === segmentId)) throw new Error('음성 기록이 변경되었습니다. 발언을 다시 선택해 주세요.');
         const base = copyWorking(latest.doc);
-        editing = { id: meetingId, base, working: copyWorking(latest.doc), selected: new Set(segmentId ? [segmentId] : []), mergingId: null };
-        draw();
+        const singleIndex = segmentId ? latest.doc.segments.findIndex(segment => segment.id === segmentId) : null;
+        editing = { id: meetingId, base, working: copyWorking(latest.doc), mode: segmentId ? 'single' : 'names', singleIndex, selected: new Set(segmentId ? [segmentId] : []), mergingId: null, assignmentTarget: singleIndex == null ? '' : base.assignments[singleIndex] || '', newName: nextSpeakerName(base.speakers), newId: null, scrolls: {}, listeningId: null };
+        draw({ restore: false, scroll: 0 });
         if (!dialog.open) dialog.showModal();
         controls();
-        focusField(segmentId || !latest.doc.speakers?.length ? 'speaker-assignment-target' : 'speaker-name-0');
+        focusField(segmentId ? 'speaker-assignment-target' : latest.doc.speakers?.length ? nameId(latest.doc.speakers[0].id) : 'speaker-view-utterances');
       });
     } catch (error) { showError(error); }
     finally { opening = false; render(); }
@@ -185,14 +227,16 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
         if (editing !== owner || blocked(view) || view.id !== owner.id || !sameVersion(view.doc.version, owner.base.version)) throw new Error('음성 기록이 변경되었습니다. 수정을 보존하고 화자 편집을 다시 열어 주세요.');
         const record = undo ? undoFor(view) : null;
         if (undo && (!record || !unchanged())) throw new Error('되돌릴 수 있는 화자 수정이 없습니다.');
-        const next = undo ? record.previous : owner.working;
+        const next = undo ? record.previous : owner.mode === 'single' ? assignSelected(owner.working, owner.selected, owner.assignmentTarget, owner.newName, () => owner.newId ||= crypto.randomUUID()) : owner.working;
         validateNames(next.speakers);
         const saved = await bridge.saveSpeakers(view.id, { ...view.doc.version }, copySpeakers(next.speakers), [...next.assignments]);
         if (undo) undoByMeeting.delete(view.id);
         else undoByMeeting.set(view.id, { expected: { ...saved.version }, previous: { speakers: copySpeakers(owner.base.speakers), assignments: [...owner.base.assignments] } });
         await onUpdated(saved, view.id);
-        if (editing === owner) close();
       });
+      // The owning screen re-enables utterance buttons when finishEditing ends.
+      // Return focus only after that lock has been released.
+      if (editing === owner) close();
     } catch (error) { message(error instanceof Error ? error.message : String(error), true); showError(error); }
     finally { saving = false; render(); controls(); }
   }
@@ -234,7 +278,9 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
   body.addEventListener('compositionend', () => { composing = false; });
   body.addEventListener('input', event => {
     const id = event.target.dataset.speakerName;
-    if (!editing || saving || !id) return;
+    if (!editing || saving) return;
+    if (event.target.id === 'speaker-new-name') { editing.newName = event.target.value; controls(); return; }
+    if (!id) return;
     const speaker = editing.working.speakers.find(item => item.id === id);
     if (speaker) {
       speaker.name = event.target.value;
@@ -251,37 +297,71 @@ export function mountSpeakers({ bridge, getState, finishEditing, onUpdated, show
       if (event.target.checked) editing.selected.add(segmentId); else editing.selected.delete(segmentId);
       selectionChanged();
     } else if (event.target.id === 'speaker-assignment-target') {
+      editing.assignmentTarget = event.target.value;
       byId('speaker-new-name').hidden = event.target.value !== newSpeakerValue;
       if (event.target.value === newSpeakerValue) byId('speaker-new-name').focus({ preventScroll: true });
+      controls();
     } else if (event.target.id === 'speaker-merge-target') controls();
   });
   body.addEventListener('click', async event => {
     const target = event.target.closest('button');
-    if (!target || !editing || saving) return;
+    if (!target || !editing || saving || target.disabled) return;
     if (target.hasAttribute('data-speaker-close')) { close(); return; }
     if (target.id === 'speaker-save') { void save(); return; }
     if (target.id === 'speaker-undo') { void save(true); return; }
     if (target.hasAttribute('data-speaker-select-all')) { editing.selected = new Set(editing.working.segments.map(segment => segment.id)); selectionChanged(); return; }
     if (target.hasAttribute('data-speaker-clear')) { editing.selected.clear(); selectionChanged(); return; }
-    if (target.dataset.speakerPick) { editing.selected = new Set(editing.working.segments.filter((_, index) => editing.working.assignments[index] === target.dataset.speakerPick).map(segment => segment.id)); selectionChanged(); return; }
-    if (target.dataset.speakerMerge) { editing.mergingId = target.dataset.speakerMerge; draw(); focusField('speaker-merge-target'); return; }
-    if (target.hasAttribute('data-speaker-merge-cancel')) { editing.mergingId = null; draw(); return; }
     try {
       const owner = editing;
       await flushComposition();
       if (editing !== owner) return;
-      if (target.id === 'speaker-merge-apply') {
+      if (target.dataset.speakerView || target.dataset.speakerPick) {
+        const previousMode = editing.mode;
+        editing.scrolls[previousMode] = byId('speaker-editor-scroll')?.scrollTop || 0;
+        editing.mode = target.dataset.speakerView || 'utterances';
+        editing.mergingId = null;
+        if (target.dataset.speakerPick) {
+          editing.selected = new Set(editing.working.segments.filter((_, index) => editing.working.assignments[index] === target.dataset.speakerPick).map(segment => segment.id));
+          editing.assignmentTarget = target.dataset.speakerPick;
+        }
+        draw({ focus: `speaker-view-${editing.mode}`, scroll: editing.scrolls[editing.mode] || 0 });
+        if (target.dataset.speakerPick) byId(`speaker-segment-${encodeURIComponent([...editing.selected][0] || '')}`)?.scrollIntoView({ block: 'nearest' });
+      } else if (target.dataset.speakerMerge) {
+        editing.mergeReturnScroll = byId('speaker-editor-scroll')?.scrollTop || 0;
+        editing.mergingId = target.dataset.speakerMerge;
+        draw({ focus: 'speaker-merge-target' });
+        byId('speaker-merge-target')?.closest('.speaker-merge-panel')?.scrollIntoView({ block: 'nearest' });
+      } else if (target.hasAttribute('data-speaker-merge-cancel')) {
+        const source = editing.mergingId;
+        editing.mergingId = null;
+        draw({ focus: mergeId(source), scroll: editing.mergeReturnScroll });
+      } else if (target.id === 'speaker-merge-apply') {
         editing.working = mergeSpeakers(editing.working, editing.mergingId, byId('speaker-merge-target').value);
         editing.mergingId = null;
-        draw();
+        if (!editing.working.speakers.some(speaker => speaker.id === editing.assignmentTarget)) editing.assignmentTarget = '';
+        draw({ focus: 'speaker-save' });
         message('화자를 합쳤습니다. 저장하면 반영됩니다.');
       } else if (target.id === 'speaker-assign') {
-        editing.working = assignSelected(editing.working, editing.selected, byId('speaker-assignment-target').value, byId('speaker-new-name').value, () => crypto.randomUUID());
-        draw();
+        editing.working = assignSelected(editing.working, editing.selected, editing.assignmentTarget, editing.newName, () => crypto.randomUUID());
+        if (editing.assignmentTarget === newSpeakerValue) {
+          editing.assignmentTarget = editing.working.assignments[editing.working.segments.findIndex(segment => editing.selected.has(segment.id))];
+          editing.newName = nextSpeakerName(editing.working.speakers);
+        }
+        draw({ focus: 'speaker-save' });
         message(`${editing.selected.size}개 발언의 화자를 변경했습니다. 저장하면 반영됩니다.`);
+      } else if (target.dataset.speakerPlay) {
+        if (editing.listeningId === target.dataset.speakerPlay && isPlaying()) stopListening();
+        else {
+          const index = editing.working.segments.findIndex(segment => segment.id === target.dataset.speakerPlay);
+          const segment = editing.working.segments[index];
+          if (!segment || !onPlay || !canPlay()) return;
+          editing.listeningId = segment.id;
+          await onPlay(segment.start, { meetingId: editing.id, segmentId: segment.id, index, endSeconds: segment.end });
+        }
+        syncPlayback();
       }
     } catch (error) { message(error instanceof Error ? error.message : String(error), true); }
   });
 
-  return { render, open, reset, label: segment => speakerLabel(current()?.doc, segment) };
+  return { render, open, reset, syncPlayback, label: segment => speakerLabel(current()?.doc, segment) };
 }

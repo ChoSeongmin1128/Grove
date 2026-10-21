@@ -71,3 +71,103 @@ test('document and dialog render safe content without owning app state', () => {
   assert.ok(modal.includes('&lt;긴 제목&gt;'));
   assert.ok(modal.includes('data-action="close"'));
 });
+
+test('literal search highlighting escapes text and treats query metacharacters as text', () => {
+  const html = UI.highlightText('<img>A+B a+b AaB</img>', 'a+b');
+  assert.equal((html.match(/<mark class="search-match">/g) || []).length, 2);
+  assert.match(html, /&lt;img&gt;<mark class="search-match">A\+B<\/mark>/);
+  assert.match(html, / AaB&lt;\/img&gt;$/);
+  assert.equal(UI.highlightText('<script>"&', '  '), '&lt;script&gt;&quot;&amp;');
+  assert.equal(UI.highlightText('a.b aXb', '.'), 'a<mark class="search-match">.</mark>b aXb');
+  assert.equal(UI.highlightText('ABC한글abc', 'abc'), '<mark class="search-match">ABC</mark>한글<mark class="search-match">abc</mark>');
+  assert.doesNotMatch(UI.highlightText('<img src=x onerror=bad()>', '<img'), /<img|onerror="/);
+});
+
+test('summary structures known headings, markdown headings, paragraphs and lists', () => {
+  const html = UI.summaryDocument('결정 사항\n기존 계획을 유지합니다.\n\n## 다음 작업\n- **확인** 내용을 공유합니다.\n  자세한 내용입니다.\n- 다른 작업\n\n3. 세 번째\n4. 네 번째\n\n결정 사항을 다시 확인합니다.');
+  assert.match(html, /^<article class="summary-document"><h3>결정 사항<\/h3><p>기존 계획을 유지합니다\.<\/p>/);
+  assert.match(html, /<h3>다음 작업<\/h3><ul><li><strong>확인<\/strong> 내용을 공유합니다\.<br>자세한 내용입니다\.<\/li><li>다른 작업<\/li><\/ul>/);
+  assert.match(html, /<ol start="3"><li>세 번째<\/li><li>네 번째<\/li><\/ol>/);
+  assert.match(html, /<p>결정 사항을 다시 확인합니다\.<\/p>/);
+  assert.match(UI.summaryDocument('**할 일:**\n내용'), /<h3>할 일<\/h3>/);
+  assert.equal(UI.summaryDocument(''), '<article class="summary-document"></article>');
+});
+
+test('summary references require an existing source and escape source attributes and raw markup', () => {
+  const source = '"><img src=x onerror=bad()>';
+  const html = UI.summaryDocument('# <script>bad()</script>\n내용 [1] [0] [2] [999999999999999999999999]\n\n[x](javascript:bad())', { sources: [source] });
+  assert.doesNotMatch(html, /<script|<img|<a\b/);
+  assert.match(html, /<h3>&lt;script&gt;bad\(\)&lt;\/script&gt;<\/h3>/);
+  assert.equal((html.match(/data-summary-seek=/g) || []).length, 1);
+  assert.match(html, /data-summary-seek="0" title="&quot;&gt;&lt;img src=x onerror=bad\(\)&gt;" aria-label="1번 발언 확인">\[1\]<\/button>/);
+  assert.match(html, /\[0\] \[2\] \[999999999999999999999999\]/);
+  assert.doesNotMatch(UI.summaryDocument('내용 [1]', { sources: [] }), /<button/);
+  assert.doesNotMatch(UI.summaryDocument('내용 [1]', { sources: [null] }), /<button/);
+  const code = UI.summaryDocument('```html\n<script> [1]\n# 제목\n```', { sources: ['원문'] });
+  assert.match(code, /<pre><code>&lt;script&gt; \[1\]\n# 제목<\/code><\/pre>/);
+  assert.doesNotMatch(code, /<button|<h3>/);
+});
+
+test('search highlighting leaves summary source controls and editable transcript fields intact', () => {
+  const summary = UI.summaryDocument('요약\nAlpha [1] alpha', { sources: ['원문 Alpha'], searchQuery: 'alpha' });
+  assert.equal((summary.match(/<mark class="search-match" /g) || []).length, 2);
+  assert.match(summary, /title="원문 Alpha" aria-label="1번 발언 확인">\[1\]<\/button>/);
+  assert.match(UI.summaryDocument('내용 [1]', { sources: ['원문'], searchQuery: '1' }), /aria-label="1번 발언 확인">\[<mark class="search-match" data-search-group="summary-1">1<\/mark>\]<\/button>/);
+  const row = UI.transcriptRow({ index: 0, time: '00:00', start: 0, text: 'Alpha <value>', searchQuery: 'alpha' });
+  assert.match(row, /<p class="transcript-text"><mark class="search-match">Alpha<\/mark> &lt;value&gt;<\/p>/);
+  const editor = UI.transcriptRow({ index: 0, time: '00:00', start: 0, text: 'Alpha <value>', searchQuery: 'alpha', editing: true });
+  assert.doesNotMatch(editor, /<mark/);
+  assert.match(editor, />Alpha &lt;value&gt;<\/textarea>/);
+  const named = UI.transcriptRow({ index: 0, time: '00:00', start: 0, text: '내용', speaker: '<Alpha> "name"', speakerVisible: true, searchQuery: 'alpha' });
+  assert.match(named, /aria-label="1번 발언 화자 변경: &lt;Alpha&gt; &quot;name&quot;" title="&lt;Alpha&gt; &quot;name&quot;">&lt;<mark class="search-match">Alpha<\/mark>&gt; &quot;name&quot;<\/button>/);
+  assert.doesNotMatch(named, /<Alpha>/);
+});
+
+test('summary searches visible text across strong, code and reference boundaries as one result', () => {
+  const text = '**계획** `일정` 확인 [1] / **계획** `일정` 확인 [1]';
+  const options = { sources: ['원문 <내용> "확인"'] };
+  const html = UI.summaryDocument(text, { ...options, searchQuery: '계획 일정 확인 [1]' });
+  const marks = [...html.matchAll(/<mark class="search-match" data-search-group="([^"]+)">([^<]+)<\/mark>/g)];
+  assert.deepEqual(marks.map(mark => mark[2]), ['계획', ' ', '일정', ' 확인 ', '[1]', '계획', ' ', '일정', ' 확인 ', '[1]']);
+  assert.deepEqual(marks.map(mark => mark[1]), [...Array(5).fill('summary-1'), ...Array(5).fill('summary-2')]);
+  assert.equal(html.replace(/<mark\b[^>]*>|<\/mark>/g, ''), UI.summaryDocument(text, options));
+  assert.equal((html.match(/data-summary-seek="0"/g) || []).length, 2);
+  assert.match(html, /title="원문 &lt;내용&gt; &quot;확인&quot;" aria-label="1번 발언 확인"><mark/);
+  assert.doesNotMatch(html, /<mark\b[^>]*><\/mark>/);
+  assert.doesNotMatch(UI.summaryDocument('**계획** `일정`', { searchQuery: '**' }), /<mark/);
+});
+
+test('summary searches reference labels without changing their click or escape contract', () => {
+  const text = '**[1]** 뒤 [0] [2]';
+  const options = { sources: ['"><img src=x onerror=bad()>'] };
+  const html = UI.summaryDocument(text, { ...options, searchQuery: '[1] 뒤' });
+  assert.match(html, /<strong><button[^>]*data-summary-seek="0"[^>]*aria-label="1번 발언 확인"><mark class="search-match" data-search-group="summary-1">\[1\]<\/mark><\/button><\/strong><mark class="search-match" data-search-group="summary-1"> 뒤<\/mark>/);
+  assert.equal(html.replace(/<mark\b[^>]*>|<\/mark>/g, ''), UI.summaryDocument(text, options));
+  assert.doesNotMatch(html, /<img|<script|<a\b|<mark\b[^>]*><\/mark>/);
+  const invalid = UI.summaryDocument(text, { ...options, searchQuery: '[2]' });
+  assert.match(invalid, /<mark class="search-match" data-search-group="summary-1">\[2\]<\/mark>/);
+  assert.equal((invalid.match(/<button\b/g) || []).length, 1);
+});
+
+test('summary searches fenced code literally with and without a closing fence', () => {
+  for (const suffix of ['\n```', '']) {
+    const text = '```html\n<script> 계획 [1]\n계획 & "확인"' + suffix;
+    const options = { sources: ['원문'] };
+    const html = UI.summaryDocument(text, { ...options, searchQuery: '계획' });
+    assert.equal((html.match(/<mark class="search-match" /g) || []).length, 2);
+    assert.match(html, /&lt;script&gt; <mark class="search-match" data-search-group="summary-1">계획<\/mark> \[1\]\n<mark class="search-match" data-search-group="summary-2">계획<\/mark> &amp; &quot;확인&quot;/);
+    assert.equal(html.replace(/<mark\b[^>]*>|<\/mark>/g, ''), UI.summaryDocument(text, options));
+    assert.doesNotMatch(html, /<button|<script|<h3>/);
+  }
+});
+
+test('summary match groups stay unique across blocks and preserve literal Unicode content', () => {
+  const text = '## <값>\n**<값>**\n\n- `<값>`\n\n```\n<값>\n```';
+  const html = UI.summaryDocument(text, { searchQuery: '<값>' });
+  assert.deepEqual([...html.matchAll(/data-search-group="([^"]+)"/g)].map(match => match[1]), ['summary-1', 'summary-2', 'summary-3', 'summary-4']);
+  assert.equal(html.replace(/<mark\b[^>]*>|<\/mark>/g, ''), UI.summaryDocument(text));
+  assert.doesNotMatch(html, /<값>/);
+  const unicode = UI.summaryDocument('앞 **가**`나` A+B a+b', { searchQuery: '가나' });
+  assert.match(unicode, /<strong><mark class="search-match" data-search-group="summary-1">가<\/mark><\/strong><code><mark class="search-match" data-search-group="summary-1">나<\/mark><\/code>/);
+  assert.equal((UI.summaryDocument('**A+**`B` a+b', { searchQuery: 'a+b' }).match(/data-search-group="summary-2"/g) || []).length, 1);
+});

@@ -27,7 +27,7 @@ node design-system/catalog/check-tokens.cjs
 
 ## 역할
 
-글꼴/크기/굵기/행간/자간은 typography.css의 명명된 역할을 사용한다. 색상은 canvas/surface/text/accent/focus/warning/recording 등의 역할로 관리한다. 간격/반경/높이는 공통 컴포넌트와 플랫폼 구조에서 필요한 값을 소유한다. `rawValues`와 `metrics`는 실제 사용값의 목록이며 보편 scale을 선언한 것이 아니다.
+글꼴/크기/굵기/행간/자간은 typography.css의 명명된 역할을 사용한다. 한국어 루트는 단어 단위 줄바꿈과 긴 무공백 텍스트의 예외 줄바꿈을 공유한다. 색상은 canvas/surface/text/accent/focus/warning/recording 등의 역할로 관리한다. 간격/반경/높이는 공통 컴포넌트와 플랫폼 구조에서 필요한 값을 소유한다. `rawValues`와 `metrics`는 실제 사용값의 목록이며 보편 scale을 선언한 것이 아니다.
 
 warning/recording 색상은 브랜드 색상과 독립이고 밝기에 따라 변한다. ready는 Mono의 회색 예외가 있다. 데스크톱 배경과 노치/트레이 표면도 브랜드 팔레트와 분리한다.
 

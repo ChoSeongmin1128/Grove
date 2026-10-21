@@ -1,0 +1,38 @@
+/* Speaker editing owns one scrolling body; shared controls retain their tokens. */
+.speaker-dialog { padding: 0; overflow: hidden; max-height: min(760px, calc(100dvh - 32px)); }
+.speaker-dialog[open] { display: flex; flex-direction: column; }
+#speaker-dialog-body { display: flex; flex-direction: column; min-height: 0; max-height: min(758px, calc(100dvh - 34px)); }
+.speaker-dialog-header { flex: none; padding: 16px 20px 12px; margin: 0; }
+.speaker-editor-views { display: flex; flex: none; gap: 8px; padding: 0 20px 12px; border-bottom: 1px solid var(--border); }
+.speaker-editor-views button[aria-pressed="true"] { color: var(--text); background: var(--hover); border-color: var(--border); }
+.speaker-dialog-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scroll-padding-block: 12px; padding: 16px 20px; }
+.speaker-name-list { max-height: none; overflow: visible; padding: 0; margin: 0; }
+.speaker-chunk-note { margin: 0 0 12px; }
+.speaker-name-row { gap: 8px; }
+.speaker-merge-panel { margin: 8px 0 12px; padding: 10px 0 0; }
+.speaker-merge-panel > label { display: block; overflow-wrap: anywhere; font-size: var(--text-label-size); }
+.speaker-segment-list { max-height: none; overflow: visible; }
+.speaker-assignment { flex: none; margin: 0; padding: 12px 20px; }
+#speaker-dialog-body[data-speaker-mode="utterances"] > .speaker-assignment { border-top: 0; border-bottom: 1px solid var(--border); }
+.speaker-selection-header { align-items: center; margin: 0; gap: 8px; }
+.speaker-selection-header h3 { font-size: var(--text-label-size); }
+.speaker-assignment-controls { margin-top: 8px; }
+.speaker-assignment-controls > .grove-select, .speaker-assignment-controls > select { flex: 1; min-width: 160px; }
+.speaker-assignment-controls > input { min-width: 120px; }
+.speaker-utterance-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.speaker-utterance-meta h3 { font-size: var(--text-label-size); }
+.speaker-utterance-meta .speaker-segment-time { margin-right: 0; font-variant-numeric: tabular-nums; }
+.speaker-utterance-meta button { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; }
+.speaker-utterance-meta button svg { width: 14px; height: 14px; }
+.speaker-current-utterance > .speaker-segment-name { margin: 8px 0 0; }
+.speaker-utterance-text { margin-top: 12px; font-size: var(--text-body-size); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.speaker-dialog-actions { flex: none; margin: 0; padding: 12px 20px; border-top: 1px solid var(--border); }
+#speaker-undo { margin-right: auto; }
+.speaker-editor-message { flex: none; margin: 0; padding: 0 20px 10px; overflow-wrap: anywhere; }
+.speaker-editor-message[data-state="success"] { color: var(--text-secondary); }
+@media (max-width: 480px) {
+  .speaker-dialog { width: calc(100vw - 24px); }
+  .speaker-assignment-controls > input:not([hidden]) { flex-basis: 100%; }
+  .speaker-dialog-header, .speaker-dialog-scroll, .speaker-assignment, .speaker-dialog-actions { padding-left: 14px; padding-right: 14px; }
+  .speaker-editor-views { padding-left: 14px; padding-right: 14px; }
+}

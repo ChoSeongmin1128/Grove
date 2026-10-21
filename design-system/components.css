@@ -69,6 +69,10 @@ button.quiet {
   background: transparent;
 }
 
+button.quiet:hover:not(:disabled) {
+  background: var(--hover);
+}
+
 button.small {
   padding: 4px 8px;
   font-size: var(--text-caption-size);
@@ -423,6 +427,69 @@ input[type="checkbox"] {
   margin: 6px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.summary-document {
+  font-size: var(--text-reading-size);
+  line-height: var(--leading-reading);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.summary-document > * + * {
+  margin-top: 12px;
+}
+
+.summary-document h3 {
+  font-size: var(--text-heading-size);
+  line-height: var(--leading-heading);
+  font-weight: var(--weight-heading);
+  letter-spacing: var(--tracking-heading);
+}
+
+.summary-document h4,
+.summary-document h5,
+.summary-document h6 {
+  font-size: var(--text-reading-size);
+  line-height: var(--leading-ui);
+  font-weight: var(--weight-semibold);
+}
+
+.summary-document > :is(h3, h4, h5, h6):not(:first-child) {
+  margin-top: 24px;
+}
+
+.summary-document :is(h3, h4, h5, h6) + * {
+  margin-top: 8px;
+}
+
+.summary-document :is(ul, ol) {
+  padding-inline-start: 24px;
+  margin-bottom: 0;
+}
+
+.summary-document li + li {
+  margin-top: 6px;
+}
+
+.summary-document strong {
+  font-weight: var(--weight-semibold);
+}
+
+.summary-document pre {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.summary-document .source-reference {
+  display: inline;
+  padding: 0 3px;
+  min-height: 24px;
+  vertical-align: baseline;
+  font-size: var(--text-caption-size);
+  line-height: var(--leading-ui);
 }
 
 @media (hover: none), (pointer: coarse) {

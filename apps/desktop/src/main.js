@@ -3,7 +3,8 @@ import { icon, escape, button, duration, recordingStatus, statusMarkup, sessionC
 import { processingFeedback } from './processing-feedback.js';
 import { mountLibrary, filterLibraryMeetings } from './library-ui.js';
 import { mountSpeakers } from './speakers-ui.js';
-import { createMeetingSearch } from './meeting-search.js';
+import { createMeetingSearch, mountDocumentSearch } from './meeting-search.js';
+import { mountTranscriptActions } from './transcript-actions.js';
 import { mountMeetingDetail } from './meeting-detail-ui.js';
 
 applySystemAppearance();
@@ -19,7 +20,7 @@ function readMicrophonePreference() {
   } catch { return { id: null, name: '' }; }
 }
 const microphonePreference = readMicrophonePreference();
-const state = { snapshot: { meetings: [], folders: [], session: null }, libraryOpen: false, libraryFilter: 'all', librarySelection: new Set(), librarySelecting: false, libraryBusy: false, librarySearchIds: null, librarySearchPending: false, librarySearchUnavailable: 0, selectedId: null, devices: [], devicesLoaded: false, deviceId: microphonePreference.id, deviceName: microphonePreference.name, settingsPanel: 'appearance', settingsKey: '', settingsError: '', settingsReturnId: 'settings', setupFromSettings: false, autoRecorder: readAutoRecorder(), recorderSettingBusy: false, snapshotKey: '', processingKey: '', processingCancellingId: null, transcriptEditing: null, audioRequest: 0, dateSaving: null, dateKey: '', dateError: null, lastError: null, errorIsSave: false, connected: false, busy: false, composing: false, transcriptComposing: false, editLocks: 0, draft: null, saveTimer: null, saveQueue: Promise.resolve(), listKey: '', controlsKey: '', audioKey: '', processing: { status: 'idle', supported: false, modelReady: false }, transcriptDraft: null, transcriptKey: '', transcriptLoadId: 0, transcriptSaveQueue: Promise.resolve(), summary: null, summaryKey: '', summaryLoadId: 0, summaryLoaded: false, transcriptLoaded: false, summaryLoadError: false, transcriptLoadError: false, setupRequested: false };
+const state = { snapshot: { meetings: [], folders: [], session: null }, libraryOpen: false, libraryFilter: 'all', librarySelection: new Set(), librarySelecting: false, libraryBusy: false, librarySearchIds: null, librarySearchHits: [], pendingSearchIntent: null, setupReturnId: null, librarySearchPending: false, librarySearchUnavailable: 0, selectedId: null, devices: [], devicesLoaded: false, deviceId: microphonePreference.id, deviceName: microphonePreference.name, settingsPanel: 'appearance', settingsKey: '', settingsError: '', settingsReturnId: 'settings', setupFromSettings: false, autoRecorder: readAutoRecorder(), recorderSettingBusy: false, snapshotKey: '', processingKey: '', processingCancellingId: null, transcriptEditing: null, audioRequest: 0, dateSaving: null, dateKey: '', dateError: null, lastError: null, errorIsSave: false, connected: false, busy: false, composing: false, transcriptComposing: false, editLocks: 0, draft: null, saveTimer: null, saveQueue: Promise.resolve(), listKey: '', controlsKey: '', audioKey: '', processing: { status: 'idle', supported: false, modelReady: false }, transcriptDraft: null, transcriptKey: '', transcriptLoadId: 0, transcriptSaveQueue: Promise.resolve(), summary: null, summaryKey: '', summaryLoadId: 0, summaryLoaded: false, transcriptLoaded: false, summaryLoadError: false, transcriptLoadError: false, setupRequested: false };
 const fullDate = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const calendarDay = value => { const date = new Date(value); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; };
 const meetingDay = meeting => meeting.meetingDate || calendarDay(meeting.recordedAt ?? meeting.createdAt);
@@ -28,11 +29,20 @@ const listTime = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-
 const meetingTimestamp = meeting => meeting.recordedAt ?? meeting.createdAt;
 let pendingQuitSessionId = null;
 let selectionRequest = 0;
+let speakerReplay = null;
+const copyFeedbackTimers = new Map();
 function setHTML(id, html) { const node = byId(id); if (node.innerHTML !== html) node.innerHTML = html; }
 function setText(id, text) { const node = byId(id); if (node.textContent !== text) node.textContent = text; }
 const currentMeeting = () => state.snapshot.meetings.find((meeting) => meeting.id === state.selectedId);
 const activeSession = () => ['recording', 'paused', 'finalizing'].includes(state.snapshot.session?.state) ? state.snapshot.session : null;
 const stateFor = (meeting) => activeSession()?.meetingId === meeting.id ? activeSession().state : meeting.status;
+
+function paintIconButton(node, name = node.dataset.uiIcon, label = node.getAttribute('aria-label')) {
+  node.innerHTML = `${icon(name)}<span class="sr-only">${escape(label)}</span>`;
+  node.setAttribute('aria-label', label);
+  node.setAttribute('title', label);
+}
+document.querySelectorAll('[data-ui-icon]').forEach(node => paintIconButton(node));
 
 byId('create-meeting').innerHTML = `${icon('plus')}<span>새 회의</span>`;
 byId('welcome-create').innerHTML = `${icon('plus')}<span>새 회의</span>`;
@@ -55,7 +65,7 @@ function renderList() {
   meetings = meetings.filter(meeting => !query || (state.librarySearchIds ? state.librarySearchIds.includes(meeting.id) : `${meeting.title}\n${meeting.notes}`.toLocaleLowerCase().includes(query)));
   meetings.sort((a,b) => meetingTimestamp(b) - meetingTimestamp(a) || b.createdAt - a.createdAt);
   byId('meeting-count').textContent = String(state.snapshot.meetings.filter(meeting => meeting.deletedAt == null).length);
-  const key = JSON.stringify([query, state.selectedId, state.librarySelecting, [...state.librarySelection], state.libraryBusy, state.libraryFilter, meetings.map(meeting => [meeting.id, meeting.title, meeting.audio, meeting.createdAt, meeting.recordedAt, meetingDay(meeting), stateFor(meeting), meeting.deletedAt])]);
+  const key = JSON.stringify([query, state.selectedId, state.librarySelecting, [...state.librarySelection], state.libraryBusy, state.libraryFilter, state.librarySearchHits, meetings.map(meeting => [meeting.id, meeting.title, meeting.audio, meeting.createdAt, meeting.recordedAt, meetingDay(meeting), stateFor(meeting), meeting.deletedAt])]);
   if (key === state.listKey) return;
   state.listKey = key;
   const focused = document.activeElement?.closest?.('[data-meeting-id]')?.dataset.meetingId;
@@ -69,7 +79,10 @@ function renderList() {
     const more = `<details class="meeting-menu document-export" data-meeting-menu="${escape(meeting.id)}"><summary aria-label="${escape(meeting.title)} 더보기">${icon('ellipsis')}</summary><div>${actions.map(([action,label]) => `<button type="button" class="${['trash', 'purge'].includes(action) ? 'danger-text' : ''}" aria-label="${escape(label)}" data-library-action="${action}" data-library-target="${escape(meeting.id)}"${state.libraryBusy ? ' disabled' : ''}>${escape(label)}</button>`).join('')}</div></details>`;
     const checkbox = `<input type="checkbox" class="meeting-selection" data-library-toggle="${escape(meeting.id)}" aria-label="${escape(meeting.title)} 선택"${selected ? ' checked' : ''}${!state.librarySelecting ? ' hidden' : ''}${state.libraryBusy ? ' disabled' : ''}>`;
     const length = meeting.audio?.sampleRate ? duration(meeting.audio.frames / meeting.audio.sampleRate * 1000) : '';
-    const content = `${icon(['recording','paused'].includes(phase) ? 'mic' : meeting.audio ? 'audio-lines' : 'file-text')}<span class="meeting-item-content"><strong>${escape(meeting.title || '제목 없는 회의')}</strong><span class="meeting-item-meta"><span class="meeting-item-time" title="${escape(timestampDescription)}" aria-label="${escape(timestampDescription)}">${escape(timestampLabel)}</span>${length ? `<span>${escape(length)}</span>` : ''}</span></span><span class="meeting-item-state ${['recording','paused'].includes(phase) ? 'recording' : ''}">${escape(recordingStatus(phase))}</span>`;
+    const hit = state.librarySearchHits.find(hit => hit.meetingId === meeting.id);
+    const matchLabel = { notes: '메모', transcript: '음성 기록', speaker: '화자', summary: '요약' }[hit?.kind];
+    const snippet = query && matchLabel ? `<span class="meeting-item-match"><span>${matchLabel}</span> ${globalThis.GroveUI.highlightText(hit.text, query)}</span>` : '';
+    const content = `${icon(['recording','paused'].includes(phase) ? 'mic' : meeting.audio ? 'audio-lines' : 'file-text')}<span class="meeting-item-content"><strong>${escape(meeting.title || '제목 없는 회의')}</strong><span class="meeting-item-meta"><span class="meeting-item-time" title="${escape(timestampDescription)}" aria-label="${escape(timestampDescription)}">${escape(timestampLabel)}</span>${length ? `<span>${escape(length)}</span>` : ''}</span>${snippet}</span><span class="meeting-item-state ${['recording','paused'].includes(phase) ? 'recording' : ''}">${escape(recordingStatus(phase))}</span>`;
     return `<article class="meeting-entry${selected ? ' is-selected' : ''}" data-meeting-id="${escape(meeting.id)}"${meeting.deletedAt == null ? ' draggable="true"' : ''}>${checkbox}${globalThis.GroveUI.button({ className: 'meeting-item', attrs: { 'data-open-meeting': meeting.id, 'aria-current': String(meeting.id === state.selectedId), title: meeting.title }, html: content })}${more}</article>`;
   }).join('') || `<p class="list-empty">${query ? '검색 결과가 없습니다.' : state.libraryFilter === 'trash' ? '휴지통이 비어 있습니다.' : '회의가 없습니다.'}</p>`;
   byId('meeting-list').scrollTop = scroll;
@@ -132,15 +145,18 @@ async function prepareAudio(meeting, recording, force = false) {
   player.load();
   byId('audio-region').hidden = !key;
   if (!key) return;
+  byId('audio-message').dataset.state = 'loading';
   byId('audio-message').textContent = '녹음 파일을 여는 중입니다.';
   try {
     const url = await bridge.audioUrl(meeting.id);
     if (state.audioKey !== key || state.audioRequest !== request) return;
     player.src = url;
+    byId('audio-message').dataset.state = 'ready';
     const milliseconds = meeting.audio.sampleRate ? meeting.audio.frames / meeting.audio.sampleRate * 1000 : 0;
     byId('audio-message').textContent = `녹음 길이 ${duration(milliseconds)}`;
   } catch (error) {
     if (state.audioKey === key && state.audioRequest === request) {
+      byId('audio-message').dataset.state = 'error';
       byId('audio-message').textContent = '녹음 파일을 열 수 없습니다.';
       byId('retry-audio').hidden = false;
       showError(error);
@@ -154,7 +170,7 @@ function renderSetup() {
   const running = processingActive() && ['setup','model','summary-model'].includes(job.kind);
   const visible = state.connected && !activeSession() && (state.setupRequested || (!state.selectedId && (!ready || (running && job.kind === 'setup'))));
   byId('setup-screen').hidden = !visible;
-  byId('setup-title').textContent = state.setupFromSettings ? '모델' : '초기 설정';
+  byId('setup-title').textContent = state.setupFromSettings ? '모델' : ready && state.selectedId ? '회의 요약' : '초기 설정';
   document.querySelector('.workspace').dataset.onboarding = String(visible && state.snapshot.meetings.length === 0);
   byId('setup-speech-state').textContent = !state.connected ? '확인 중' : job.modelReady ? '준비됨' : !job.supported ? '지원되지 않음' : running && job.modelStage === 'speech' ? '준비 중' : '';
   byId('setup-summary-state').textContent = job.summaryReady ? '준비됨' : !job.summarySupported && state.connected ? '지원되지 않음' : running && job.modelStage === 'summary' ? '준비 중' : '';
@@ -180,15 +196,15 @@ function renderSetup() {
   byId('setup-cancel').hidden = !running;
   byId('setup-cancel').disabled = feedback.cancelDisabled || state.busy;
   byId('setup-cancel').textContent = feedback.cancelLabel;
-  byId('setup-start').hidden = !ready || running || state.setupFromSettings;
+  byId('setup-start').hidden = !ready || running || state.setupFromSettings || Boolean(state.selectedId);
   byId('setup-start').disabled = state.busy || processingActive();
   byId('setup-back').hidden = !state.selectedId && !state.setupFromSettings;
   byId('setup-back').textContent = state.setupFromSettings ? '설정으로 돌아가기' : '회의로 돌아가기';
   return visible;
 }
-async function openSetup(fromSettings = false) {
+async function openSetup(fromSettings = false, returnId = document.activeElement?.id) {
   if (activeSession()) { showError('녹음을 마친 뒤 준비해 주세요.'); return; }
-  await finishEditing(() => { state.setupRequested = true; state.setupFromSettings = fromSettings; render(); byId('setup-title').focus?.({ preventScroll: true }); });
+  await finishEditing(() => { state.setupRequested = true; state.setupFromSettings = fromSettings; state.setupReturnId = returnId; render(); byId('setup-title').focus?.({ preventScroll: true }); });
 }
 
 function render() {
@@ -216,6 +232,24 @@ function render() {
   renderTranscript(meeting);
   renderSummary(meeting);
   detail.update({ id: byId('meeting-detail').hidden ? null : meeting.id, recording: Boolean(activeSession()?.meetingId === meeting.id), summaryLoaded: state.summaryLoaded, transcriptLoaded: state.transcriptLoaded, hasSummary: Boolean(state.summary?.document), hasTranscript: Boolean(state.transcriptDraft?.doc?.segments?.length) });
+  renderNotesSearch();
+  documentSearch.refresh();
+  speakers.syncPlayback?.();
+  const intent = state.pendingSearchIntent;
+  if (intent?.meetingId === meeting.id && state.transcriptLoaded && state.summaryLoaded) {
+    state.pendingSearchIntent = null;
+    const hit = intent.hit, doc = state.transcriptDraft?.doc;
+    const valid = hit.transcriptVersion?.id === doc?.version.id && hit.transcriptVersion?.revision === doc?.version.revision;
+    const index = valid && doc?.segments[hit.index]?.id === hit.segmentId ? hit.index : undefined;
+    void documentSearch.find(intent.query, { view: hit.kind === 'speaker' ? 'transcript' : hit.kind, index });
+  }
+}
+
+function renderNotesSearch() {
+  const query = documentSearch.query();
+  byId('meeting-notes').hidden = Boolean(query);
+  byId('notes-search-preview').hidden = !query;
+  setHTML('notes-search-preview', query ? globalThis.GroveUI.highlightText(byId('meeting-notes').value, query) : '');
 }
 
 function renderMeetingDates(meeting) {
@@ -290,31 +324,33 @@ function saveDraft() {
   });
 }
 
-async function selectMeeting(id) {
+async function selectMeeting(id, searchIntent = null) {
   const request = ++selectionRequest;
-  if (state.selectedId === id) { state.libraryOpen = false; render(); return; }
   try {
     await finishEditing(() => {
       if (request !== selectionRequest) return;
-      const meeting = state.snapshot.meetings.find((item) => item.id === id);
+      const meeting = state.snapshot.meetings.find(item => item.id === id);
       if (!meeting || meeting.deletedAt) return;
+      const changed = state.selectedId !== id;
       state.libraryOpen = false;
-      speakers.reset();
-      state.setupRequested = false;
-      state.setupFromSettings = false;
+      speakers.reset(); transcriptActions.reset(); documentSearch.reset();
+      state.setupRequested = false; state.setupFromSettings = false;
+      state.pendingSearchIntent = searchIntent ? { ...searchIntent, meetingId: id } : null;
       state.selectedId = id;
-      state.transcriptDraft = null; state.transcriptKey = ''; state.transcriptEditing = null;
-      state.summary = null; state.summaryKey = '';
-      state.summaryLoaded = false; state.transcriptLoaded = false;
-      state.summaryLoadError = false; state.transcriptLoadError = false;
-      void loadSummary(id);
-      void loadTranscript(id);
-      state.draft = { id, title: meeting.title, notes: meeting.notes || '', dirty: false, saving: false, version: 0 };
-      byId('meeting-title').value = meeting.title;
-      byId('meeting-notes').value = meeting.notes || '';
-      byId('meeting-notes').scrollTop = 0;
+      if (changed) {
+        state.transcriptDraft = null; state.transcriptKey = ''; state.transcriptEditing = null;
+        state.summary = null; state.summaryKey = '';
+        state.summaryLoaded = false; state.transcriptLoaded = false;
+        state.summaryLoadError = false; state.transcriptLoadError = false;
+        void loadSummary(id); void loadTranscript(id);
+        state.draft = { id, title: meeting.title, notes: meeting.notes || '', dirty: false, saving: false, version: 0 };
+        byId('meeting-title').value = meeting.title;
+        byId('meeting-notes').value = meeting.notes || '';
+        byId('meeting-notes').scrollTop = 0;
+      }
       render();
     });
+    if (request === selectionRequest && state.selectedId === id && !searchIntent) byId('meeting-detail').focus({ preventScroll: true });
   } catch { return; }
 }
 
@@ -453,7 +489,7 @@ byId('meeting-list').addEventListener('click', event => {
   const id = event.target.closest('[data-meeting-id]')?.dataset.meetingId;
   if (!id) return;
   const meeting = state.snapshot.meetings.find(item => item.id === id);
-  if (state.librarySelecting || meeting?.deletedAt != null) library.toggleSelection(id); else void selectMeeting(id);
+  if (state.librarySelecting || meeting?.deletedAt != null) library.toggleSelection(id); else { const hit = state.librarySearchHits.find(hit => hit.meetingId === id); void selectMeeting(id, hit && hit.kind !== 'title' ? { query: byId('search').value.trim(), hit } : null); }
 });
 byId('create-meeting').addEventListener('click', () => run(createMeeting));
 byId('welcome-create').addEventListener('click', () => run(createMeeting));
@@ -473,7 +509,7 @@ byId('settings-dialog').addEventListener('keydown', event => {
 byId('settings-microphone').addEventListener('change', changeMicrophone);
 byId('settings-refresh-devices').addEventListener('click', async () => { state.settingsError = ''; try { await refreshDevices(); } catch { state.settingsError = '마이크 목록을 불러오지 못했습니다. 다시 시도해 주세요.'; renderSettings(); } });
 byId('models').addEventListener('click', () => run(async () => { globalThis.GroveControls.close?.(); byId('settings-dialog').close(); await openSetup(true); }));
-byId('setup-back').addEventListener('click', () => { const settings = state.setupFromSettings; state.setupRequested = false; state.setupFromSettings = false; render(); if (settings) void openSettings('models'); else byId('settings').focus({ preventScroll: true }); });
+byId('setup-back').addEventListener('click', () => { const settings = state.setupFromSettings, returnId = state.setupReturnId; state.setupRequested = false; state.setupFromSettings = false; render(); if (settings) void openSettings('models'); else { const origin = byId(returnId || 'settings'); const fallback = !byId('summarize').hidden && !byId('summarize').disabled ? byId('summarize') : byId('detail-summary-tab'); (origin && !origin.hidden && !origin.disabled ? origin : fallback)?.focus({ preventScroll: true }); } });
 byId('setup-download').addEventListener('click', () => run(async () => { state.setupRequested = true; await acceptProcessing(await bridge.prepareMeetingModels(Boolean(byId('setup-summary-option').checked) && !state.processing.summaryReady)); }));
 byId('setup-download-summary').addEventListener('click', () => run(async () => { state.setupRequested = true; await acceptProcessing(await bridge.prepareSummaryModel()); }));
 byId('setup-cancel').addEventListener('click', () => { void cancelProcessing(); });
@@ -516,7 +552,7 @@ byId('auto-recorder').addEventListener('change', async () => {
   finally { state.recorderSettingBusy = false; renderSettings(); }
 });
 byId('retry-audio').addEventListener('click', () => { const meeting = currentMeeting(); if (meeting) void prepareAudio(meeting, Boolean(activeSession()?.meetingId === meeting.id), true); });
-byId('audio-player').addEventListener('error', () => { if (byId('audio-player').getAttribute('src')) byId('audio-message').textContent = '음성을 재생할 수 없습니다. 녹음 파일을 다시 열어 주세요.'; });
+byId('audio-player').addEventListener('error', () => { if (byId('audio-player').getAttribute('src')) { byId('audio-message').dataset.state = 'error'; byId('audio-message').textContent = '음성을 재생할 수 없습니다. 녹음 파일을 다시 열어 주세요.'; } });
 document.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void finishEditing(() => {}).catch(() => {}); }
 });
@@ -540,6 +576,8 @@ async function finishEditing(action) {
   try {
     const draft = state.draft;
     do { await saveDraft(); await saveTranscript(); } while (state.draft === draft && (draft?.dirty || state.transcriptDraft?.dirty));
+    state.transcriptEditing = null;
+    if (currentMeeting()) renderTranscript(currentMeeting());
     return await action();
   } finally {
     state.editLocks -= 1;
@@ -586,7 +624,7 @@ async function cancelProcessing() {
 }
 
 function transcriptRenderKey() {
-  return JSON.stringify([state.selectedId, state.transcriptDraft?.doc?.version, state.transcriptLoadId, state.transcriptEditing]);
+  return JSON.stringify([state.selectedId, state.transcriptDraft?.doc?.version, state.transcriptLoadId, state.transcriptEditing, documentSearch.query()]);
 }
 
 function resizeTranscriptEditor(input) {
@@ -599,6 +637,8 @@ function renderTranscript(meeting) {
   const job = state.processing;
   const ownJob = processingActive() && job.meetingId === meeting.id;
   const draft = state.transcriptDraft;
+  byId('transcript-history').hidden = !draft?.doc;
+  byId('transcript-history').disabled = state.busy;
   byId('transcribe').hidden = ownJob;
   byId('transcribe').disabled = !meeting.audio || !job.supported || !job.modelReady || processingActive() || state.busy;
   byId('transcribe').textContent = draft?.doc ? '다시 변환' : ['failed', 'cancelled'].includes(job.status) && job.kind === 'transcribe' && job.meetingId === meeting.id ? '다시 시도' : '텍스트로 변환';
@@ -626,7 +666,7 @@ function renderTranscript(meeting) {
   if (key !== state.transcriptKey) {
     state.transcriptKey = key;
     const scroll = byId('transcript-section').scrollTop;
-    byId('transcript-rows').innerHTML = (draft?.doc?.segments || []).map((segment,index) => globalThis.GroveUI.transcriptRow({ index, time: duration(segment.start * 1000), start: segment.start, text: segment.text, originalText: segment.originalText, editing: state.transcriptEditing === index, speaker: speakers.label(segment), speakerVisible: true, disabled: ownJob || state.editLocks > 0 })).join('');
+    byId('transcript-rows').innerHTML = (draft?.doc?.segments || []).map((segment,index) => globalThis.GroveUI.transcriptRow({ index, time: duration(segment.start * 1000), start: segment.start, text: segment.text, originalText: segment.originalText, editing: state.transcriptEditing === index, speaker: speakers.label(segment), speakerVisible: true, searchQuery: documentSearch.query(), disabled: ownJob || state.editLocks > 0 })).join('');
     byId('transcript-rows').querySelectorAll('textarea').forEach(resizeTranscriptEditor);
     byId('transcript-section').scrollTop = scroll;
   }
@@ -640,15 +680,18 @@ function renderTranscript(meeting) {
 
 async function loadTranscript(id) {
   const request = ++state.transcriptLoadId;
+  const startingDraft = state.transcriptDraft;
+  const startingVersion = JSON.stringify(startingDraft?.doc?.version);
+  const current = () => request === state.transcriptLoadId && state.selectedId === id && state.transcriptDraft === startingDraft && JSON.stringify(state.transcriptDraft?.doc?.version) === startingVersion && !state.transcriptDraft?.dirty;
   try {
     const doc = await bridge.readTranscript(id);
-    if (request !== state.transcriptLoadId || state.selectedId !== id || state.transcriptDraft?.dirty) return;
+    if (!current()) return;
     state.transcriptLoaded = true; state.transcriptLoadError = false;
     state.transcriptDraft = { id, doc, savedTexts: doc?.segments.map(segment => segment.text) || [], dirty: false, saving: false, version: 0 };
     state.transcriptEditing = null;
     state.transcriptKey = '';
     render();
-  } catch (error) { if (request === state.transcriptLoadId && state.selectedId === id) { state.transcriptLoaded = true; state.transcriptLoadError = true; showError(error); render(); } }
+  } catch (error) { if (current()) { state.transcriptLoaded = true; state.transcriptLoadError = true; showError(error); render(); } }
 }
 
 function saveTranscript() {
@@ -725,12 +768,12 @@ function renderSummary(meeting) {
   else if (!doc) message = '아직 요약하지 않은 회의입니다.';
   if (!state.summaryLoaded || ownJob) setHTML('summary-message', '<span class="activity-spinner" aria-hidden="true"></span> ' + escape(message));
   else setText('summary-message', message);
-  const key = JSON.stringify([meeting.id, doc?.id, state.transcriptDraft?.doc?.version, Boolean(stale)]);
+  const key = JSON.stringify([meeting.id, doc?.id, state.transcriptDraft?.doc?.version, Boolean(stale), documentSearch.query()]);
   if (key !== state.summaryKey) {
     state.summaryKey = key;
-    byId('summary-content').innerHTML = escape(doc?.text || '').replace(/\[(\d+)\]/g, (match, number) => {
-      const segment = state.transcriptDraft?.doc?.segments?.[Number(number) - 1];
-      return segment && state.transcriptLoaded && !stale ? `<button type="button" class="quiet source-reference" data-summary-seek="${Number(number)-1}" title="${escape(segment.text)}" aria-label="${number}번 발언 확인">${match}</button>` : match;
+    byId('summary-content').innerHTML = globalThis.GroveUI.summaryDocument(doc?.text || '', {
+      sources: state.transcriptLoaded && !stale ? (state.transcriptDraft?.doc?.segments || []).map(segment => segment.text) : [],
+      searchQuery: documentSearch.query(),
     });
   }
 }
@@ -743,7 +786,7 @@ async function loadSummary(id) {
     render();
   } catch (error) { if (request === state.summaryLoadId && id === state.selectedId) { state.summaryLoaded = true; state.summaryLoadError = true; showError(error); render(); } }
 }
-byId('prepare-summary').addEventListener('click', () => run(() => openSetup(true)));
+byId('prepare-summary').addEventListener('click', () => run(() => openSetup(false, 'prepare-summary')));
 byId('summarize').addEventListener('click', () => run(() => finishEditing(async () => acceptProcessing(await bridge.summarizeMeeting(state.selectedId)))));
 async function exportDocument(kind, format, copy = false) {
   await finishEditing(async () => {
@@ -754,8 +797,11 @@ async function exportDocument(kind, format, copy = false) {
     if (copy) {
       await navigator.clipboard.writeText(result.text);
       const feedback = byId(`copy-${kind}`);
-      feedback.textContent = '복사됨';
-      setTimeout(() => { feedback.textContent = '복사'; }, 1500);
+      const label = kind === 'summary' ? '요약 복사' : '음성 기록 복사';
+      clearTimeout(copyFeedbackTimers.get(kind));
+      paintIconButton(feedback, 'check', '복사됨');
+      byId('copy-feedback').textContent = `${label}됨`;
+      copyFeedbackTimers.set(kind, setTimeout(() => { paintIconButton(feedback, 'copy', label); byId('copy-feedback').textContent = ''; copyFeedbackTimers.delete(kind); }, 1500));
     } else await bridge.exportText(result.name, result.text);
   });
 }
@@ -782,6 +828,7 @@ function seekRecording(seconds) {
 }
 
 byId('summary-content').addEventListener('click', async (event) => {
+  state.pendingSearchIntent = null;
   const reference = event.target.closest('[data-summary-seek]');
   if (!reference || summaryIsStale()) return;
   const index = Number(reference.dataset.summarySeek), meetingId = state.selectedId;
@@ -799,7 +846,8 @@ byId('import-audio').addEventListener('click', () => run(() => finishEditing(asy
   if (progress) await acceptProcessing(progress);
 })));
 byId('cancel-processing').addEventListener('click', () => { void cancelProcessing(); });
-byId('transcribe').addEventListener('click', () => run(() => finishEditing(async () => acceptProcessing(await bridge.transcribeAudio(state.selectedId)))));
+byId('transcribe').addEventListener('click', () => { void transcriptActions.rebuild(); });
+byId('transcript-history').addEventListener('click', () => { void transcriptActions.openHistory(); });
 byId('save-transcript').addEventListener('click', () => finishEditing(() => {}).catch(() => {}));
 function onTranscriptEdit(event) {
   const index = event.target?.dataset.segment;
@@ -907,16 +955,50 @@ const detail = mountMeetingDetail({ byId, finishEditing, onError: showError, onR
   for (const kind of ['transcript', 'summary']) byId(`${kind}-export-menu`).open = false;
   globalThis.GroveControls.close?.();
 } });
+for (const view of ['summary', 'transcript', 'notes']) {
+  for (const event of ['click', 'keydown']) byId(`detail-${view}-tab`).addEventListener(event, () => { state.pendingSearchIntent = null; });
+}
+const documentSearch = mountDocumentSearch({ byId, prepare: () => finishEditing(() => true), onError: showError, selectView: view => detail.select(view), ready: () => state.summaryLoaded && state.transcriptLoaded, renderContent() {
+  const meeting = currentMeeting(); if (meeting) { renderTranscript(meeting); renderSummary(meeting); renderNotesSearch(); }
+} });
+const transcriptActions = mountTranscriptActions({ byId, bridge, finishEditing, showError, escape,
+  getContext: () => ({ meeting: currentMeeting(), transcript: state.transcriptDraft?.doc, processing: state.processing, recording: activeSession() }),
+  onRebuild: async meetingId => acceptProcessing(await bridge.transcribeAudio(meetingId)),
+  async onRestored(doc, meetingId) {
+    if (state.selectedId === meetingId) {
+      state.transcriptDraft = { id: meetingId, doc, savedTexts: doc.segments.map(segment => segment.text), dirty: false, saving: false, version: 0 };
+      state.transcriptEditing = null; state.transcriptKey = ''; state.summaryKey = ''; render();
+      await loadSummary(meetingId);
+    }
+    acceptSnapshot(await bridge.readSnapshot()); refreshMeetingSearch();
+  },
+});
 const library = mountLibrary({ bridge, getState: () => state, byId, finishEditing, acceptSnapshot, selectMeeting, render, showError, escape, icon, meetingTimestamp, recordingStatus, duration, onViewChanged() { meetingSearch.update(byId('search').value, state.libraryFilter === 'trash'); } });
-const speakers = mountSpeakers({ bridge, getState: () => state, byId, finishEditing, showError, onUpdated(doc, meetingId) {
+const speakers = mountSpeakers({ bridge, getState: () => state, byId, finishEditing, showError,
+  canPlay: () => Boolean(byId('audio-player').getAttribute('src')),
+  isPlaying: () => !byId('audio-player').paused && !byId('audio-player').ended,
+  onPause() { speakerReplay = null; byId('audio-player').pause(); },
+  onPlay(seconds, context) {
+    const segment = state.transcriptDraft?.doc?.segments[context.index];
+    if (context.meetingId !== state.selectedId || segment?.id !== context.segmentId) return;
+    speakerReplay = { meetingId: context.meetingId, end: context.endSeconds };
+    seekRecording(seconds);
+  }, onUpdated(doc, meetingId) {
   if (state.selectedId !== meetingId) return;
   if (state.transcriptDraft) { state.transcriptDraft.doc = doc; state.transcriptDraft.savedTexts = doc.segments.map(segment => segment.text); state.transcriptDraft.dirty = false; state.transcriptEditing = null; state.transcriptKey = ''; state.summaryKey = ''; }
   render(); refreshMeetingSearch();
 } });
 const meetingSearch = createMeetingSearch({ search: bridge.searchMeetings, apply(result) {
-  state.librarySearchIds = result.ids; state.librarySearchPending = result.pending; state.librarySearchUnavailable = result.unavailable;
+  state.librarySearchHits = result.hits; state.librarySearchIds = result.ids; state.librarySearchPending = result.pending; state.librarySearchUnavailable = result.unavailable;
   library.render(); renderList(); renderSearchStatus();
 } });
+
+for (const event of ['play', 'pause', 'ended']) byId('audio-player').addEventListener(event, () => speakers.syncPlayback());
+byId('audio-player').addEventListener('timeupdate', () => {
+  if (speakerReplay?.meetingId === state.selectedId && byId('audio-player').currentTime >= speakerReplay.end) {
+    speakerReplay = null; byId('audio-player').pause(); speakers.syncPlayback();
+  }
+});
 
 try {
   await bridge.subscribeSnapshots(acceptSnapshot);

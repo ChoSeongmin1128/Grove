@@ -83,6 +83,12 @@ frontend, whose actions require the native bridge; it does not supply fake meeti
 - Explicitly prepare the pinned MOSS model, then transcribe finalized audio locally.
   Downloads are checked against the shared manifest; inference uploads no audio.
 - Edit transcript text, seek to a segment, and reopen corrections after restarting.
+  Navigation saves and closes the editor; failed persistence retains its input.
+- Confirm re-transcription and restore a verified previous recognition run with version
+  checks. This preserves original audio and raw/initial recognition output.
+- Search matching context in the library or highlight/move through literal matches in
+  a meeting. Speaker changes on one utterance include replay; full speaker management
+  keeps its actions outside the scrolling content.
   Raw worker output and correction revisions are retained separately. Cancelling or
   failing a rerun preserves the previous transcript.
 - Hide the main window without ending recording. Explicit quit flushes notes and

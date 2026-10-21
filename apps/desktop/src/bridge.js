@@ -89,3 +89,6 @@ export const restoreMeetings = (ids) => call('restore_meetings', { ids }).then(a
 export const purgeMeetings = (ids) => call('purge_meetings', { ids }).then(accept);
 export const searchMeetings = (query, includeDeleted = false) => call('search_meetings', { query, includeDeleted });
 export const saveSpeakers = (meetingId, expected, speakers, assignments) => call('save_speakers', { meetingId, expected, speakers, assignments });
+
+export const readTranscriptHistory = (meetingId) => call('read_transcript_history', { meetingId });
+export const restoreTranscript = (meetingId, expected, target) => call('restore_transcript', { meetingId, expected, target });
