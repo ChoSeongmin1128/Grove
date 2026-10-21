@@ -81,16 +81,22 @@
               <script type="module" src="/audio-player.js"></script>
             </div>
           </section>
-          <section class="notes-section"><div class="section-heading"><h2><label for="meeting-notes">메모</label></h2></div><textarea id="meeting-notes" class="text-input" placeholder="안건이나 기억할 내용을 적어 두세요." spellcheck="false"></textarea></section>
-          <section id="transcript-section" class="transcript-section" aria-label="음성 기록">
-            <div class="section-heading transcript-heading"><h2>음성 기록</h2><div class="row"><button id="speakers-button" type="button" class="small quiet" hidden>화자 편집</button><button id="transcribe" type="button" class="small primary" disabled>텍스트로 변환</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button><button id="copy-transcript" type="button" class="small quiet" hidden>복사</button><details id="transcript-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
-            <p id="transcript-message" class="muted type-caption"></p><div id="transcript-rows"></div>
-          </section>
-          <section id="summary-section" class="summary-section" aria-label="회의록">
-            <div class="section-heading"><h2>회의록</h2><div class="row"><button id="prepare-summary" type="button" class="small" hidden>요약 기능 준비</button><button id="summarize" type="button" class="small primary" disabled>요약하기</button><button id="copy-summary" type="button" class="small quiet" disabled>복사</button><details id="summary-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
-            <p id="summary-message" class="muted type-caption" role="status"></p><div id="summary-content" class="summary-content"></div>
-          </section>
-
+          <nav id="detail-tabs" class="content-tabs" role="tablist" aria-label="회의 내용">
+            <button id="detail-summary-tab" type="button" role="tab" data-detail-tab="summary" aria-selected="true" aria-controls="summary-section">요약</button>
+            <button id="detail-transcript-tab" type="button" role="tab" data-detail-tab="transcript" aria-selected="false" aria-controls="transcript-section" tabindex="-1">음성 기록</button>
+            <button id="detail-notes-tab" type="button" role="tab" data-detail-tab="notes" aria-selected="false" aria-controls="notes-section" tabindex="-1">메모</button>
+          </nav>
+          <div class="detail-panels">
+            <section id="summary-section" class="summary-section detail-panel" role="tabpanel" aria-labelledby="detail-summary-tab" tabindex="0">
+              <div class="section-heading detail-panel-toolbar"><h2 class="sr-only">회의록</h2><div class="row"><button id="prepare-summary" type="button" class="small" hidden>요약 기능 준비</button><button id="summarize" type="button" class="small primary" disabled>요약하기</button><button id="copy-summary" type="button" class="small quiet" disabled>복사</button><details id="summary-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
+              <p id="summary-message" class="muted type-caption" role="status"></p><div id="summary-content" class="summary-content"></div>
+            </section>
+            <section id="transcript-section" class="transcript-section detail-panel" role="tabpanel" aria-labelledby="detail-transcript-tab" tabindex="0" hidden>
+              <div class="section-heading transcript-heading detail-panel-toolbar"><h2 class="sr-only">음성 기록</h2><div class="row"><button id="speakers-button" type="button" class="small quiet" hidden>화자 편집</button><button id="transcribe" type="button" class="small primary" disabled>텍스트로 변환</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button><button id="copy-transcript" type="button" class="small quiet" hidden>복사</button><details id="transcript-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
+              <p id="transcript-message" class="muted type-caption"></p><div id="transcript-rows"></div>
+            </section>
+            <section id="notes-section" class="notes-section detail-panel" role="tabpanel" aria-labelledby="detail-notes-tab" tabindex="0" hidden><div class="section-heading"><h2 class="sr-only"><label for="meeting-notes">메모</label></h2></div><textarea id="meeting-notes" class="text-input" placeholder="안건이나 기억할 내용을 적어 두세요." spellcheck="false"></textarea></section>
+          </div>
         </section>
       </main>
     </div>

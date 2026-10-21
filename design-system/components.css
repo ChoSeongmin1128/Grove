@@ -247,6 +247,57 @@ input[type="checkbox"] {
   box-shadow: 0 1px 3px var(--shadow-soft);
 }
 
+.content-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.content-tabs [role="tab"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-label-size);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.content-tabs [role="tab"]:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.content-tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.content-tabs [role="tab"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -4px;
+}
+
+@media (forced-colors: active) {
+  .content-tabs { border-bottom-color: CanvasText; }
+  .content-tabs [role="tab"] { color: ButtonText; }
+  .content-tabs [role="tab"][aria-selected="true"] { border-bottom-color: Highlight; color: Highlight; }
+  .content-tabs [role="tab"]:focus-visible { outline-color: Highlight; }
+}
+
 .notice {
   padding: 12px 14px;
   background: var(--warning-surface);

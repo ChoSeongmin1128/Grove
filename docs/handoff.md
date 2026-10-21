@@ -8,6 +8,12 @@ the private installation and evaluation receipts.
 
 ## Native rewrite source
 
+- Meeting details use top-level Summary / Voice record / Notes tabs, with the shared
+  header/recorder/player outside the scrolling content. Initial result loads choose a
+  default once; explicit user choices, edits, playback and per-panel reading positions
+  survive tab changes. Result panels never hide themselves. Scroll restoration waits
+  for content readiness, and valid summary citations reveal the referenced utterance.
+  See `docs/meeting-library-and-speakers.md` and the canonical `.content-tabs` example.
 - Meeting management now includes single-folder placement, batch move, trash/restore,
   permanent deletion with tombstone recovery, and content search. Speaker names and
   assignments share transcript revision checks and preserve raw results/corrections.

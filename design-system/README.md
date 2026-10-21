@@ -8,7 +8,7 @@
 | --- | --- |
 | `appearance.css`, `appearance.js` | 역할 색상, 6색과 light/dark/system 선택 |
 | `typography.css` | 시스템/한글/코드 글꼴, 크기/굵기/줄간격/자간 역할 |
-| `components.css` | 버튼, 입력, 필드, 배지, 선택, 오류, 모달, 설정 선택의 기본 스타일 |
+| `components.css` | 버튼, 입력, 필드, 배지, 선택, 내용 탭, 오류, 모달, 설정 선택의 기본 스타일 |
 | `components.js` | 버튼/상태/회의 행/사람 행/참석자 항목/전사 발언/회의록 읽기/모달 내용 생성 |
 | `controls.css`, `controls.js` | 선택 메뉴와 날짜/시간의 열기/닫기/선택/초점/키보드 동작 |
 | `style.css`, `prototype/` | 브라우저 제품 예제의 배치와 기능 상태 |
@@ -45,6 +45,11 @@ UI 글꼴은 OS의 `system-ui`와 한글 대체 글꼴을 같은 계약으로 �
 카탈로그와 제품은 `meetingRow/personRow/personOption/utterance/minutes/dialogContent`를 함께 사용한다. 기능별 시간/수정/참석자 선택의 기존 `data-action/data-field/id`를 유지한다. 선택 메뉴와 달력도 같은 `GroveControls`를 사용한다.
 
 일반 입력은 `.text-input`, 검색은 `.text-input--compact`, 제목은 `.text-input--title`을 사용한다. 기본/호버/포커스/읽기 전용/비활성 경계와 안쪽 여백은 `components.css`가 소유한다. `.editor`처럼 외부 프레임이 입력 영역을 소유하는 문서 편집 변형에는 중복 적용하지 않는다.
+
+내용 탐색은 `.content-tabs`와 `tablist/tab/tabpanel`을 사용한다. 선택은 `aria-selected`,
+초점 순서는 roving `tabindex`로 표현한다. 좌우 방향키와 Home/End는 해당 탭을 선택하며,
+공통 오디오와 편집 DOM을 다시 만들지 않는다. 저장/읽기/스크롤 복원은 기능 화면이
+소유하고, 로딩과 빈 상태를 구분한다. 카탈로그의 같은 구성으로 선택/초점/긴 내용 스크롤을 확인한다.
 
 스타일을 바꿀 때는 소유 파일을 수정한다. 카탈로그에만 별도 제품 스타일을 덧붙이지 않는다. 간격/반경/높이의 모든 숫자를 하나의 scale로 만들지 않으며, 공통 컴포넌트의 반복 기준과 각 플랫폼 구조의 차이를 구분한다.
 

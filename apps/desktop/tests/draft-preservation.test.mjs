@@ -7,6 +7,7 @@ const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8'
 const uiSource = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
 const librarySource = await readFile(new URL('../src/library-ui.js', import.meta.url), 'utf8');
 const searchSource = await readFile(new URL('../src/meeting-search.js', import.meta.url), 'utf8');
+const detailSource = await readFile(new URL('../src/meeting-detail-ui.js', import.meta.url), 'utf8');
 const feedbackSource = await readFile(new URL('../src/processing-feedback.js', import.meta.url), 'utf8');
 const componentsSource = await readFile(new URL('../../../design-system/components.js', import.meta.url), 'utf8');
 const tick = () => new Promise(setImmediate);
@@ -26,7 +27,7 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
       addEventListener(name, callback) { this.listeners.set(name, callback); },
       querySelectorAll() { return []; }, querySelector() { return null; },
       focus() { document.activeElement = this; }, blur() { document.activeElement = document.body; },
-      select() {}, pause() {}, load() {}, setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; }, getAttribute(name) { return this[name] ?? null; }, showModal() { this.open = true; }, close() { this.open = false; this.listeners.get('close')?.(); },
+      select() {}, pause() {}, play() { return Promise.resolve(); }, load() {}, setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; }, getAttribute(name) { return this[name] ?? null; }, showModal() { this.open = true; }, close() { this.open = false; this.listeners.get('close')?.(); },
     });
     const node = elements.get(id);
     if (!Object.hasOwn(node, 'htmlWrites')) {
@@ -89,6 +90,7 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
   })()`, context);
   const executable = source.replace(/^import .*;\n/gm, '');
   const app = await vm.runInContext(`(async () => {
+    ${detailSource.replace(/^export /gm, '')}
     ${feedbackSource.replace(/^export /gm, '')}
     ${searchSource.replace(/^export /gm, '')}
     ${librarySource.slice(0, librarySource.indexOf('export function mountLibrary')).replace(/^export /gm, '')}
@@ -98,7 +100,7 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
     const bridge = testBridge;
     const { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance, documentExport } = testUI;
     ${executable}
-    return { state, selectMeeting, saveDraft, onEdit, onQuitRequest, refreshDevices, acceptSnapshot, saveTranscript, loadTranscript, acceptProcessing, loadSummary, renderSummary, createMeeting, openSetup, openSettings, changeMicrophone, changeMeetingDate, render, prepareAudio, exportDocument, editTranscriptRow, completeTranscriptRow, cancelTranscriptRow, cancelProcessing };
+    return { state, detail, selectMeeting, saveDraft, onEdit, onQuitRequest, refreshDevices, acceptSnapshot, saveTranscript, loadTranscript, acceptProcessing, loadSummary, renderSummary, createMeeting, openSetup, openSettings, changeMicrophone, changeMeetingDate, render, prepareAudio, exportDocument, editTranscriptRow, completeTranscriptRow, cancelTranscriptRow, cancelProcessing };
   })()`, context);
   await tick();
   return {
@@ -772,4 +774,63 @@ test('setup verification has activity without a misleading zero percent bar', as
   assert.equal(page.element('setup-spinner').hidden, false);
   assert.equal(page.element('setup-progress').hidden, true);
   assert.equal(page.element('setup-progress-bytes').textContent, '');
+});
+
+
+test('detail tabs preserve Korean composition and stay on the editor if saving fails', async () => {
+  const page = await openApp();
+  assert.equal(page.app.detail.active(), 'notes');
+  page.app.state.composing = true;
+  page.element('meeting-notes').focus();
+  page.element('meeting-notes').value = '회의에서 결정한 사항';
+  const changing = page.app.detail.select('summary');
+  await tick();
+  assert.equal(page.app.detail.active(), 'notes');
+  assert.equal(page.updates[0].notes, '회의에서 결정한 사항');
+  page.updates[0].pending.reject(new Error('저장 실패'));
+  assert.equal(await changing, false);
+  assert.equal(page.app.detail.active(), 'notes');
+  assert.equal(page.app.state.draft.notes, '회의에서 결정한 사항');
+  assert.equal(page.app.state.draft.dirty, true);
+  assert.equal(page.element('meeting-notes').readOnly, false);
+});
+
+test('a long transcript does not need scrolling to reveal the summary and loading keeps the chosen panel', async () => {
+  const doc = transcriptDocument();
+  doc.segments = Array.from({length: 300}, (_,i) => ({id: `segment-${i}`, start: i * 5, end: i * 5 + 4, text: `발언 ${i + 1}`, originalText: `발언 ${i + 1}`}));
+  const page = await openApp(doc);
+  assert.equal(page.app.detail.active(), 'transcript');
+  const pending = deferred();
+  page.bridge.readSummary = () => pending.promise;
+  const loading = page.app.loadSummary('a');
+  await page.app.detail.select('notes');
+  pending.resolve({document: {id: 'summary-a', text: '결정 사항 [201]', sourceVersion: doc.version}, stale: false});
+  await loading;
+  assert.equal(page.app.detail.active(), 'notes');
+  await page.app.detail.select('summary');
+  assert.equal(page.element('summary-section').hidden, false);
+  assert.equal(page.element('transcript-section').hidden, true);
+  assert.match(page.element('summary-content').innerHTML, /결정 사항/);
+  assert.match(page.element('transcript-rows').innerHTML, /발언 300/);
+});
+
+test('summary source opens the transcript, focuses the utterance and seeks the shared player', async () => {
+  const doc = transcriptDocument();
+  doc.segments[0].start = 23;
+  const page = await openApp(doc);
+  page.bridge.readSummary = async () => ({document: {id: 'summary-a', text: '결정 사항 [1]', sourceVersion: doc.version}, stale: false});
+  await page.app.loadSummary('a');
+  await page.app.detail.select('summary');
+  let scrolled = false, focused = false;
+  page.element('transcript-rows').querySelector = () => ({scrollIntoView() { scrolled = true; }, focus() { focused = true; }});
+  page.element('audio-player').setAttribute('src', 'example.wav');
+  page.element('audio-player').playbackRate = 1.5;
+  await page.element('summary-content').listeners.get('click')({target: {closest: () => ({dataset: {summarySeek: '0'}})}});
+  assert.equal(page.app.detail.active(), 'transcript');
+  assert.equal(page.element('transcript-section').hidden, false);
+  assert.equal(page.element('summary-section').hidden, true);
+  assert.equal(scrolled, true);
+  assert.equal(focused, true);
+  assert.equal(page.element('audio-player').currentTime, 23);
+  assert.equal(page.element('audio-player').playbackRate, 1.5);
 });
