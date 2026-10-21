@@ -786,9 +786,25 @@ async fn request_quit(
 #[tauri::command]
 fn processing_status(
     window: WebviewWindow,
+    app: tauri::AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<Progress, String> {
     require_main(&window)?;
+    state.processing.notify_startup_issues(|issues| {
+        app.emit_to(
+            "main",
+            "grove://processing-error",
+            ProcessingError {
+                meeting_id: None,
+                message: issues
+                    .iter()
+                    .map(|issue| issue.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            },
+        )
+        .is_ok()
+    });
     Ok(state.processing.snapshot())
 }
 #[tauri::command]
@@ -1007,6 +1023,7 @@ fn main() {
             let core = CoreHandle::open(&root)?;
             let processing = Processing::new(root, app.path().resource_dir()?);
             processing.cleanup_removed_meeting_jobs(&core);
+            processing.upgrade_transcript_sources(&core);
             let polling = Arc::new(AtomicBool::new(true));
             app.manage(DesktopState {
                 core: core.clone(),

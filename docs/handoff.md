@@ -11,6 +11,10 @@ the private installation and evaluation receipts.
 - Meeting management now includes single-folder placement, batch move, trash/restore,
   permanent deletion with tombstone recovery, and content search. Speaker names and
   assignments share transcript revision checks and preserve raw results/corrections.
+  Source identity is explicit (raw hash, initial IDs/order, source index); legacy
+  upgrades run as a separate startup operation with immutable before/after evidence.
+  Ordinary reads do not reconstruct or migrate. Workspace JSON float parsing preserves
+  persisted coordinates; timestamps are checked as ASR sample addresses, never epsilon identity.
   MOSS labels are scoped to independent recognition chunks; cross-chunk identity and
   qualified eight-person diarization remain unimplemented/unverified. See
   [Meeting library and speakers](meeting-library-and-speakers.md) for storage, cancellation,

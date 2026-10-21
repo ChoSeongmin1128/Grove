@@ -4,9 +4,12 @@ mod library;
 mod store;
 mod summary;
 mod transcript;
-pub use summary::{Summary, SummaryDraft, SummaryProvenance, SummaryView};
-pub use transcript::{Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptVersion};
 pub use library::Folder;
+pub use summary::{Summary, SummaryDraft, SummaryProvenance, SummaryView};
+pub use transcript::{
+    Transcript, TranscriptSegment, TranscriptSource, TranscriptSpeaker, TranscriptUpgradeReport,
+    TranscriptVersion,
+};
 
 use engine::Engine;
 use serde::{Deserialize, Serialize};
@@ -161,6 +164,9 @@ pub struct CoreHandle {
 }
 
 impl CoreHandle {
+    pub fn upgrade_transcript_sources(&self) -> Result<TranscriptUpgradeReport> {
+        self.call(|engine| engine.upgrade_transcript_sources())
+    }
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         let (commands, incoming) = mpsc::sync_channel(32);
@@ -279,7 +285,13 @@ impl CoreHandle {
         self.call(move |engine| engine.edit_transcript(&id, expected, texts))
     }
 
-    pub fn edit_speakers(&self, id: &str, expected: TranscriptVersion, speakers: Vec<TranscriptSpeaker>, assignments: Vec<Option<String>>) -> Result<Transcript> {
+    pub fn edit_speakers(
+        &self,
+        id: &str,
+        expected: TranscriptVersion,
+        speakers: Vec<TranscriptSpeaker>,
+        assignments: Vec<Option<String>>,
+    ) -> Result<Transcript> {
         let id = id.to_owned();
         self.call(move |engine| engine.edit_speakers(&id, expected, speakers, assignments))
     }

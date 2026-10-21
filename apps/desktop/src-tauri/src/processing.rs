@@ -113,6 +113,7 @@ pub struct Processing {
     pub(super) root: PathBuf,
     pub(super) resources: PathBuf,
     progress: Mutex<Progress>,
+    startup_issues: Mutex<Vec<Progress>>,
     running: Mutex<Option<Running>>,
     recording_transcription: Mutex<RecordingTranscription>,
     shutting_down: AtomicBool,
@@ -213,6 +214,7 @@ impl Processing {
             root,
             resources,
             progress: Mutex::new(Progress::default()),
+            startup_issues: Mutex::new(Vec::new()),
             running: Mutex::new(None),
             recording_transcription: Mutex::new(RecordingTranscription::default()),
             shutting_down: AtomicBool::new(false),
@@ -518,6 +520,34 @@ impl Processing {
             });
         }
     }
+
+    pub fn upgrade_transcript_sources(&self, core: &CoreHandle) {
+        self.record_transcript_upgrade(core.upgrade_transcript_sources());
+    }
+
+    fn record_transcript_upgrade(
+        &self,
+        result: grove_core::Result<grove_core::TranscriptUpgradeReport>,
+    ) {
+        if result.is_ok_and(|report| report.unavailable == 0) {
+            return;
+        }
+        self.startup_issues.lock().unwrap().push(Progress {
+            id: Some(Uuid::new_v4().to_string()),
+            kind: "transcript-upgrade".into(),
+            status: "failed".into(),
+            message: "일부 음성 기록의 화자 정보를 복구하지 못했습니다. 원문과 수정본은 유지했습니다. 앱을 다시 열면 재시도합니다.".into(),
+            ..Default::default()
+        });
+    }
+
+    pub fn notify_startup_issues(&self, notify: impl FnOnce(&[Progress]) -> bool) {
+        let mut issues = self.startup_issues.lock().unwrap();
+        if !issues.is_empty() && notify(&issues) {
+            issues.clear();
+        }
+    }
+
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         if let Some(job) = self.running.lock().unwrap().take() {
@@ -1313,6 +1343,75 @@ mod tests {
         assert_eq!(status.status, "failed");
         assert!(!status.message.contains(&meeting.id));
         assert!(process.root.join("meetings").join(&meeting.id).exists());
+    }
+    #[test]
+    fn successful_source_upgrade_does_not_add_a_startup_notice() {
+        let (_temp, process) = setup();
+        process.record_transcript_upgrade(Ok(grove_core::TranscriptUpgradeReport {
+            upgraded: 1,
+            unchanged: 1,
+            unavailable: 0,
+        }));
+        assert!(process.startup_issues.lock().unwrap().is_empty());
+        assert_eq!(process.progress.lock().unwrap().status, "");
+    }
+    #[test]
+    fn unavailable_source_upgrade_remains_nonblocking_and_can_be_delivered_once() {
+        let (_temp, process) = setup();
+        process.record_transcript_upgrade(Ok(grove_core::TranscriptUpgradeReport {
+            upgraded: 1,
+            unchanged: 0,
+            unavailable: 1,
+        }));
+        {
+            let issues = process.startup_issues.lock().unwrap();
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].kind, "transcript-upgrade");
+            assert_eq!(issues[0].status, "failed");
+        }
+        process.recording_start(|| Ok(())).unwrap();
+        let deliveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handles = (0..4)
+            .map(|_| {
+                let process = process.clone();
+                let deliveries = deliveries.clone();
+                thread::spawn(move || {
+                    process.notify_startup_issues(|_| {
+                        deliveries.fetch_add(1, Ordering::AcqRel);
+                        true
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(deliveries.load(Ordering::Acquire), 1);
+        assert!(process.startup_issues.lock().unwrap().is_empty());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn source_upgrade_failure_and_cleanup_failure_keep_separate_diagnostics() {
+        let (temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        std::os::unix::fs::symlink(temp.path(), process.root.join("processing")).unwrap();
+        process.cleanup_removed_meeting_jobs(&core);
+        let cleanup = process.progress.lock().unwrap().clone();
+        process.record_transcript_upgrade(Err(grove_core::CoreError::Storage(
+            "private/source/path".into(),
+        )));
+        assert!(process.progress.lock().unwrap().clone() == cleanup);
+        assert_eq!(cleanup.kind, "cleanup");
+        assert_eq!(cleanup.status, "failed");
+        process.notify_startup_issues(|issues| {
+            assert_eq!(issues[0].kind, "transcript-upgrade");
+            assert!(!issues[0].message.contains("private/source/path"));
+            false
+        });
+        assert_eq!(process.startup_issues.lock().unwrap().len(), 1);
+        process.notify_startup_issues(|_| true);
+        assert!(process.startup_issues.lock().unwrap().is_empty());
+        assert!(process.progress.lock().unwrap().clone() == cleanup);
     }
     #[test]
     fn historic_job_ownership_requires_a_unique_exact_raw_result() {

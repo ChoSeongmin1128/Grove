@@ -702,6 +702,7 @@ mod tests {
         let process = Processing::new(temporary.path().into(), temporary.path().into());
         let cancel = AtomicBool::new(false);
         let mut source = Transcript {
+            source: None,
             version: grove_core::TranscriptVersion {
                 id: "test".into(),
                 revision: 0,
@@ -712,6 +713,7 @@ mod tests {
             speakers: vec![],
             segments: (0..10)
                 .map(|i| grove_core::TranscriptSegment {
+                    source_index: Some(i),
                     id: i.to_string(),
                     start: i as f64,
                     end: (i + 1) as f64,

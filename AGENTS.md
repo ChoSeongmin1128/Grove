@@ -25,6 +25,11 @@ This file applies to the entire repository.
   are transcript revisions, not automatic identity verification. Independent
   full-recording diarization is still unconnected; eight actual speakers remain a
   validation target, not a qualified support claim. See `docs/meeting-library-and-speakers.md`.
+- Transcript source identity uses raw hashes, immutable initial utterance IDs/order and
+  source indices. Playback time is validated at the ASR 16kHz sample address, not used
+  as an approximate identity. Legacy source upgrades are a separate startup operation,
+  with immutable before/after evidence; ordinary reads must not migrate or reconstruct.
+  Keep float_roundtrip in the shared workspace JSON dependency for stable persistence.
 - Model selection will prefer qualified GPU paths and retain CPU compatibility.
   Initial diarization support targets up to eight actual speakers; more attendees
   must not block recording or transcription. Preserve transcription on speaker-stage failure.

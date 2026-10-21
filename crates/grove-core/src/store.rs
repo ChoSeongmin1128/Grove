@@ -664,6 +664,37 @@ pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
         .map_err(|_| CoreError::Storage("저장 정보의 형식이 올바르지 않습니다.".into()))
 }
 
+#[cfg(test)]
+mod json_precision_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_audio_coordinates_keep_their_exact_bits_across_repeated_reads() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let coordinates = vec![
+            0.0,
+            0.1,
+            f64::from_bits(15.2_f64.to_bits() - 1),
+            51.248178375505404,
+            3600.123456789,
+        ];
+        let expected: Vec<_> = coordinates.iter().map(|value| value.to_bits()).collect();
+        let mut current = coordinates;
+        for _ in 0..5 {
+            write_json(&root, Path::new("coordinates.json"), &current).unwrap();
+            current = read_json(&root.join("coordinates.json")).unwrap();
+            assert_eq!(
+                current
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+}
+
 pub(crate) fn write_json(root: &Path, relative: &Path, value: &impl Serialize) -> Result<()> {
     let destination = checked_path(root, relative)?;
     let parent = relative

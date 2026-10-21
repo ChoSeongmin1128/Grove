@@ -8,6 +8,10 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+const PROJECTOR_VERSION: &str = "moss-chunk-speakers-v1";
+const LEGACY_ASSOCIATION: &str = "legacy-initial-order-v1";
+const SOURCE_TIMEBASE: u64 = 16000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TranscriptVersion {
@@ -25,6 +29,8 @@ pub struct TranscriptSegment {
     pub text: String,
     #[serde(default)]
     pub speaker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,6 +40,22 @@ pub struct TranscriptSpeaker {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptSource {
+    pub raw_sha256: String,
+    pub projector_version: String,
+    pub association: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptUpgradeReport {
+    pub upgraded: u64,
+    pub unchanged: u64,
+    pub unavailable: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Transcript {
@@ -41,6 +63,8 @@ pub struct Transcript {
     pub source_session_id: String,
     pub model: String,
     pub model_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<TranscriptSource>,
     #[serde(default)]
     pub speakers: Vec<TranscriptSpeaker>,
     pub segments: Vec<TranscriptSegment>,
@@ -109,7 +133,7 @@ impl MossOutput {
             .segments
             .iter()
             .any(|segment| segment.asr_chunk.is_some());
-        for segment in output.segments {
+        for (index, segment) in output.segments.into_iter().enumerate() {
             if !segment.start.is_finite()
                 || !segment.end.is_finite()
                 || segment.start < 0.0
@@ -154,6 +178,9 @@ impl MossOutput {
                 original_text: text.clone(),
                 text,
                 speaker_id,
+                source_index: Some(u32::try_from(index).map_err(|_| {
+                    CoreError::InvalidInput("전사 구간 수가 너무 많습니다.".into())
+                })?),
             });
         }
         Ok(Transcript {
@@ -170,6 +197,11 @@ impl MossOutput {
                 .as_str()
                 .unwrap_or_default()
                 .into(),
+            source: Some(TranscriptSource {
+                raw_sha256: sha256(raw),
+                projector_version: PROJECTOR_VERSION.into(),
+                association: "direct".into(),
+            }),
             speakers,
             segments,
         })
@@ -241,6 +273,65 @@ fn immutable_json(root: &Path, relative: &Path, value: &impl Serialize) -> Resul
     file.write_all(b"\n")?;
     file.sync_all()?;
     Ok(())
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn read_bytes(root: &Path, relative: &Path) -> Result<Vec<u8>> {
+    let path = store::checked_path(root, relative)?;
+    let file = store::open_read(&path)?;
+    if file.metadata()?.len() > 16 * 1024 * 1024 {
+        return Err(CoreError::Storage("저장 정보가 너무 큽니다.".into()));
+    }
+    let mut bytes = Vec::new();
+    file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err(CoreError::Storage("저장 정보가 너무 큽니다.".into()));
+    }
+    Ok(bytes)
+}
+
+fn immutable_bytes(root: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = store::create_new(&store::checked_path(root, relative)?)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn source_position(seconds: f64, total_samples: u64) -> Option<u64> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let position = (seconds * SOURCE_TIMEBASE as f64).round();
+    if !position.is_finite() || position >= u64::MAX as f64 || position > total_samples as f64 {
+        return None;
+    }
+    Some(position as u64)
+}
+
+fn same_playback_range(a: &TranscriptSegment, b: &TranscriptSegment, samples: u64) -> bool {
+    if a.end < a.start || b.end < b.start {
+        return false;
+    }
+    match (
+        source_position(a.start, samples),
+        source_position(a.end, samples),
+        source_position(b.start, samples),
+        source_position(b.end, samples),
+    ) {
+        (Some(a_start), Some(a_end), Some(b_start), Some(b_end)) => {
+            a_start == b_start && a_end == b_end
+        }
+        _ => false,
+    }
+}
+
+struct TranscriptUpgradeEvidence {
+    before: Vec<u8>,
+    raw_sha256: String,
+    initial_sha256: String,
 }
 
 impl Engine {
@@ -362,6 +453,12 @@ impl Engine {
     }
 
     pub fn transcript(&self, id: &str) -> Result<Option<Transcript>> {
+        Ok(self
+            .read_transcript_document(id)?
+            .map(|(document, _)| document))
+    }
+
+    fn read_transcript_document(&self, id: &str) -> Result<Option<(Transcript, Vec<u8>)>> {
         store::validate_id(id)?;
         let meeting = &self
             .meetings
@@ -372,10 +469,8 @@ impl Engine {
             return Ok(None);
         };
         let directory = transcript_dir(id, transcript_id)?;
-        let path = store::checked_path(&self.store.root, &directory.join("current.json"))?;
-        let value: serde_json::Value = store::read_json(&path)?;
-        let missing_speakers = value.get("speakers").is_none();
-        let mut doc: Transcript = serde_json::from_value(value)
+        let bytes = read_bytes(&self.store.root, &directory.join("current.json"))?;
+        let doc: Transcript = serde_json::from_slice(&bytes)
             .map_err(|_| CoreError::Storage("저장 정보의 형식이 올바르지 않습니다.".into()))?;
         if doc.version.id != *transcript_id
             || meeting.audio.as_ref().map(|a| a.session_id.as_str())
@@ -385,44 +480,133 @@ impl Engine {
                 "전사와 원음의 연결이 올바르지 않습니다.".into(),
             ));
         }
-        if missing_speakers
-            && doc
-                .segments
-                .iter()
-                .all(|segment| segment.speaker_id.is_none())
-        {
-            if let Some(audio) = &meeting.audio {
-                let _ = (|| -> Result<()> {
-                    let raw_path =
-                        store::checked_path(&self.store.root, &directory.join("raw.json"))?;
-                    let mut raw = Vec::new();
-                    store::open_read(&raw_path)?
-                        .take(16 * 1024 * 1024 + 1)
-                        .read_to_end(&mut raw)?;
-                    let original = MossOutput::decode(
-                        &raw,
-                        audio.frames as f64 / audio.sample_rate as f64,
-                        &doc.source_session_id,
-                        &doc.version.id,
-                    )?;
-                    if original.segments.len() != doc.segments.len()
-                        || !original.segments.iter().zip(&doc.segments).all(|(a, b)| {
-                            a.start == b.start
-                                && a.end == b.end
-                                && a.original_text == b.original_text
-                        })
-                    {
-                        return Ok(());
-                    }
-                    doc.speakers = original.speakers;
-                    for (segment, original) in doc.segments.iter_mut().zip(original.segments) {
-                        segment.speaker_id = original.speaker_id;
-                    }
-                    Ok(())
-                })();
+        Ok(Some((doc, bytes)))
+    }
+
+    pub fn upgrade_transcript_sources(&mut self) -> Result<TranscriptUpgradeReport> {
+        if self.quitting {
+            return Err(CoreError::Unavailable);
+        }
+        if self.capture.is_some() {
+            return Err(CoreError::RecordingBusy);
+        }
+        let ids: Vec<_> = self
+            .meetings
+            .values()
+            .filter(|stored| stored.meeting.transcript_id.is_some())
+            .map(|stored| stored.meeting.id.clone())
+            .collect();
+        let mut report = TranscriptUpgradeReport::default();
+        for id in ids {
+            match self.upgrade_transcript_source(&id) {
+                Ok(true) => report.upgraded += 1,
+                Ok(false) => report.unchanged += 1,
+                Err(_) => report.unavailable += 1,
             }
         }
-        Ok(Some(doc))
+        Ok(report)
+    }
+
+    fn upgrade_transcript_source(&self, id: &str) -> Result<bool> {
+        let (mut doc, before) = self
+            .read_transcript_document(id)?
+            .ok_or_else(|| CoreError::InvalidState("음성 기록이 없습니다.".into()))?;
+        if doc.source.is_some() {
+            return Ok(false);
+        }
+        let audio = self.meetings[id]
+            .meeting
+            .audio
+            .as_ref()
+            .ok_or_else(|| CoreError::Storage("원음 정보가 없습니다.".into()))?;
+        let duration = audio.frames as f64 / audio.sample_rate as f64;
+        let samples = source_position(duration, u64::MAX)
+            .ok_or_else(|| CoreError::Storage("원음 시각이 올바르지 않습니다.".into()))?;
+        let directory = transcript_dir(id, &doc.version.id)?;
+        let current_value: serde_json::Value = serde_json::from_slice(&before)
+            .map_err(|_| CoreError::Storage("저장 정보의 형식이 올바르지 않습니다.".into()))?;
+        let explicit_speakers = current_value.get("speakers").is_some();
+        let initial_bytes = read_bytes(&self.store.root, &directory.join("initial.json"))?;
+        let initial: Transcript = serde_json::from_slice(&initial_bytes)
+            .map_err(|_| CoreError::Storage("원본 음성 기록을 읽을 수 없습니다.".into()))?;
+        if initial.version.id != doc.version.id
+            || initial.version.revision != 0
+            || initial.source_session_id != doc.source_session_id
+            || initial.model != doc.model
+            || initial.model_revision != doc.model_revision
+            || initial.segments.len() != doc.segments.len()
+        {
+            return Err(CoreError::Storage(
+                "음성 기록의 원본 연결을 확인할 수 없습니다.".into(),
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        for (original, current) in initial.segments.iter().zip(&doc.segments) {
+            store::validate_id(&original.id)?;
+            if !ids.insert(&original.id)
+                || original.id != current.id
+                || original.original_text != current.original_text
+                || original.text != original.original_text
+                || !same_playback_range(original, current, samples)
+            {
+                return Err(CoreError::Storage(
+                    "수정본과 원본 발언의 연결을 확인할 수 없습니다.".into(),
+                ));
+            }
+        }
+        let raw = read_bytes(&self.store.root, &directory.join("raw.json"))?;
+        let projection =
+            MossOutput::decode(&raw, duration, &doc.source_session_id, &doc.version.id)?;
+        if projection.model != initial.model
+            || projection.segments.len() != initial.segments.len()
+            || !projection
+                .segments
+                .iter()
+                .zip(&initial.segments)
+                .all(|(projected, original)| {
+                    projected.original_text == original.original_text
+                        && same_playback_range(projected, original, samples)
+                })
+        {
+            return Err(CoreError::Storage(
+                "모델 원본과 발언의 연결을 확인할 수 없습니다.".into(),
+            ));
+        }
+        if !explicit_speakers {
+            doc.speakers = projection.speakers;
+            for (segment, projected) in doc.segments.iter_mut().zip(&projection.segments) {
+                segment.speaker_id = projected.speaker_id.clone();
+            }
+        }
+        validate_speakers(
+            &doc.speakers,
+            &doc.segments
+                .iter()
+                .map(|segment| segment.speaker_id.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        for (index, segment) in doc.segments.iter_mut().enumerate() {
+            segment.source_index = Some(
+                u32::try_from(index)
+                    .map_err(|_| CoreError::Storage("발언 수가 너무 많습니다.".into()))?,
+            );
+        }
+        let raw_sha256 = sha256(&raw);
+        doc.source = Some(TranscriptSource {
+            raw_sha256: raw_sha256.clone(),
+            projector_version: PROJECTOR_VERSION.into(),
+            association: LEGACY_ASSOCIATION.into(),
+        });
+        self.save_transcript_revision(
+            id,
+            doc,
+            Some(TranscriptUpgradeEvidence {
+                before,
+                raw_sha256,
+                initial_sha256: sha256(&initial_bytes),
+            }),
+        )?;
+        Ok(true)
     }
 
     pub fn commit_transcript(
@@ -544,18 +728,62 @@ impl Engine {
         self.save_transcript_edit(id, doc)
     }
 
-    fn save_transcript_edit(&self, id: &str, mut doc: Transcript) -> Result<Transcript> {
+    fn save_transcript_edit(&self, id: &str, doc: Transcript) -> Result<Transcript> {
+        self.save_transcript_revision(id, doc, None)
+    }
+
+    fn save_transcript_revision(
+        &self,
+        id: &str,
+        mut doc: Transcript,
+        upgrade: Option<TranscriptUpgradeEvidence>,
+    ) -> Result<Transcript> {
+        let before_version = doc.version.clone();
         doc.version.revision = doc
             .version
             .revision
             .checked_add(1)
             .ok_or(CoreError::Unavailable)?;
         let directory = transcript_dir(id, &doc.version.id)?;
-        immutable_json(
-            &self.store.root,
-            &directory.join(format!("edit-{}.json", Uuid::new_v4())),
-            &doc,
-        )?;
+        let transaction = Uuid::new_v4();
+        let edit_name = format!("edit-{transaction}.json");
+        let mut after =
+            serde_json::to_vec(&doc).map_err(|error| CoreError::Storage(error.to_string()))?;
+        after.push(b'\n');
+        if let Some(evidence) = &upgrade {
+            let current = read_bytes(&self.store.root, &directory.join("current.json"))?;
+            if current != evidence.before {
+                return Err(CoreError::InvalidState(
+                    "이관 중 음성 기록이 변경되었습니다.".into(),
+                ));
+            }
+            immutable_bytes(
+                &self.store.root,
+                &directory.join(format!("upgrade-before-{transaction}.json")),
+                &evidence.before,
+            )?;
+        }
+        immutable_bytes(&self.store.root, &directory.join(&edit_name), &after)?;
+        if let Some(evidence) = upgrade {
+            // 적용 뒤 영수증 쓰기 실패가 성공한 교체를 숨기지 않도록 증거를 먼저 보존한다.
+            immutable_json(
+                &self.store.root,
+                &directory.join(format!("upgrade-receipt-{transaction}.json")),
+                &serde_json::json!({
+                    "status":"prepared",
+                    "ruleVersion":LEGACY_ASSOCIATION,
+                    "timebase":SOURCE_TIMEBASE,
+                    "rawSha256":evidence.raw_sha256,
+                    "initialSha256":evidence.initial_sha256,
+                    "beforeCurrentSha256":sha256(&evidence.before),
+                    "afterCurrentSha256":sha256(&after),
+                    "beforePath":format!("upgrade-before-{transaction}.json"),
+                    "afterPath":edit_name,
+                    "beforeVersion":before_version,
+                    "afterVersion":doc.version,
+                }),
+            )?;
+        }
         store::write_json(&self.store.root, &directory.join("current.json"), &doc)?;
         Ok(doc)
     }
@@ -611,6 +839,39 @@ pub(crate) mod tests {
             {"start":0.6,"end":0.7,"text":"[S2] 다른 화자","speaker_id":2,"asr_chunk":1}
         ]);
         serde_json::to_vec(&raw).unwrap()
+    }
+    fn legacy_value(mut value: serde_json::Value, keep_speakers: bool) -> serde_json::Value {
+        value.as_object_mut().unwrap().remove("source");
+        if !keep_speakers {
+            value.as_object_mut().unwrap().remove("speakers");
+        }
+        for segment in value["segments"].as_array_mut().unwrap() {
+            segment.as_object_mut().unwrap().remove("sourceIndex");
+            if !keep_speakers {
+                segment.as_object_mut().unwrap().remove("speakerId");
+            }
+        }
+        value
+    }
+    fn make_legacy(engine: &Engine, id: &str, keep_speakers: bool) -> (PathBuf, Vec<u8>) {
+        let doc = engine.transcript(id).unwrap().unwrap();
+        let directory = engine
+            .store
+            .root
+            .join(transcript_dir(id, &doc.version.id).unwrap());
+        let initial: serde_json::Value = store::read_json(&directory.join("initial.json")).unwrap();
+        std::fs::write(
+            directory.join("initial.json"),
+            serde_json::to_vec_pretty(&legacy_value(initial, keep_speakers)).unwrap(),
+        )
+        .unwrap();
+        let before = serde_json::to_vec_pretty(&legacy_value(
+            serde_json::to_value(doc).unwrap(),
+            keep_speakers,
+        ))
+        .unwrap();
+        std::fs::write(directory.join("current.json"), &before).unwrap();
+        (directory, before)
     }
     #[test]
     fn import_preserves_source_and_reopens_playback() {
@@ -786,6 +1047,18 @@ pub(crate) mod tests {
     #[test]
     fn independent_asr_chunks_never_link_reused_model_labels_automatically() {
         let doc = MossOutput::decode(&chunk_output(), 1.0, "session", "transcript").unwrap();
+        assert_eq!(doc.source.as_ref().unwrap().association, "direct");
+        assert_eq!(
+            doc.source.as_ref().unwrap().raw_sha256,
+            sha256(&chunk_output())
+        );
+        assert_eq!(
+            doc.segments
+                .iter()
+                .map(|segment| segment.source_index)
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2), Some(3)]
+        );
         let ids: Vec<_> = doc
             .segments
             .iter()
@@ -865,18 +1138,11 @@ pub(crate) mod tests {
             .collect();
         texts[2] = "사용자가 고친 구간".into();
         let edited = engine.edit_transcript(&id, first.version, texts).unwrap();
-        let directory = engine
-            .store
-            .root
-            .join(transcript_dir(&id, &edited.version.id).unwrap());
+        let (directory, before) = make_legacy(&engine, &id, false);
         let current = directory.join("current.json");
-        let mut old = serde_json::to_value(&edited).unwrap();
-        old.as_object_mut().unwrap().remove("speakers");
-        for segment in old["segments"].as_array_mut().unwrap() {
-            segment.as_object_mut().unwrap().remove("speakerId");
-        }
-        let before = serde_json::to_vec(&old).unwrap();
-        std::fs::write(&current, &before).unwrap();
+        assert!(engine.transcript(&id).unwrap().unwrap().speakers.is_empty());
+        assert_eq!(std::fs::read(&current).unwrap(), before);
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().upgraded, 1);
         let recovered = engine.transcript(&id).unwrap().unwrap();
         assert_ne!(
             recovered.segments[0].speaker_id,
@@ -884,8 +1150,8 @@ pub(crate) mod tests {
         );
         assert_eq!(recovered.segments[2].text, "사용자가 고친 구간");
         assert_eq!(recovered.segments[2].original_text, "다음 구간");
-        assert_eq!(recovered.version, edited.version);
-        assert_eq!(std::fs::read(&current).unwrap(), before);
+        assert_eq!(recovered.version.revision, edited.version.revision + 1);
+        assert_eq!(recovered.version.id, edited.version.id);
         let merged = engine
             .edit_speakers(
                 &id,
@@ -1153,7 +1419,7 @@ pub(crate) mod tests {
             .is_err());
     }
     #[test]
-    fn old_document_recovers_speakers_from_raw_without_writing_or_losing_user_edits() {
+    fn old_document_is_only_upgraded_explicitly_and_preserves_user_edits() {
         let (_temp, mut engine, id, _) = setup();
         let raw = output();
         let first = engine.commit_transcript(&id, None, raw.clone()).unwrap();
@@ -1161,26 +1427,59 @@ pub(crate) mod tests {
             .edit_transcript(&id, first.version, vec!["사용자 수정".into()])
             .unwrap();
         let root = engine.store.root.clone();
-        let directory = root.join(transcript_dir(&id, &edited.version.id).unwrap());
+        let (directory, before) = make_legacy(&engine, &id, false);
         let current = directory.join("current.json");
-        let mut old = serde_json::to_value(&edited).unwrap();
-        old.as_object_mut().unwrap().remove("speakers");
-        for segment in old["segments"].as_array_mut().unwrap() {
-            segment.as_object_mut().unwrap().remove("speakerId");
-        }
-        let before = serde_json::to_vec(&old).unwrap();
-        std::fs::write(&current, &before).unwrap();
+        let initial_before = std::fs::read(directory.join("initial.json")).unwrap();
         drop(engine);
         let mut engine = Engine::open(root.clone()).unwrap();
+        assert!(engine.transcript(&id).unwrap().unwrap().speakers.is_empty());
+        assert_eq!(std::fs::read(&current).unwrap(), before);
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().upgraded, 1);
         let recovered = engine.transcript(&id).unwrap().unwrap();
-        assert_eq!(recovered.version, edited.version);
+        assert_eq!(recovered.version.id, edited.version.id);
+        assert_eq!(recovered.version.revision, edited.version.revision + 1);
         assert_eq!(recovered.segments[0].id, edited.segments[0].id);
         assert_eq!(recovered.segments[0].text, "사용자 수정");
         assert_eq!(recovered.segments[0].original_text, "원문");
         assert_eq!(recovered.segments[0].speaker_id.as_deref(), Some("S1"));
         assert_eq!(recovered.speakers[0].name, "화자 1");
-        assert_eq!(std::fs::read(&current).unwrap(), before);
+        assert_eq!(
+            std::fs::read(directory.join("initial.json")).unwrap(),
+            initial_before
+        );
         assert_eq!(std::fs::read(directory.join("raw.json")).unwrap(), raw);
+        let receipt_path = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("upgrade-receipt-")
+            })
+            .unwrap();
+        let receipt: serde_json::Value = store::read_json(&receipt_path).unwrap();
+        assert_eq!(receipt["status"], "prepared");
+        assert_eq!(receipt["timebase"], 16000);
+        assert_eq!(receipt["ruleVersion"], LEGACY_ASSOCIATION);
+        assert_eq!(receipt["beforeCurrentSha256"], sha256(&before));
+        assert_eq!(
+            receipt["afterCurrentSha256"],
+            sha256(&std::fs::read(&current).unwrap())
+        );
+        assert_eq!(receipt["rawSha256"], sha256(&raw));
+        assert_eq!(receipt["initialSha256"], sha256(&initial_before));
+        assert_eq!(
+            std::fs::read(directory.join(receipt["beforePath"].as_str().unwrap())).unwrap(),
+            before
+        );
+        let current_bytes = std::fs::read(&current).unwrap();
+        let count = std::fs::read_dir(&directory).unwrap().count();
+        let repeated = engine.upgrade_transcript_sources().unwrap();
+        assert_eq!(repeated.upgraded, 0);
+        assert_eq!(repeated.unchanged, 1);
+        assert_eq!(std::fs::read(&current).unwrap(), current_bytes);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), count);
         let cleared = engine
             .edit_speakers(&id, recovered.version, vec![], vec![None])
             .unwrap();
@@ -1194,27 +1493,18 @@ pub(crate) mod tests {
     #[test]
     fn old_document_without_usable_raw_remains_readable_without_invented_speakers() {
         let (_temp, mut engine, id, _) = setup();
-        let doc = engine.commit_transcript(&id, None, output()).unwrap();
-        let directory = engine
-            .store
-            .root
-            .join(transcript_dir(&id, &doc.version.id).unwrap());
-        let mut old = serde_json::to_value(&doc).unwrap();
-        old.as_object_mut().unwrap().remove("speakers");
-        old["segments"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("speakerId");
-        std::fs::write(
-            directory.join("current.json"),
-            serde_json::to_vec(&old).unwrap(),
-        )
-        .unwrap();
+        engine.commit_transcript(&id, None, output()).unwrap();
+        let (directory, before) = make_legacy(&engine, &id, false);
         std::fs::write(directory.join("raw.json"), b"unreadable").unwrap();
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().unavailable, 1);
         let recovered = engine.transcript(&id).unwrap().unwrap();
         assert_eq!(recovered.segments[0].text, "원문");
         assert!(recovered.speakers.is_empty());
         assert!(recovered.segments[0].speaker_id.is_none());
+        assert_eq!(
+            std::fs::read(directory.join("current.json")).unwrap(),
+            before
+        );
         let mut mismatch: serde_json::Value = serde_json::from_slice(&output()).unwrap();
         mismatch["segments"][0]["text"] = "다른 원문".into();
         std::fs::write(
@@ -1222,6 +1512,244 @@ pub(crate) mod tests {
             serde_json::to_vec(&mismatch).unwrap(),
         )
         .unwrap();
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().unavailable, 1);
         assert!(engine.transcript(&id).unwrap().unwrap().speakers.is_empty());
+    }
+    #[test]
+    fn legacy_upgrade_uses_16khz_addresses_and_preserves_the_saved_times() {
+        let (_temp, mut engine, id, _) = setup();
+        let mut raw: serde_json::Value = serde_json::from_slice(&output()).unwrap();
+        raw["segments"][0]["start"] = serde_json::json!(0.5799999999999998);
+        raw["segments"][0]["end"] = serde_json::json!(0.8);
+        engine
+            .commit_transcript(&id, None, serde_json::to_vec(&raw).unwrap())
+            .unwrap();
+        let (directory, _) = make_legacy(&engine, &id, false);
+        let mut initial: serde_json::Value =
+            store::read_json(&directory.join("initial.json")).unwrap();
+        initial["segments"][0]["end"] = serde_json::json!(0.7999999999999999);
+        initial["modelRevision"] = "historical-revision".into();
+        std::fs::write(
+            directory.join("initial.json"),
+            serde_json::to_vec(&initial).unwrap(),
+        )
+        .unwrap();
+        let mut current: serde_json::Value =
+            store::read_json(&directory.join("current.json")).unwrap();
+        current["segments"][0]["start"] = serde_json::json!(0.58);
+        current["modelRevision"] = "historical-revision".into();
+        std::fs::write(
+            directory.join("current.json"),
+            serde_json::to_vec(&current).unwrap(),
+        )
+        .unwrap();
+        let before = engine.transcript(&id).unwrap().unwrap();
+        assert_ne!(0.5799999999999998_f64, before.segments[0].start);
+        assert_eq!(
+            source_position(15.199999999999998, u64::MAX),
+            source_position(15.2, u64::MAX)
+        );
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().upgraded, 1);
+        let after = engine.transcript(&id).unwrap().unwrap();
+        assert_eq!(
+            after.segments[0].start.to_bits(),
+            before.segments[0].start.to_bits()
+        );
+        assert_eq!(
+            after.segments[0].end.to_bits(),
+            before.segments[0].end.to_bits()
+        );
+        assert_eq!(after.segments[0].id, before.segments[0].id);
+        assert_eq!(after.model_revision, "historical-revision");
+        assert_eq!(
+            after.source.as_ref().unwrap().association,
+            LEGACY_ASSOCIATION
+        );
+        assert_eq!(after.segments[0].speaker_id.as_deref(), Some("S1"));
+        assert_eq!(source_position(f64::NAN, 16000), None);
+        assert_eq!(source_position(f64::INFINITY, 16000), None);
+        assert_eq!(source_position(-0.1, 16000), None);
+        assert_eq!(source_position(1.001, 16000), None);
+    }
+    #[test]
+    fn changed_sample_addresses_or_identity_anchors_fail_without_writes() {
+        for case in [
+            "current-sample",
+            "initial-sample",
+            "raw-sample",
+            "current-id",
+            "current-order",
+            "current-original",
+            "raw-text",
+            "initial-model",
+            "missing-initial",
+            "current-outside",
+        ] {
+            let (_temp, mut engine, id, _) = setup();
+            engine.commit_transcript(&id, None, chunk_output()).unwrap();
+            let (directory, _) = make_legacy(&engine, &id, false);
+            let mut current: serde_json::Value =
+                store::read_json(&directory.join("current.json")).unwrap();
+            let mut initial: serde_json::Value =
+                store::read_json(&directory.join("initial.json")).unwrap();
+            let mut raw: serde_json::Value = store::read_json(&directory.join("raw.json")).unwrap();
+            match case {
+                "current-sample" => {
+                    current["segments"][0]["start"] = serde_json::json!(1.0 / 16000.0)
+                }
+                "initial-sample" => initial["segments"][0]["start"] = serde_json::json!(0.001),
+                "raw-sample" => raw["segments"][0]["start"] = serde_json::json!(0.001),
+                "current-id" => current["segments"][0]["id"] = Uuid::new_v4().to_string().into(),
+                "current-order" => current["segments"].as_array_mut().unwrap().swap(0, 1),
+                "current-original" => current["segments"][0]["originalText"] = "다른 원문".into(),
+                "raw-text" => raw["segments"][0]["text"] = "[S1] 다른 원문".into(),
+                "initial-model" => initial["modelRevision"] = "다른 실행".into(),
+                "current-outside" => current["segments"][0]["end"] = serde_json::json!(2.0),
+                _ => (),
+            }
+            std::fs::write(
+                directory.join("current.json"),
+                serde_json::to_vec(&current).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join("initial.json"),
+                serde_json::to_vec(&initial).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                directory.join("raw.json"),
+                serde_json::to_vec(&raw).unwrap(),
+            )
+            .unwrap();
+            if case == "missing-initial" {
+                std::fs::rename(
+                    directory.join("initial.json"),
+                    directory.join("held-initial.json"),
+                )
+                .unwrap();
+            }
+            let files = || {
+                let mut entries: Vec<_> = std::fs::read_dir(&directory)
+                    .unwrap()
+                    .map(|entry| {
+                        let path = entry.unwrap().path();
+                        let bytes = std::fs::read(&path).unwrap();
+                        (path, bytes)
+                    })
+                    .collect();
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                entries
+            };
+            let before = files();
+            let report = engine.upgrade_transcript_sources().unwrap();
+            assert_eq!(report.upgraded, 0, "{case}");
+            assert_eq!(report.unavailable, 1, "{case}");
+            assert_eq!(files(), before, "{case}");
+            assert!(
+                engine.transcript(&id).unwrap().unwrap().source.is_none(),
+                "{case}"
+            );
+        }
+    }
+    #[test]
+    fn explicit_unknown_speakers_survive_upgrade_and_the_prior_summary_is_retained_as_stale() {
+        let (_temp, mut engine, id, _) = setup();
+        let first = engine.commit_transcript(&id, None, output()).unwrap();
+        engine
+            .edit_speakers(&id, first.version, vec![], vec![None])
+            .unwrap();
+        let (directory, _) = make_legacy(&engine, &id, true);
+        let before = engine.transcript(&id).unwrap().unwrap();
+        let minutes = engine
+            .commit_summary(
+                &id,
+                crate::SummaryDraft {
+                    source: before.clone(),
+                    expected_id: None,
+                    text: "기존 회의록".into(),
+                    provenance: crate::SummaryProvenance {
+                        model: "test".into(),
+                        model_revision: "1".into(),
+                        model_sha256: "a".repeat(64),
+                        runtime: "test".into(),
+                        prompt_version: "test".into(),
+                        template: "minutes".into(),
+                    },
+                    receipt: serde_json::json!({"finish_reason":"stop"}),
+                },
+            )
+            .unwrap();
+        assert!(!engine.summary(&id).unwrap().unwrap().stale);
+        let raw = std::fs::read(directory.join("raw.json")).unwrap();
+        assert_eq!(engine.upgrade_transcript_sources().unwrap().upgraded, 1);
+        let after = engine.transcript(&id).unwrap().unwrap();
+        assert!(after.speakers.is_empty());
+        assert!(after.segments[0].speaker_id.is_none());
+        assert_eq!(after.segments[0].source_index, Some(0));
+        assert_eq!(after.segments[0].text, before.segments[0].text);
+        assert_eq!(
+            after.segments[0].original_text,
+            before.segments[0].original_text
+        );
+        assert_eq!(std::fs::read(directory.join("raw.json")).unwrap(), raw);
+        let saved = engine.summary(&id).unwrap().unwrap();
+        assert!(saved.stale);
+        assert_eq!(saved.document.id, minutes.id);
+        assert_eq!(saved.document.text, "기존 회의록");
+    }
+    #[test]
+    fn one_unavailable_legacy_document_does_not_block_other_documents_or_direct_results() {
+        let (_temp, mut engine, id, wav) = setup();
+        engine.commit_transcript(&id, None, output()).unwrap();
+        make_legacy(&engine, &id, false);
+        let missing = engine
+            .import_audio("다른 회의".into(), wav.clone(), wav.clone())
+            .unwrap();
+        engine
+            .commit_transcript(&missing.id, None, output())
+            .unwrap();
+        let (missing_directory, before) = make_legacy(&engine, &missing.id, false);
+        std::fs::rename(
+            missing_directory.join("raw.json"),
+            missing_directory.join("held-raw.json"),
+        )
+        .unwrap();
+        let direct = engine
+            .import_audio("새 회의".into(), wav.clone(), wav)
+            .unwrap();
+        engine
+            .commit_transcript(&direct.id, None, output())
+            .unwrap();
+        let report = engine.upgrade_transcript_sources().unwrap();
+        assert_eq!(
+            report,
+            TranscriptUpgradeReport {
+                upgraded: 1,
+                unchanged: 1,
+                unavailable: 1
+            }
+        );
+        assert!(engine.transcript(&id).unwrap().unwrap().source.is_some());
+        assert!(engine
+            .transcript(&missing.id)
+            .unwrap()
+            .unwrap()
+            .source
+            .is_none());
+        assert_eq!(
+            std::fs::read(missing_directory.join("current.json")).unwrap(),
+            before
+        );
+        assert_eq!(
+            engine
+                .transcript(&direct.id)
+                .unwrap()
+                .unwrap()
+                .source
+                .unwrap()
+                .association,
+            "direct"
+        );
     }
 }
