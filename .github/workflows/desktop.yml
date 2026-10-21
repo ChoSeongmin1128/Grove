@@ -15,6 +15,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/grove-core/**'
+      - 'crates/nero-cli/**'
       - 'apps/desktop/**'
       - 'design-system/**'
       - 'scripts/native-summary/**'
@@ -82,6 +83,11 @@ jobs:
         run: npm run build
       - name: Test recording core with synthetic input
         run: cargo test -p grove-core --locked -- --test-threads=1
+      - name: Test read-only CLI and MCP
+        run: cargo test -p nero-cli --locked -- --test-threads=1
+      - name: Bundle read-only agent
+        working-directory: apps/desktop
+        run: npm run prepare:agent
       - name: Bundle pinned summary runtime
         run: |
           if [ "$RUNNER_OS" = Windows ]; then

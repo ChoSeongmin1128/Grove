@@ -9,7 +9,8 @@ import { mountMeetingDetail } from './meeting-detail-ui.js';
 
 applySystemAppearance();
 const byId = (id) => document.getElementById(id);
-const settingsPanels = ['appearance', 'recording', 'models'];
+const settingsPanels = ['appearance', 'recording', 'models', 'agent'];
+const agentConnection = { info: null, loading: false, error: '', request: 0 };
 const microphonePreferenceKey = 'nero.recording.microphone.v1';
 const recorderPreferenceKey = 'nero.recording.autoRecorder.v1';
 function readAutoRecorder() { try { return globalThis.localStorage?.getItem(recorderPreferenceKey) !== 'false'; } catch { return true; } }
@@ -361,9 +362,75 @@ function microphoneIssue() {
   return '';
 }
 
+function renderAgentConnection() {
+  const { info, loading, error } = agentConnection;
+  const available = Boolean(info?.available && info.executablePath && info.config);
+  const message = error || (loading || !info ? '확인 중' : !available ? '연결 도구가 포함되지 않은 빌드입니다.' : '');
+  byId('settings-agent-status').textContent = message;
+  byId('settings-agent-status').hidden = !message;
+  byId('settings-agent-details').hidden = !available;
+  byId('settings-agent-path').textContent = available ? info.executablePath : '';
+  byId('settings-agent-cli').textContent = available ? info.cliExample || '' : '';
+  byId('settings-agent-copy-config').disabled = !available;
+  byId('settings-agent-copy-cli').disabled = !available || !info.cliExample;
+}
+
+async function loadAgentConnection() {
+  if (!byId('settings-dialog').open || state.settingsPanel !== 'agent' || agentConnection.loading || agentConnection.info) return;
+  const request = ++agentConnection.request;
+  agentConnection.loading = true;
+  agentConnection.error = '';
+  renderAgentConnection();
+  try {
+    const info = await bridge.agentConnectionInfo();
+    if (request !== agentConnection.request) return;
+    agentConnection.info = info;
+  } catch {
+    if (request !== agentConnection.request) return;
+    agentConnection.error = '연결 설정을 불러오지 못했습니다. 탭을 다시 열어 주세요.';
+  } finally {
+    if (request === agentConnection.request) {
+      agentConnection.loading = false;
+      renderAgentConnection();
+    }
+  }
+}
+
+function resetAgentConnection() {
+  agentConnection.request += 1;
+  agentConnection.info = null;
+  agentConnection.loading = false;
+  agentConnection.error = '';
+  clearTimeout(copyFeedbackTimers.get('agent'));
+  copyFeedbackTimers.delete('agent');
+  byId('settings-agent-feedback').textContent = '';
+  byId('settings-agent-feedback').hidden = true;
+}
+
+async function copyAgentConnection(kind) {
+  const info = agentConnection.info;
+  if (!byId('settings-dialog').open || state.settingsPanel !== 'agent' || !info?.available || !info.executablePath || !info.config) return;
+  const text = kind === 'config' ? JSON.stringify(info.config, null, 2) : info.cliExample;
+  if (!text) return;
+  const request = agentConnection.request;
+  const feedback = byId('settings-agent-feedback');
+  try {
+    await navigator.clipboard.writeText(text);
+    if (request !== agentConnection.request) return;
+    feedback.textContent = '복사됨';
+  } catch {
+    if (request !== agentConnection.request) return;
+    feedback.textContent = '복사하지 못했습니다. 다시 시도해 주세요.';
+  }
+  feedback.hidden = false;
+  clearTimeout(copyFeedbackTimers.get('agent'));
+  copyFeedbackTimers.set('agent', setTimeout(() => { feedback.textContent = ''; feedback.hidden = true; copyFeedbackTimers.delete('agent'); }, 1500));
+}
+
 function renderSettings() {
   const dialog = byId('settings-dialog');
   const recording = state.settingsPanel === 'recording';
+  renderAgentConnection();
   for (const name of settingsPanels) {
     const selected = state.settingsPanel === name;
     byId(`settings-${name}-tab`).setAttribute('aria-selected', String(selected));
@@ -407,6 +474,7 @@ async function openSettings(panel = 'appearance', returnId = 'settings') {
     renderSettings();
     globalThis.GroveControls.refresh?.();
     byId(`settings-${panel}-tab`).focus({ preventScroll: true });
+    void loadAgentConnection();
   });
   try { await refreshDevices(); } catch { state.settingsError = '마이크 목록을 불러오지 못했습니다. 다시 시도해 주세요.'; renderSettings(); }
 }
@@ -496,16 +564,17 @@ byId('welcome-create').addEventListener('click', () => run(createMeeting));
 byId('setup-start').addEventListener('click', () => run(createMeeting));
 byId('settings').addEventListener('click', () => openSettings().catch(showError));
 byId('settings-close').addEventListener('click', () => { globalThis.GroveControls.close?.(); byId('settings-dialog').close(); });
-byId('settings-dialog').addEventListener('close', () => { globalThis.GroveControls.close?.(); (byId(state.settingsReturnId) || byId('settings')).focus({ preventScroll: true }); });
-for (const name of settingsPanels) byId(`settings-${name}-tab`).addEventListener('click', () => { globalThis.GroveControls.close?.(); state.settingsPanel = name; renderSettings(); });
+byId('settings-dialog').addEventListener('close', () => { resetAgentConnection(); globalThis.GroveControls.close?.(); (byId(state.settingsReturnId) || byId('settings')).focus({ preventScroll: true }); });
+for (const name of settingsPanels) byId(`settings-${name}-tab`).addEventListener('click', () => { globalThis.GroveControls.close?.(); state.settingsPanel = name; renderSettings(); void loadAgentConnection(); });
 byId('settings-dialog').addEventListener('keydown', event => {
   const index = settingsPanels.findIndex(name => `settings-${name}-tab` === event.target.id);
   if (index < 0 || !['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   const step = ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1;
   state.settingsPanel = settingsPanels[event.key === 'Home' ? 0 : event.key === 'End' ? settingsPanels.length - 1 : (index + step + settingsPanels.length) % settingsPanels.length];
-  renderSettings(); byId(`settings-${state.settingsPanel}-tab`).focus();
+  renderSettings(); byId(`settings-${state.settingsPanel}-tab`).focus(); void loadAgentConnection();
 });
+for (const kind of ['config', 'cli']) byId(`settings-agent-copy-${kind}`).addEventListener('click', () => copyAgentConnection(kind));
 byId('settings-microphone').addEventListener('change', changeMicrophone);
 byId('settings-refresh-devices').addEventListener('click', async () => { state.settingsError = ''; try { await refreshDevices(); } catch { state.settingsError = '마이크 목록을 불러오지 못했습니다. 다시 시도해 주세요.'; renderSettings(); } });
 byId('models').addEventListener('click', () => run(async () => { globalThis.GroveControls.close?.(); byId('settings-dialog').close(); await openSetup(true); }));

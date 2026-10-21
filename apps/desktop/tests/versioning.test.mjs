@@ -9,6 +9,7 @@ const tracked = [
   'apps/desktop/package.json', 'apps/desktop/package-lock.json',
   'apps/desktop/src-tauri/tauri.conf.json', 'apps/desktop/src-tauri/Cargo.toml',
   'crates/grove-core/Cargo.toml', 'Cargo.lock',
+  'crates/nero-cli/Cargo.toml',
 ];
 
 async function fixture() {
@@ -23,7 +24,8 @@ async function fixture() {
     json({ version: '0.0.1', identifier: 'stable-app-id', bundle: { macOS: { bundleVersion: '1' } } }),
     '[package]\nname = "grove-desktop"\nversion = "0.0.1"\n\n[dependencies]\nexample = "0.1.0"\n',
     '[package]\nname = "grove-core"\nversion = "0.0.1"\n\n[dependencies]\nexample = "0.1.0"\n',
-    'version = 4\n\n[[package]]\nname = "example"\nversion = "0.1.0"\nsource = "registry+example"\n\n[[package]]\nname = "grove-desktop"\nversion = "0.0.1"\ndependencies = ["example"]\n\n[[package]]\nname = "grove-core"\nversion = "0.0.1"\n',
+    'version = 4\n\n[[package]]\nname = "example"\nversion = "0.1.0"\nsource = "registry+example"\n\n[[package]]\nname = "grove-desktop"\nversion = "0.0.1"\ndependencies = ["example"]\n\n[[package]]\nname = "grove-core"\nversion = "0.0.1"\n\n[[package]]\nname = "nero-cli"\nversion = "0.0.1"\n',
+    '[package]\nname = "nero-cli"\nversion = "0.0.1"\n\n[dependencies]\nexample = "0.1.0"\n',
   ];
   for (let index = 0; index < tracked.length; index++) {
     const target = path.join(root, tracked[index]);
@@ -50,6 +52,8 @@ test('version CLI checks every product mirror and synchronizes release version w
   assert.equal(JSON.parse(files[2]).bundle.macOS.bundleVersion, '2');
   assert.match(files[3], /example = "0\.1\.0"/);
   assert.match(files[5], /name = "example"\nversion = "0\.1\.0"/);
+  assert.match(files[5], /name = "nero-cli"\nversion = "0\.0\.2"/);
+  assert.match(files[6], /version = "0\.0\.2"/);
 });
 
 test('version CLI allows rebuilds but rejects malformed versions, rollback and reused build numbers before writing', async () => {

@@ -1,6 +1,7 @@
 mod capture;
 mod engine;
 mod library;
+pub mod reader;
 mod store;
 mod summary;
 mod transcript;
@@ -35,6 +36,8 @@ pub enum CoreError {
     Audio(String),
     #[error("저장할 수 없습니다: {0}")]
     Storage(String),
+    #[error(transparent)]
+    Reader(#[from] reader::ReadError),
     #[error("이미 이 저장소를 사용하는 Nero가 있습니다.")]
     StoreBusy,
     #[error("Nero가 종료되어 요청을 처리할 수 없습니다.")]

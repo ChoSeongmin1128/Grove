@@ -49,7 +49,7 @@
           </div>
         </section>
         <section id="library-screen" class="library-screen" aria-labelledby="library-title" hidden>
-          <header class="library-screen-header"><div><h1 id="library-title" tabindex="-1">전체 회의</h1><span id="library-count" class="type-caption muted"></span></div><button id="library-select-toggle" type="button" class="quiet small">선택</button></header>
+          <header class="library-screen-header"><div><h1 id="library-title" tabindex="-1">전체 회의</h1><span id="library-count" class="type-caption muted"></span></div><div class="row"><button id="library-empty-trash" type="button" class="small danger-text" hidden>휴지통 비우기</button><button id="library-select-toggle" type="button" class="quiet small">선택</button></div></header>
           <div id="library-batch" class="library-batch" hidden><span id="library-selected-count"></span><button id="library-select-all" type="button" class="quiet small">전체 선택</button><button id="library-move" type="button" class="small">이동</button><button id="library-trash" type="button" class="small danger-text">휴지통으로 이동</button><button id="library-restore" type="button" class="small" hidden>복원</button><button id="library-purge" type="button" class="small danger-text" hidden>영구 삭제</button><button id="library-selection-clear" type="button" class="quiet small">선택 해제</button></div>
           <p id="library-search-status" class="muted type-caption" role="status" hidden></p>
           <nav id="meeting-list" class="meeting-list" aria-label="저장한 회의"></nav><span id="meeting-count" class="sr-only"></span>
@@ -110,6 +110,7 @@
           <button id="settings-appearance-tab" type="button" role="tab" aria-selected="true" aria-controls="settings-appearance-panel">화면</button>
           <button id="settings-recording-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-recording-panel" tabindex="-1">녹음</button>
           <button id="settings-models-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-models-panel" tabindex="-1">모델</button>
+          <button id="settings-agent-tab" type="button" role="tab" aria-selected="false" aria-controls="settings-agent-panel" tabindex="-1">에이전트 연동</button>
         </nav>
         <div class="app-settings-content">
           <section id="settings-recording-panel" role="tabpanel" aria-labelledby="settings-recording-tab" hidden>
@@ -162,6 +163,20 @@
           <section id="settings-models-panel" role="tabpanel" aria-labelledby="settings-models-tab" hidden>
             <dl class="settings-model-status"><div><dt>음성 인식</dt><dd id="settings-speech-state"></dd></div><div><dt>회의 요약</dt><dd id="settings-summary-state"></dd></div></dl>
             <div class="settings-model-actions"><button id="models" type="button" class="small">모델 관리</button></div>
+          </section>
+          <section id="settings-agent-panel" role="tabpanel" aria-labelledby="settings-agent-tab" hidden>
+            <p class="app-settings-label">읽기 전용</p>
+            <p class="settings-agent-description">회의 목록, 검색, 음성 기록, 요약 조회</p>
+            <p class="settings-agent-description">사용할 앱의 MCP 설정에 추가하세요.</p>
+            <p id="settings-agent-status" class="notice" role="status">확인 중</p>
+            <div id="settings-agent-details" hidden>
+              <dl class="settings-agent-details"><dt>실행 파일</dt><dd id="settings-agent-path"></dd></dl>
+              <button id="settings-agent-copy-config" type="button" class="small" disabled>연결 설정 복사</button>
+              <p id="settings-agent-cli-label" class="app-settings-label settings-agent-cli-label">CLI 실행 예시</p>
+              <pre id="settings-agent-cli" class="settings-agent-code" aria-labelledby="settings-agent-cli-label"></pre>
+              <button id="settings-agent-copy-cli" type="button" class="small" disabled>실행 예시 복사</button>
+            </div>
+            <p id="settings-agent-feedback" class="notice app-settings-message" role="status" hidden></p>
           </section>
           <p id="settings-message" class="notice app-settings-message" role="status" hidden></p>
         </div>

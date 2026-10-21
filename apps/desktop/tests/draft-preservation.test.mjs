@@ -697,10 +697,12 @@ test('settings category keyboard navigation includes appearance and leaves editi
   navigate('settings-recording-tab', 'ArrowDown');
   assert.equal(page.app.state.settingsPanel, 'models');
   navigate('settings-models-tab', 'ArrowDown');
+  assert.equal(page.app.state.settingsPanel, 'agent');
+  navigate('settings-agent-tab', 'ArrowDown');
   assert.equal(page.app.state.settingsPanel, 'appearance');
   navigate('settings-appearance-tab', 'End');
-  assert.equal(page.app.state.settingsPanel, 'models');
-  navigate('settings-models-tab', 'Home');
+  assert.equal(page.app.state.settingsPanel, 'agent');
+  navigate('settings-agent-tab', 'Home');
   assert.equal(page.app.state.settingsPanel, 'appearance');
   assert.equal(page.updates.length, 0);
 });

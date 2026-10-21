@@ -1,0 +1,1311 @@
+use crate::library::Library;
+use crate::store::{self, StoredMeeting};
+use crate::{CoreError, Meeting, Result, Summary, Transcript};
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+
+const API_VERSION: u32 = 1;
+const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TEXT_CHUNK_BYTES: usize = 4096;
+const MAX_ATTEMPTS: usize = 3;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error("조회 응답이 1MiB를 넘습니다. limit 또는 음성 구간을 줄여 다시 조회해 주세요.")]
+    ResponseTooLarge,
+    #[error("조회 중 저장 정보가 변경되었습니다. 잠시 후 다시 조회해 주세요.")]
+    SnapshotChanged,
+    #[error("저장 정보의 JSON이 손상되었거나 필드/연결이 누락되었거나 올바르지 않습니다.")]
+    InvalidDocument,
+    #[error("지원하지 않는 저장 형식입니다. Nero 앱과 CLI 업데이트가 필요합니다.")]
+    UnsupportedFormat,
+    #[error("저장 정보가 읽기 한도 16MiB를 넘습니다.")]
+    DocumentTooLarge,
+    #[error("저장소 경로는 연결되지 않은 일반 폴더여야 합니다.")]
+    UnsafePath,
+}
+
+pub struct LibraryReader {
+    root: PathBuf,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Params {
+    meeting_id: Option<String>,
+    query: Option<String>,
+    folder_id: Option<String>,
+    from: Option<u64>,
+    to: Option<u64>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    start: Option<f64>,
+    end: Option<f64>,
+}
+
+impl Params {
+    fn parse(method: &str, value: Value) -> Result<Self> {
+        let allowed: &[&str] = match method {
+            "meetings_list" => &["folderId", "from", "to", "offset", "limit"],
+            "meetings_search" => &["query", "folderId", "from", "to", "offset", "limit"],
+            "meeting_get" | "summary_get" => &["meetingId", "offset", "limit"],
+            "transcript_get" => &["meetingId", "start", "end", "offset", "limit"],
+            "folders_list" => &["offset", "limit"],
+            "status" => &[],
+            _ => {
+                return Err(CoreError::InvalidInput(
+                    "지원하지 않는 조회 명령입니다.".into(),
+                ))
+            }
+        };
+        let object = value.as_object().ok_or_else(|| {
+            CoreError::InvalidInput("조회 매개변수는 JSON 객체여야 합니다.".into())
+        })?;
+        if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+            return Err(CoreError::InvalidInput(
+                "이 조회에서 지원하지 않는 매개변수가 있습니다.".into(),
+            ));
+        }
+        let params: Self = serde_json::from_value(value).map_err(|_| {
+            CoreError::InvalidInput("조회 매개변수의 형식이 올바르지 않습니다.".into())
+        })?;
+        if params.limit.is_some_and(|limit| limit == 0 || limit > 200) {
+            return Err(CoreError::InvalidInput(
+                "limit은 1 이상 200 이하여야 합니다.".into(),
+            ));
+        }
+        if params
+            .from
+            .zip(params.to)
+            .is_some_and(|(from, to)| from >= to)
+        {
+            return Err(CoreError::InvalidInput(
+                "from은 to보다 작아야 합니다.".into(),
+            ));
+        }
+        for value in [params.start, params.end].into_iter().flatten() {
+            if !value.is_finite() || value < 0.0 {
+                return Err(CoreError::InvalidInput(
+                    "음성 구간은 0 이상의 유한한 초 단위 값이어야 합니다.".into(),
+                ));
+            }
+        }
+        if params
+            .start
+            .zip(params.end)
+            .is_some_and(|(start, end)| start >= end)
+        {
+            return Err(CoreError::InvalidInput(
+                "start는 end보다 작아야 합니다.".into(),
+            ));
+        }
+        if let Some(id) = &params.folder_id {
+            store::validate_id(id)?;
+        }
+        if matches!(method, "meeting_get" | "transcript_get" | "summary_get") {
+            store::validate_id(
+                params
+                    .meeting_id
+                    .as_deref()
+                    .ok_or_else(|| CoreError::InvalidInput("meetingId가 필요합니다.".into()))?,
+            )?;
+        }
+        if method == "meetings_search" {
+            let query = params.query.as_deref().unwrap_or_default();
+            if query.trim().is_empty() || query.len() > 4096 || query.contains('\0') {
+                return Err(CoreError::InvalidInput(
+                    "검색어는 비어 있지 않은 4096바이트 이하 문자열이어야 합니다.".into(),
+                ));
+            }
+        }
+        Ok(params)
+    }
+
+    fn page(&self, total: usize, unit: &str) -> Value {
+        let offset = self.offset.unwrap_or(0);
+        let limit = self.limit.unwrap_or(50);
+        json!({"offset": offset, "limit": limit, "total": total,
+            "hasMore": offset.saturating_add(limit) < total, "unit": unit})
+    }
+
+    fn select<T>(&self, values: impl IntoIterator<Item = T>) -> Vec<T> {
+        values
+            .into_iter()
+            .skip(self.offset.unwrap_or(0))
+            .take(self.limit.unwrap_or(50))
+            .collect()
+    }
+}
+
+impl LibraryReader {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+        let root = root.as_ref();
+        let root = if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(root)
+        };
+        validate_root(&root)?;
+        let root = if root.exists() {
+            root.canonicalize()?
+        } else {
+            root
+        };
+        Ok(Self { root })
+    }
+
+    pub fn query(&self, method: &str, params: Value) -> Result<Value> {
+        let params = Params::parse(method, params)?;
+        validate_root(&self.root)?;
+        if method == "status" {
+            return Ok(json!({"apiVersion": API_VERSION, "readOnly": true,
+                "rootExists": self.root.is_dir()}));
+        }
+        if !self.root.is_dir() {
+            return Err(CoreError::Storage(
+                "Nero 저장소가 없습니다. 앱에서 회의 기록을 먼저 저장해 주세요.".into(),
+            ));
+        }
+        for _ in 0..MAX_ATTEMPTS {
+            let mut transaction = Transaction::new(&self.root);
+            let result = transaction.query(method, &params);
+            if !transaction.verify()? {
+                continue;
+            }
+            let mut result = result?;
+            result["apiVersion"] = json!(API_VERSION);
+            result["sourceVersion"] = json!(transaction.version());
+            let bytes = serde_json::to_vec(&result)
+                .map_err(|_| CoreError::Storage("조회 응답을 만들 수 없습니다.".into()))?;
+            if bytes.len() > MAX_RESPONSE_BYTES {
+                return Err(ReadError::ResponseTooLarge.into());
+            }
+            return Ok(result);
+        }
+        Err(ReadError::SnapshotChanged.into())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum Observation {
+    File(Option<[u8; 32]>),
+    Directory(Vec<String>),
+    DirectoryPresence(bool),
+}
+
+struct Transaction<'a> {
+    root: &'a Path,
+    observations: BTreeMap<PathBuf, Observation>,
+}
+
+impl<'a> Transaction<'a> {
+    fn new(root: &'a Path) -> Self {
+        Self {
+            root,
+            observations: BTreeMap::new(),
+        }
+    }
+
+    fn document<T: DeserializeOwned>(
+        &mut self,
+        relative: &Path,
+        schema: bool,
+    ) -> Result<Option<T>> {
+        let content = read_content(self.root, relative)?;
+        self.observations.insert(
+            relative.to_path_buf(),
+            Observation::File(content.as_ref().map(|bytes| Sha256::digest(bytes).into())),
+        );
+        let Some(content) = content else {
+            return Ok(None);
+        };
+        let value: Value =
+            serde_json::from_slice(&content).map_err(|_| ReadError::InvalidDocument)?;
+        if schema {
+            match value.get("schemaVersion").and_then(Value::as_u64) {
+                Some(1) => (),
+                Some(_) => return Err(ReadError::UnsupportedFormat.into()),
+                None => return Err(ReadError::InvalidDocument.into()),
+            }
+        }
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|_| ReadError::InvalidDocument.into())
+    }
+
+    fn directory(&mut self, relative: &Path) -> Result<Vec<String>> {
+        let names = read_directory(self.root, relative)?;
+        self.observations.insert(
+            relative.to_path_buf(),
+            Observation::Directory(names.clone()),
+        );
+        Ok(names)
+    }
+
+    fn directory_presence(&mut self, relative: &Path) -> Result<bool> {
+        let present = read_directory_presence(self.root, relative)?;
+        self.observations.insert(
+            relative.to_path_buf(),
+            Observation::DirectoryPresence(present),
+        );
+        Ok(present)
+    }
+
+    fn verify(&self) -> Result<bool> {
+        for (relative, before) in &self.observations {
+            let after = match before {
+                Observation::File(_) => Observation::File(
+                    read_content(self.root, relative)?
+                        .as_ref()
+                        .map(|bytes| Sha256::digest(bytes).into()),
+                ),
+                Observation::Directory(_) => match read_directory(self.root, relative) {
+                    Ok(names) => Observation::Directory(names),
+                    Err(_) => return Ok(false),
+                },
+                Observation::DirectoryPresence(_) => {
+                    Observation::DirectoryPresence(read_directory_presence(self.root, relative)?)
+                }
+            };
+            if &after != before {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn version(&self) -> String {
+        let mut hash = Sha256::new();
+        for (path, observation) in &self.observations {
+            hash.update(path.to_string_lossy().as_bytes());
+            hash.update([0]);
+            match observation {
+                Observation::File(Some(digest)) => {
+                    hash.update([1]);
+                    hash.update(digest);
+                }
+                Observation::File(None) => hash.update([2]),
+                Observation::Directory(names) => {
+                    hash.update([3]);
+                    for name in names {
+                        hash.update(name.as_bytes());
+                        hash.update([0]);
+                    }
+                }
+                Observation::DirectoryPresence(present) => hash.update([4, u8::from(*present)]),
+            }
+        }
+        format!("sha256:{:x}", hash.finalize())
+    }
+
+    fn library(&mut self) -> Result<Library> {
+        let library: Library = self
+            .document(Path::new("library.json"), true)?
+            .unwrap_or_default();
+        library.validate().map_err(|_| ReadError::InvalidDocument)?;
+        Ok(library)
+    }
+
+    fn meeting(&mut self, id: &str, library: &Library) -> Result<Option<Meeting>> {
+        store::validate_id(id)?;
+        if library.pending_purges.contains(id)
+            || library
+                .placements
+                .get(id)
+                .is_some_and(|placement| placement.deleted_at.is_some())
+        {
+            return Ok(None);
+        }
+        let relative = Path::new("meetings").join(id).join("meeting.json");
+        let Some(mut stored): Option<StoredMeeting> = self.document(&relative, true)? else {
+            if self.directory_presence(&Path::new("meetings").join(id).join("sessions"))? {
+                return Err(ReadError::InvalidDocument.into());
+            }
+            return Ok(None);
+        };
+        if stored.meeting.id != id {
+            return Err(ReadError::InvalidDocument.into());
+        }
+        store::validate_text(&stored.meeting.title, &stored.meeting.notes)
+            .map_err(|_| ReadError::InvalidDocument)?;
+        if let Some(id) = &stored.meeting.transcript_id {
+            store::validate_id(id).map_err(|_| ReadError::InvalidDocument)?;
+        }
+        if let Some(audio) = &stored.meeting.audio {
+            store::validate_id(&audio.session_id).map_err(|_| ReadError::InvalidDocument)?;
+        }
+        library.project(&mut stored.meeting);
+        Ok((stored.meeting.deleted_at.is_none()).then_some(stored.meeting))
+    }
+
+    fn transcript(&mut self, meeting: &Meeting) -> Result<Option<Transcript>> {
+        let Some(id) = &meeting.transcript_id else {
+            return Ok(None);
+        };
+        let relative = Path::new("meetings")
+            .join(&meeting.id)
+            .join("transcripts")
+            .join(id)
+            .join("current.json");
+        let document: Transcript = self
+            .document(&relative, false)?
+            .ok_or(ReadError::InvalidDocument)?;
+        if &document.version.id != id
+            || meeting
+                .audio
+                .as_ref()
+                .map(|audio| audio.session_id.as_str())
+                != Some(document.source_session_id.as_str())
+        {
+            return Err(ReadError::InvalidDocument.into());
+        }
+        let mut ids = BTreeSet::new();
+        let mut speakers = BTreeSet::new();
+        for speaker in &document.speakers {
+            if speaker.id.is_empty() || !speakers.insert(&speaker.id) {
+                return Err(ReadError::InvalidDocument.into());
+            }
+        }
+        for segment in &document.segments {
+            if segment.id.is_empty()
+                || !ids.insert(&segment.id)
+                || !segment.start.is_finite()
+                || !segment.end.is_finite()
+                || segment.start < 0.0
+                || segment.end < segment.start
+                || segment
+                    .speaker_id
+                    .as_ref()
+                    .is_some_and(|id| !speakers.contains(id))
+            {
+                return Err(ReadError::InvalidDocument.into());
+            }
+        }
+        Ok(Some(document))
+    }
+
+    fn summary(
+        &mut self,
+        meeting: &Meeting,
+        transcript: Option<&Transcript>,
+    ) -> Result<Option<Value>> {
+        let relative = Path::new("meetings")
+            .join(&meeting.id)
+            .join("summaries/current.json");
+        let Some(summary): Option<Summary> = self.document(&relative, false)? else {
+            return Ok(None);
+        };
+        store::validate_id(&summary.id).map_err(|_| ReadError::InvalidDocument)?;
+        store::validate_id(&summary.source_version.id).map_err(|_| ReadError::InvalidDocument)?;
+        if summary.source_sha256.len() != 64
+            || !summary.source_sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(ReadError::InvalidDocument.into());
+        }
+        let stale = match transcript {
+            Some(transcript) => {
+                crate::summary::transcript_digest(transcript)? != summary.source_sha256
+                    || transcript.version != summary.source_version
+            }
+            None => true,
+        };
+        Ok(Some(
+            json!({"id":summary.id,"text":summary.text,"createdAt":summary.created_at,
+            "sourceVersion":summary.source_version,"stale":stale}),
+        ))
+    }
+
+    fn query(&mut self, method: &str, params: &Params) -> Result<Value> {
+        let library = self.library()?;
+        if method == "folders_list" {
+            let folders = library.folders();
+            return Ok(
+                json!({"pagination":params.page(folders.len(), "folders"),"folders":params.select(folders)}),
+            );
+        }
+        if matches!(method, "meetings_list" | "meetings_search") {
+            return self.list(method, params, &library);
+        }
+        let id = params.meeting_id.as_deref().unwrap();
+        let meeting = self
+            .meeting(id, &library)?
+            .ok_or(CoreError::MeetingNotFound)?;
+        let transcript = self.transcript(&meeting)?;
+        match method {
+            "meeting_get" => {
+                let mut value = meeting_value(&meeting, transcript.as_ref());
+                let (notes, page) = page_text_chunks(&meeting.notes, params);
+                value["notes"] = json!(notes);
+                Ok(json!({"meeting":value,"pagination":page}))
+            }
+            "transcript_get" => {
+                let segments = transcript.as_ref().map(|doc| {
+                    doc.segments.iter().filter(|segment| params.start.is_none_or(|start| segment.end > start)
+                        && params.end.is_none_or(|end| segment.start < end)).map(|segment| {
+                            let name = doc.speakers.iter().find(|speaker| Some(&speaker.id) == segment.speaker_id.as_ref()).map(|speaker| speaker.name.as_str());
+                            json!({"id":segment.id,"start":segment.start,"end":segment.end,
+                                "speakerId":segment.speaker_id,"speakerName":name,"text":segment.text})
+                        }).collect::<Vec<_>>()
+                }).unwrap_or_default();
+                Ok(
+                    json!({"meetingId":id,"version":transcript.as_ref().map(|doc| &doc.version),
+                    "speakers":transcript.as_ref().map(|doc| doc.speakers.clone()).unwrap_or_default(),
+                    "pagination":params.page(segments.len(), "segments"),"segments":params.select(segments)}),
+                )
+            }
+            "summary_get" => {
+                let mut summary = self.summary(&meeting, transcript.as_ref())?;
+                let (text, page) = page_text_chunks(
+                    summary
+                        .as_ref()
+                        .and_then(|value| value["text"].as_str())
+                        .unwrap_or_default(),
+                    params,
+                );
+                if let Some(summary) = &mut summary {
+                    summary["text"] = json!(text);
+                }
+                Ok(json!({"meetingId":id,"summary":summary,"pagination":page}))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn list(&mut self, method: &str, params: &Params, library: &Library) -> Result<Value> {
+        if params
+            .folder_id
+            .as_ref()
+            .is_some_and(|id| !library.folders.contains_key(id))
+        {
+            return Err(CoreError::InvalidInput("지정한 폴더가 없습니다.".into()));
+        }
+        let names = self.directory(Path::new("meetings"))?;
+        let query = params
+            .query
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let mut meetings = Vec::new();
+        for id in names {
+            let Some(meeting) = self.meeting(&id, library)? else {
+                continue;
+            };
+            let time = meeting.recorded_at.unwrap_or(meeting.created_at);
+            if params
+                .folder_id
+                .as_ref()
+                .is_some_and(|folder| meeting.folder_id.as_ref() != Some(folder))
+                || params.from.is_some_and(|from| time < from)
+                || params.to.is_some_and(|to| time >= to)
+            {
+                continue;
+            }
+            let transcript = self.transcript(&meeting)?;
+            let mut value = meeting_value(&meeting, transcript.as_ref());
+            if method == "meetings_search" {
+                let summary = self.summary(&meeting, transcript.as_ref())?;
+                let mut matches = Vec::new();
+                let mut matches_truncated = false;
+                for (field, text) in [
+                    ("title", meeting.title.as_str()),
+                    ("notes", meeting.notes.as_str()),
+                ] {
+                    if let Some(text) = excerpt(text, &query) {
+                        matches.push(json!({"field":field,"text":text}));
+                    }
+                }
+                if let Some(doc) = &transcript {
+                    for segment in &doc.segments {
+                        if let Some(text) = excerpt(&segment.text, &query) {
+                            if matches.len() == 20 {
+                                matches_truncated = true;
+                                break;
+                            }
+                            matches.push(json!({"field":"transcript","text":text,"segmentId":segment.id,"start":segment.start,"end":segment.end}));
+                        }
+                    }
+                }
+                if let Some(summary) = summary {
+                    if let Some(text) =
+                        excerpt(summary["text"].as_str().unwrap_or_default(), &query)
+                    {
+                        if matches.len() == 20 {
+                            matches_truncated = true;
+                        } else {
+                            matches.push(json!({"field":"summary","text":text,"stale":summary["stale"],"sourceVersion":summary["sourceVersion"]}));
+                        }
+                    }
+                }
+                if matches.is_empty() {
+                    continue;
+                }
+                value["matches"] = json!(matches);
+                value["matchesTruncated"] = json!(matches_truncated);
+            }
+            meetings.push(value);
+        }
+        let timestamp = |meeting: &Value| {
+            meeting["recordedAt"]
+                .as_u64()
+                .or_else(|| meeting["createdAt"].as_u64())
+        };
+        meetings.sort_by(|a, b| {
+            timestamp(b)
+                .cmp(&timestamp(a))
+                .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
+        });
+        Ok(
+            json!({"pagination":params.page(meetings.len(),"meetings"),"meetings":params.select(meetings)}),
+        )
+    }
+}
+
+fn meeting_value(meeting: &Meeting, transcript: Option<&Transcript>) -> Value {
+    json!({"id":meeting.id,"title":meeting.title,"createdAt":meeting.created_at,"updatedAt":meeting.updated_at,
+        "meetingDate":meeting.meeting_date,"recordedAt":meeting.recorded_at,"status":meeting.status,"folderId":meeting.folder_id,
+        "transcriptVersion":transcript.map(|doc| &doc.version)})
+}
+
+fn page_text_chunks(text: &str, params: &Params) -> (String, Value) {
+    let mut chunks = Vec::new();
+    for mut line in text.split_inclusive('\n') {
+        while !line.is_empty() {
+            let mut end = line.len().min(MAX_TEXT_CHUNK_BYTES);
+            while !line.is_char_boundary(end) {
+                end -= 1;
+            }
+            chunks.push(&line[..end]);
+            line = &line[end..];
+        }
+    }
+    let page = params.page(chunks.len(), "textChunks");
+    (params.select(chunks).concat(), page)
+}
+
+fn excerpt(text: &str, query: &str) -> Option<String> {
+    text.to_lowercase().find(query)?;
+    let chars: Vec<_> = text.chars().collect();
+    let mut folded_bytes = 0;
+    let offset = text.to_lowercase().find(query)?;
+    let start = chars
+        .iter()
+        .position(|c| {
+            folded_bytes += c.to_lowercase().collect::<String>().len();
+            folded_bytes > offset
+        })
+        .unwrap_or(0)
+        .saturating_sub(40);
+    let end = start.saturating_add(160).min(chars.len());
+    Some(format!(
+        "{}{}{}",
+        if start > 0 { "..." } else { "" },
+        chars[start..end].iter().collect::<String>(),
+        if end < chars.len() { "..." } else { "" }
+    ))
+}
+
+fn validate_root(root: &Path) -> Result<()> {
+    if !root.is_absolute()
+        || root
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(CoreError::InvalidInput(
+            "저장소 경로에는 상위 경로나 상대 경로 요소를 사용할 수 없습니다.".into(),
+        ));
+    }
+    let mut current = PathBuf::new();
+    for part in root.components() {
+        current.push(part.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                #[cfg(windows)]
+                let reparse = {
+                    use std::os::windows::fs::MetadataExt;
+                    metadata.file_attributes() & 0x400 != 0
+                };
+                #[cfg(not(windows))]
+                let reparse = false;
+                if metadata.is_symlink() || reparse || !metadata.is_dir() {
+                    return Err(ReadError::UnsafePath.into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn read_content(root: &Path, relative: &Path) -> Result<Option<Vec<u8>>> {
+    let path = store::checked_path(root, relative)?;
+    let file = match store::open_read(&path) {
+        Ok(file) => file,
+        Err(_)
+            if fs::symlink_metadata(&path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None)
+        }
+        Err(error) => return Err(error),
+    };
+    if file.metadata()?.len() > MAX_DOCUMENT_BYTES {
+        return Err(ReadError::DocumentTooLarge.into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_DOCUMENT_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err(ReadError::DocumentTooLarge.into());
+    }
+    Ok(Some(bytes))
+}
+
+fn read_directory(root: &Path, relative: &Path) -> Result<Vec<String>> {
+    let path = store::checked_path(root, relative)?;
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&path)
+        .map_err(|_| CoreError::Storage("회의 목록 폴더가 없거나 읽을 수 없습니다.".into()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() || entry.file_type()?.is_symlink() {
+            return Err(ReadError::UnsafePath.into());
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| ReadError::InvalidDocument)?;
+        store::validate_id(&name).map_err(|_| ReadError::InvalidDocument)?;
+        store::checked_path(root, &relative.join(&name))?;
+        names.push(name);
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn read_directory_presence(root: &Path, relative: &Path) -> Result<bool> {
+    let path = store::checked_path(root, relative)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(true),
+        Ok(_) => Err(ReadError::UnsafePath.into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::{Folder, Placement};
+    use crate::{
+        AudioArtifact, CoreHandle, MeetingStatus, SummaryProvenance, TranscriptSegment,
+        TranscriptSpeaker, TranscriptVersion,
+    };
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    struct Fixture {
+        _temporary: TempDir,
+        root: PathBuf,
+        id: String,
+        folder: String,
+        transcript: Transcript,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let store = store::Store::open(root.clone()).unwrap();
+            let mut meeting = store
+                .create(
+                    "Synthetic meeting".into(),
+                    "note one\nnote two\nnote three".into(),
+                )
+                .unwrap();
+            let id = meeting.meeting.id.clone();
+            let session_id = Uuid::new_v4().to_string();
+            let transcript_id = Uuid::new_v4().to_string();
+            meeting.meeting.created_at = 1000;
+            meeting.meeting.updated_at = 2000;
+            meeting.meeting.recorded_at = Some(1500);
+            meeting.meeting.status = MeetingStatus::Completed;
+            meeting.meeting.transcript_id = Some(transcript_id.clone());
+            meeting.meeting.audio = Some(AudioArtifact {
+                session_id: session_id.clone(),
+                relative_path: format!("meetings/{id}/sessions/{session_id}/audio.wav"),
+                frames: 160000,
+                sample_rate: 16000,
+                channels: 1,
+            });
+            store.save(&meeting).unwrap();
+            let folder = Uuid::new_v4().to_string();
+            let mut library = Library::default();
+            library.folders.insert(
+                folder.clone(),
+                Folder {
+                    id: folder.clone(),
+                    name: "Synthetic folder".into(),
+                },
+            );
+            library.placements.insert(
+                id.clone(),
+                Placement {
+                    folder_id: Some(folder.clone()),
+                    deleted_at: None,
+                },
+            );
+            store.save_library(&library).unwrap();
+            let transcript = Transcript {
+                version: TranscriptVersion {
+                    id: transcript_id,
+                    revision: 1,
+                },
+                source_session_id: session_id,
+                model: "fixture".into(),
+                model_revision: "1".into(),
+                source: None,
+                speakers: vec![TranscriptSpeaker {
+                    id: "speaker-a".into(),
+                    name: "Speaker A".into(),
+                }],
+                segments: (0..3)
+                    .map(|index| TranscriptSegment {
+                        id: format!("utterance-{index}"),
+                        start: index as f64 * 2.0,
+                        end: index as f64 * 2.0 + 1.0,
+                        original_text: format!("original {index}"),
+                        text: format!("corrected {index}"),
+                        speaker_id: Some("speaker-a".into()),
+                        source_index: Some(index),
+                    })
+                    .collect(),
+            };
+            let fixture = Self {
+                _temporary: temporary,
+                root,
+                id,
+                folder,
+                transcript,
+            };
+            fixture.save_transcript(&fixture.transcript);
+            fixture.save_summary(&fixture.transcript);
+            fixture
+        }
+
+        fn reader(&self) -> LibraryReader {
+            LibraryReader::open(&self.root).unwrap()
+        }
+
+        fn save_transcript(&self, transcript: &Transcript) {
+            let directory = Path::new("meetings")
+                .join(&self.id)
+                .join("transcripts")
+                .join(&transcript.version.id);
+            fs::create_dir_all(self.root.join(&directory)).unwrap();
+            store::write_json(&self.root, &directory.join("current.json"), transcript).unwrap();
+        }
+
+        fn save_summary(&self, source: &Transcript) {
+            let directory = Path::new("meetings").join(&self.id).join("summaries");
+            fs::create_dir_all(self.root.join(&directory)).unwrap();
+            let summary = Summary {
+                id: Uuid::new_v4().to_string(),
+                text: "summary one\nsummary two\nsummary three".into(),
+                created_at: 2100,
+                source_version: source.version.clone(),
+                source_sha256: crate::summary::transcript_digest(source).unwrap(),
+                provenance: SummaryProvenance {
+                    model: "fixture".into(),
+                    model_revision: "1".into(),
+                    model_sha256: "0".repeat(64),
+                    runtime: "fixture".into(),
+                    prompt_version: "1".into(),
+                    template: "fixture".into(),
+                },
+            };
+            store::write_json(&self.root, &directory.join("current.json"), &summary).unwrap();
+        }
+
+        fn set_deleted(&self) {
+            let mut library: Library = store::read_json(&self.root.join("library.json")).unwrap();
+            library.placements.get_mut(&self.id).unwrap().deleted_at = Some(3000);
+            store::write_json(&self.root, Path::new("library.json"), &library).unwrap();
+        }
+    }
+
+    fn tree_hash(root: &Path) -> String {
+        fn collect(root: &Path, at: &Path, values: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in fs::read_dir(at).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    collect(root, &path, values);
+                } else {
+                    values.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        fs::read(path).unwrap(),
+                    );
+                }
+            }
+        }
+        let mut values = BTreeMap::new();
+        collect(root, root, &mut values);
+        let mut digest = Sha256::new();
+        for (path, bytes) in values {
+            digest.update(path.to_string_lossy().as_bytes());
+            digest.update(bytes);
+        }
+        format!("{:x}", digest.finalize())
+    }
+
+    #[test]
+    fn queries_do_not_write_or_require_the_audio_or_a_store_lock() {
+        let fixture = Fixture::new();
+        let owner = CoreHandle::open(&fixture.root).unwrap();
+        assert!(matches!(
+            CoreHandle::open(&fixture.root),
+            Err(CoreError::StoreBusy)
+        ));
+        let before = tree_hash(&fixture.root);
+        let reader = fixture.reader();
+        for method in ["meetings_list", "folders_list", "status"] {
+            reader.query(method, json!({})).unwrap();
+        }
+        for method in ["meeting_get", "transcript_get", "summary_get"] {
+            reader
+                .query(method, json!({"meetingId":fixture.id}))
+                .unwrap();
+        }
+        reader
+            .query("meetings_search", json!({"query":"corrected"}))
+            .unwrap();
+        assert_eq!(before, tree_hash(&fixture.root));
+        drop(owner);
+    }
+
+    #[test]
+    fn a_missing_root_is_diagnostic_without_initializing_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().canonicalize().unwrap().join("missing");
+        let reader = LibraryReader::open(&missing).unwrap();
+        assert_eq!(
+            reader.query("status", json!({})).unwrap()["rootExists"],
+            false
+        );
+        assert!(reader
+            .query("meetings_list", json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("저장소가 없습니다"));
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn corrected_segments_speakers_time_ranges_and_pages_are_exposed() {
+        let fixture = Fixture::new();
+        let result = fixture
+            .reader()
+            .query(
+                "transcript_get",
+                json!({"meetingId":fixture.id,"start":1.0,"end":5.0,"limit":1}),
+            )
+            .unwrap();
+        assert_eq!(result["pagination"]["total"], 2);
+        assert_eq!(result["pagination"]["hasMore"], true);
+        assert_eq!(result["segments"][0]["id"], "utterance-1");
+        assert_eq!(result["segments"][0]["text"], "corrected 1");
+        assert_eq!(result["segments"][0]["speakerName"], "Speaker A");
+        assert!(result["segments"][0].get("originalText").is_none());
+        assert_eq!(result["version"]["revision"], 1);
+        assert!(result["sourceVersion"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        let next = fixture
+            .reader()
+            .query(
+                "transcript_get",
+                json!({"meetingId":fixture.id,"offset":2,"limit":1}),
+            )
+            .unwrap();
+        assert_eq!(next["segments"][0]["id"], "utterance-2");
+        assert_eq!(next["pagination"]["hasMore"], false);
+    }
+
+    #[test]
+    fn notes_and_summary_have_line_pages_and_stale_source_versions() {
+        let fixture = Fixture::new();
+        let reader = fixture.reader();
+        let params = json!({"meetingId":fixture.id,"offset":1,"limit":1});
+        assert_eq!(
+            reader.query("meeting_get", params.clone()).unwrap()["meeting"]["notes"],
+            "note two\n"
+        );
+        let summary = reader.query("summary_get", params.clone()).unwrap();
+        assert_eq!(summary["summary"]["text"], "summary two\n");
+        assert_eq!(summary["pagination"]["unit"], "textChunks");
+        assert_eq!(summary["summary"]["stale"], false);
+        let mut changed = fixture.transcript.clone();
+        changed.version.revision += 1;
+        changed.segments[0].text = "latest correction".into();
+        fixture.save_transcript(&changed);
+        let result = reader.query("summary_get", params).unwrap();
+        assert_eq!(result["summary"]["stale"], true);
+        assert_eq!(result["summary"]["sourceVersion"]["revision"], 1);
+        let matches = reader
+            .query("meetings_search", json!({"query":"latest correction"}))
+            .unwrap();
+        assert_eq!(
+            matches["meetings"][0]["matches"][0]["segmentId"],
+            "utterance-0"
+        );
+        assert!(reader
+            .query("meetings_search", json!({"query":"original 0"}))
+            .unwrap()["meetings"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn list_filters_and_trash_apply_to_explicit_reads_too() {
+        let fixture = Fixture::new();
+        let reader = fixture.reader();
+        let listed = reader
+            .query(
+                "meetings_list",
+                json!({"folderId":fixture.folder,"from":1500,"to":1501}),
+            )
+            .unwrap();
+        assert_eq!(listed["pagination"]["total"], 1);
+        assert!(
+            reader.query("meetings_list", json!({"from":1501})).unwrap()["meetings"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        fixture.set_deleted();
+        assert!(
+            reader.query("meetings_list", json!({})).unwrap()["meetings"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        for method in ["meeting_get", "transcript_get", "summary_get"] {
+            assert!(matches!(
+                reader.query(method, json!({"meetingId":fixture.id})),
+                Err(CoreError::MeetingNotFound)
+            ));
+        }
+    }
+
+    #[test]
+    fn missing_corrupt_unsupported_and_oversized_documents_are_not_empty_successes() {
+        let fixture = Fixture::new();
+        let reader = fixture.reader();
+        let meeting = fixture
+            .root
+            .join("meetings")
+            .join(&fixture.id)
+            .join("meeting.json");
+        let original = fs::read(&meeting).unwrap();
+        fs::write(&meeting, b"{broken").unwrap();
+        assert!(matches!(
+            reader.query("meetings_list", json!({})),
+            Err(CoreError::Reader(ReadError::InvalidDocument))
+        ));
+        let mut value: Value = serde_json::from_slice(&original).unwrap();
+        value["schemaVersion"] = json!(99);
+        fs::write(&meeting, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            reader.query("meetings_list", json!({})),
+            Err(CoreError::Reader(ReadError::UnsupportedFormat))
+        ));
+        fs::write(&meeting, vec![b' '; MAX_DOCUMENT_BYTES as usize + 1]).unwrap();
+        assert!(matches!(
+            reader.query("meetings_list", json!({})),
+            Err(CoreError::Reader(ReadError::DocumentTooLarge))
+        ));
+        fs::write(&meeting, original).unwrap();
+        let current = fixture
+            .root
+            .join("meetings")
+            .join(&fixture.id)
+            .join("transcripts")
+            .join(&fixture.transcript.version.id)
+            .join("current.json");
+        fs::rename(&current, current.with_extension("held")).unwrap();
+        assert!(matches!(
+            reader.query("transcript_get", json!({"meetingId":fixture.id})),
+            Err(CoreError::Reader(ReadError::InvalidDocument))
+        ));
+    }
+
+    #[test]
+    fn observed_file_and_directory_changes_invalidate_a_snapshot() {
+        let fixture = Fixture::new();
+        let mut transaction = Transaction::new(&fixture.root);
+        let before = transaction
+            .query(
+                "meeting_get",
+                &Params::parse("meeting_get", json!({"meetingId":fixture.id})).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(before["meeting"]["transcriptVersion"]["revision"], 1);
+        assert!(transaction.verify().unwrap());
+        let mut changed = fixture.transcript.clone();
+        changed.version.revision += 1;
+        fixture.save_transcript(&changed);
+        assert!(!transaction.verify().unwrap());
+        let mut transaction = Transaction::new(&fixture.root);
+        transaction.directory(Path::new("meetings")).unwrap();
+        fs::create_dir(
+            fixture
+                .root
+                .join("meetings")
+                .join(Uuid::new_v4().to_string()),
+        )
+        .unwrap();
+        assert!(!transaction.verify().unwrap());
+    }
+
+    #[test]
+    fn incomplete_creation_is_skipped_and_later_publication_invalidates_the_snapshot() {
+        for publish_metadata in [false, true] {
+            let fixture = Fixture::new();
+            let id = Uuid::new_v4().to_string();
+            let relative = Path::new("meetings").join(&id);
+            fs::create_dir(fixture.root.join(&relative)).unwrap();
+            let mut transaction = Transaction::new(&fixture.root);
+            let params = Params::parse("meetings_list", json!({})).unwrap();
+            let result = transaction.query("meetings_list", &params).unwrap();
+            assert_eq!(result["pagination"]["total"], 1);
+            assert!(matches!(
+                transaction.observations.get(&relative.join("meeting.json")),
+                Some(Observation::File(None))
+            ));
+            assert!(matches!(
+                transaction.observations.get(&relative.join("sessions")),
+                Some(Observation::DirectoryPresence(false))
+            ));
+            assert!(transaction.verify().unwrap());
+            if publish_metadata {
+                let existing = Path::new("meetings").join(&fixture.id).join("meeting.json");
+                let mut document: Value = store::read_json(&fixture.root.join(existing)).unwrap();
+                document["meeting"]["id"] = json!(id);
+                document["meeting"]["transcriptId"] = Value::Null;
+                document["meeting"]["audio"] = Value::Null;
+                store::write_json(&fixture.root, &relative.join("meeting.json"), &document)
+                    .unwrap();
+                assert_eq!(
+                    fixture.reader().query("meetings_list", json!({})).unwrap()["pagination"]
+                        ["total"],
+                    2
+                );
+            } else {
+                fs::create_dir(fixture.root.join(relative.join("sessions"))).unwrap();
+                assert!(matches!(
+                    fixture.reader().query("meetings_list", json!({})),
+                    Err(CoreError::Reader(ReadError::InvalidDocument))
+                ));
+            }
+            assert!(!transaction.verify().unwrap());
+        }
+    }
+
+    #[test]
+    fn meeting_lists_use_recording_or_creation_time_with_a_stable_id_tiebreaker() {
+        let fixture = Fixture::new();
+        let store = store::Store::open(fixture.root.clone()).unwrap();
+        let relative = Path::new("meetings").join(&fixture.id).join("meeting.json");
+        let mut edited: StoredMeeting = store::read_json(&fixture.root.join(relative)).unwrap();
+        edited.meeting.updated_at = u64::MAX;
+        store.save(&edited).unwrap();
+        let mut expected = Vec::new();
+        for _ in 0..2 {
+            let mut created = store
+                .create("Synthetic newer draft".into(), String::new())
+                .unwrap();
+            created.meeting.created_at = 1600;
+            created.meeting.updated_at = 1;
+            store.save(&created).unwrap();
+            expected.push(created.meeting.id);
+        }
+        expected.sort();
+        let filtered = fixture
+            .reader()
+            .query("meetings_list", json!({"from":1600,"to":1601}))
+            .unwrap();
+        assert_eq!(filtered["pagination"]["total"], 2);
+        expected.push(fixture.id.clone());
+        let listed = fixture.reader().query("meetings_list", json!({})).unwrap();
+        let actual: Vec<_> = listed["meetings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|meeting| meeting["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn input_and_response_limits_are_explicit() {
+        let fixture = Fixture::new();
+        let reader = fixture.reader();
+        for params in [
+            json!({"limit":201}),
+            json!({"limit":0}),
+            json!({"from":5,"to":4}),
+            json!({"unexpected":true}),
+        ] {
+            assert!(matches!(
+                reader.query("meetings_list", params),
+                Err(CoreError::InvalidInput(_))
+            ));
+        }
+        assert!(reader
+            .query("meeting_get", json!({"meetingId":"../../elsewhere"}))
+            .is_err());
+        assert!(reader
+            .query("meetings_search", json!({"query":" "}))
+            .is_err());
+        let path = fixture
+            .root
+            .join("meetings")
+            .join(&fixture.id)
+            .join("meeting.json");
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["meeting"]["notes"] = json!("\u{0001}".repeat(MAX_RESPONSE_BYTES / 6 + 1));
+        store::write_json(
+            &fixture.root,
+            path.strip_prefix(&fixture.root).unwrap(),
+            &value,
+        )
+        .unwrap();
+        assert!(matches!(
+            reader.query("meeting_get", json!({"meetingId":fixture.id})),
+            Err(CoreError::Reader(ReadError::ResponseTooLarge))
+        ));
+        assert!(reader
+            .query("meeting_get", json!({"meetingId":fixture.id,"limit":1}))
+            .is_ok());
+    }
+
+    #[test]
+    fn text_chunks_preserve_unicode_and_all_newlines() {
+        let boundary = format!("{}한글\r\n\n끝\n", "a".repeat(MAX_TEXT_CHUNK_BYTES - 1));
+        for text in ["", "\n", "line\n", "line\r\n\n끝\n", boundary.as_str()] {
+            let mut restored = String::new();
+            let mut offset = 0;
+            loop {
+                let params = Params {
+                    offset: Some(offset),
+                    limit: Some(1),
+                    ..Params::default()
+                };
+                let (chunk, page) = page_text_chunks(text, &params);
+                assert!(chunk.len() <= MAX_TEXT_CHUNK_BYTES);
+                assert_eq!(page["unit"], "textChunks");
+                restored.push_str(&chunk);
+                if page["hasMore"] == false {
+                    break;
+                }
+                offset += 1;
+            }
+            assert_eq!(restored, text);
+        }
+    }
+
+    #[test]
+    fn long_single_line_notes_and_summaries_can_be_read_in_full() {
+        let fixture = Fixture::new();
+        let text = format!("{}\n끝\n", "가나다라".repeat(MAX_RESPONSE_BYTES / 12 + 1));
+        assert!(text.lines().next().unwrap().len() > MAX_RESPONSE_BYTES);
+        for (relative, method, field) in [
+            (
+                Path::new("meetings").join(&fixture.id).join("meeting.json"),
+                "meeting_get",
+                "notes",
+            ),
+            (
+                Path::new("meetings")
+                    .join(&fixture.id)
+                    .join("summaries/current.json"),
+                "summary_get",
+                "text",
+            ),
+        ] {
+            let mut document: Value = store::read_json(&fixture.root.join(&relative)).unwrap();
+            if method == "meeting_get" {
+                document["meeting"][field] = json!(text);
+            } else {
+                document[field] = json!(text);
+            }
+            store::write_json(&fixture.root, &relative, &document).unwrap();
+            let mut restored = String::new();
+            let mut offset = 0;
+            loop {
+                let result = fixture
+                    .reader()
+                    .query(
+                        method,
+                        json!({"meetingId":fixture.id,"offset":offset,"limit":200}),
+                    )
+                    .unwrap();
+                assert_eq!(result["pagination"]["unit"], "textChunks");
+                let body = if method == "meeting_get" {
+                    &result["meeting"][field]
+                } else {
+                    &result["summary"][field]
+                };
+                restored.push_str(body.as_str().unwrap());
+                if result["pagination"]["hasMore"] == false {
+                    break;
+                }
+                offset += 200;
+            }
+            assert!(offset > 0);
+            assert_eq!(restored, text);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_roots_documents_and_directories_are_rejected() {
+        use std::os::unix::fs::symlink;
+        let fixture = Fixture::new();
+        let temporary = tempfile::tempdir().unwrap();
+        let alias = temporary.path().canonicalize().unwrap().join("alias");
+        symlink(&fixture.root, &alias).unwrap();
+        assert!(LibraryReader::open(alias).is_err());
+        let path = fixture
+            .root
+            .join("meetings")
+            .join(&fixture.id)
+            .join("meeting.json");
+        let held = temporary.path().join("held.json");
+        fs::rename(&path, &held).unwrap();
+        symlink(&held, &path).unwrap();
+        assert!(fixture
+            .reader()
+            .query("meeting_get", json!({"meetingId":fixture.id}))
+            .is_err());
+        let fixture = Fixture::new();
+        symlink(
+            temporary.path(),
+            fixture
+                .root
+                .join("meetings")
+                .join(Uuid::new_v4().to_string()),
+        )
+        .unwrap();
+        assert!(fixture.reader().query("meetings_list", json!({})).is_err());
+    }
+}

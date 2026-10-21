@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_connection;
 #[cfg(target_os = "macos")]
 mod app_menu;
 mod downloads;
@@ -39,6 +40,23 @@ fn require_main(window: &WebviewWindow) -> Result<(), String> {
     } else {
         Err("본창에서 실행해 주세요.".into())
     }
+}
+
+#[tauri::command]
+fn agent_connection_info(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<agent_connection::ConnectionInfo, String> {
+    require_main(&window)?;
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    Ok(agent_connection::connection_info(&resources, &root))
 }
 
 fn require_local_window(window: &WebviewWindow) -> Result<(), String> {
@@ -1115,6 +1133,7 @@ fn main() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            agent_connection_info,
             read_snapshot,
             search_meetings,
             create_meeting,

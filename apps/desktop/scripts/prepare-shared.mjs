@@ -14,6 +14,7 @@ for (const name of ['appearance.css', 'appearance.js', 'typography.css', 'compon
 await cp(resolve(source, 'vendor/lucide'), resolve(target, 'vendor/lucide'), { recursive: true });
 
 await mkdir(resolve(app, '.generated/native'), { recursive: true });
+await mkdir(resolve(app, '.generated/agent'), { recursive: true });
 
 await mkdir(resolve(app, '.generated/brand'), { recursive: true });
 await copyFile(resolve(app, 'brand/mark.svg'), resolve(app, '.generated/brand/mark.svg'));

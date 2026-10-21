@@ -68,7 +68,7 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
   function restoreFocus(onlyIfIdle = false) {
     const active = dialog.ownerDocument?.activeElement;
     if (onlyIfIdle && active && active !== dialog.ownerDocument.body && !dialog.contains?.(active)) return;
-    const target = returnFocus?.isConnected ? returnFocus : byId(state().libraryOpen ? 'library-title' : 'new-folder');
+    const target = returnFocus?.isConnected && !returnFocus.disabled && !returnFocus.hidden ? returnFocus : byId(state().libraryOpen ? 'library-title' : 'new-folder');
     target?.focus({ preventScroll: true });
   }
   function openDialog({ title, content, confirm = '저장', destructive = false, action, detach = false }) {
@@ -77,9 +77,11 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
     pending = { confirm, action, detach };
     dialogBody.innerHTML = `<form class="library-form"><header class="dialog-header"><h2 id="library-dialog-title">${escape(title)}</h2><button type="button" class="quiet icon-button" data-library-close aria-label="닫기">${icon('x')}</button></header><div class="library-dialog-content">${content}<p id="library-dialog-error" class="field-error" role="alert" hidden></p></div><footer class="dialog-actions"><button type="button" data-library-close>취소</button><button type="submit" class="${destructive ? 'danger' : 'primary'}" data-library-confirm>${escape(confirm)}</button></footer></form>`;
     dialog.setAttribute('aria-labelledby', 'library-dialog-title');
+    dialog.setAttribute('role', destructive ? 'alertdialog' : 'dialog');
     if (!dialog.open) dialog.showModal();
     const input = dialogBody.querySelector('[autofocus]');
     if (input) { input.focus(); input.select?.(); }
+    else if (destructive) dialogBody.querySelector('footer [data-library-close]')?.focus();
   }
   function report(error) {
     const field = dialog.open && byId('library-dialog-error');
@@ -166,6 +168,22 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
     if (!ids.length) return;
     openDialog({ title: '회의를 영구 삭제할까요?', content: `<p>${escape(description(ids))}</p><p class="muted">원음, 음성 기록, 메모와 회의록을 삭제합니다. 복원할 수 없습니다.</p>`, confirm: '영구 삭제', destructive: true, detach: true, action: () => bridge.purgeMeetings(ids) });
   }
+  function emptyTrashDialog() {
+    if (state().libraryBusy || !state().connected || state().libraryFilter !== 'trash' || dialog.open) return;
+    const targets = filterLibraryMeetings(state().snapshot.meetings, 'trash').map(({ id, deletedAt }) => ({ id, deletedAt }));
+    if (!targets.length) return;
+    const ids = targets.map(meeting => meeting.id);
+    if (runningRecording(ids)) { showError('녹음을 종료한 뒤 삭제해 주세요.'); return; }
+    openDialog({ title: '휴지통을 비울까요?', content: `<p>휴지통의 회의 ${targets.length}개를 영구 삭제합니다.</p><p class="muted">녹음, 음성 기록, 메모와 회의록은 복원할 수 없습니다.</p>`, confirm: '영구 삭제', destructive: true, action: async () => {
+      const latest = await bridge.readSnapshot();
+      acceptSnapshot(latest);
+      if (targets.some(target => !latest.meetings.some(meeting => meeting.id === target.id && meeting.deletedAt != null && meeting.deletedAt === target.deletedAt))) {
+        throw new Error('휴지통의 회의가 변경되었습니다. 취소한 뒤 삭제 대상을 다시 확인해 주세요.');
+      }
+      if (runningRecording(ids)) throw new Error('녹음을 종료한 뒤 삭제해 주세요.');
+      return bridge.purgeMeetings(ids);
+    } });
+  }
   function afterRemoval() {
     state().libraryOpen = true;
     resetSelection();
@@ -199,6 +217,8 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
     byId('library-trash').hidden = filter === 'trash';
     byId('library-restore').hidden = filter !== 'trash';
     byId('library-purge').hidden = filter !== 'trash';
+    byId('library-empty-trash').hidden = filter !== 'trash';
+    byId('library-empty-trash').disabled = disabled || !filterLibraryMeetings(snapshot.meetings, 'trash').length;
     byId('library-select-all').disabled = disabled || !visible.length;
     byId('library-selection-clear').disabled = disabled || !count;
     byId('new-folder').disabled = disabled;
@@ -276,6 +296,7 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
   dialog.addEventListener('click', event => { if (event.target.closest('[data-library-close]')) closeDialog(); });
   dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
   byId('new-folder').addEventListener('click', () => folderDialog());
+  byId('library-empty-trash').addEventListener('click', emptyTrashDialog);
   byId('folder-list').addEventListener('click', event => {
     const filter = event.target.closest('[data-library-filter]');
     const rename = event.target.closest('[data-folder-rename]');

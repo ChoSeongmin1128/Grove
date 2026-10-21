@@ -5,7 +5,7 @@
   "identifier": "io.github.choseongmin1128.grove.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run prepare:agent",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },
@@ -47,7 +47,7 @@
     "category": "Productivity",
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "bundleVersion": "7",
+      "bundleVersion": "8",
       "infoPlist": "Info.plist"
     },
     "windows": {
@@ -58,6 +58,7 @@
     },
     "resources": {
       "../.generated/native/": "native/",
+      "../.generated/agent/": "agent/",
       "../.generated/release/build-info.json": "build-info.json"
     }
   }

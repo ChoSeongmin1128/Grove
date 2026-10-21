@@ -71,6 +71,11 @@ frontend, whose actions require the native bridge; it does not supply fake meeti
 
 ## Current behavior
 
+- Read-only local CLI/MCP query meetings, notes, current corrected voice records and
+  summaries without initializing recording, models or store recovery. Settings > Agent
+  integration copies the installed executable's MCP configuration and CLI example.
+  Tauri builds bundle the native tool; see [local agent integration](../../docs/local-agent.md).
+
 - Create meetings, edit title/notes and reopen them after restarting.
 - Select an input device and explicitly start microphone recording.
 - When no input device is available, recording stays disabled; connect a microphone

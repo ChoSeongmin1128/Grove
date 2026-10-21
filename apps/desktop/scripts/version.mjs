@@ -10,6 +10,7 @@ const paths = [
   'apps/desktop/src-tauri/Cargo.toml',
   'crates/grove-core/Cargo.toml',
   'Cargo.lock',
+  'crates/nero-cli/Cargo.toml',
 ];
 
 function version(value) {
@@ -61,6 +62,8 @@ function inspect(files) {
     [paths[4], packageSection(files[4], paths[4])],
     ['Cargo.lock grove-desktop', lockedPackage(files[5], 'grove-desktop')],
     ['Cargo.lock grove-core', lockedPackage(files[5], 'grove-core')],
+    [paths[6], packageSection(files[6], paths[6])],
+    ['Cargo.lock nero-cli', lockedPackage(files[5], 'nero-cli')],
   ];
   for (const [label, value] of mirrors) {
     if (value !== pkg.version) throw Error(`${label} version is ${String(value)}; expected ${pkg.version}`);
@@ -91,7 +94,8 @@ async function main(args) {
     stringify(pkg), stringify(lock), stringify(tauri),
     packageSection(files[3], paths[3], args[1]),
     packageSection(files[4], paths[4], args[1]),
-    lockedPackage(lockedPackage(files[5], 'grove-desktop', args[1]), 'grove-core', args[1]),
+    lockedPackage(lockedPackage(lockedPackage(files[5], 'grove-desktop', args[1]), 'grove-core', args[1]), 'nero-cli', args[1]),
+    packageSection(files[6], paths[6], args[1]),
   ];
   inspect(planned);
   const currentFiles = await Promise.all(absolute.map(file => readFile(file, 'utf8')));

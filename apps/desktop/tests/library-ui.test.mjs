@@ -271,3 +271,140 @@ test('renaming a meeting invalidates content search without changing its scope',
   assert.deepEqual(changes, ['project']);
   assert.equal(app.calls.find(call => call.name === 'renameMeeting').args[1], '제품 검토');
 });
+
+test('empty trash is scoped to trash, disables for an empty trash and ignores search and selection', async () => {
+  const app = harness();
+  assert.equal(app.byId('library-empty-trash').hidden, true);
+  app.state.libraryFilter = 'trash';
+  app.state.snapshot.meetings.push({ id: 'four', title: '또 다른 회의', deletedAt: 200 });
+  app.byId('search').value = '검색에 없는 제목';
+  app.state.librarySearchIds = new Set();
+  app.controller.render();
+  assert.equal(app.controller.visibleMeetings().length, 0);
+  assert.equal(app.byId('library-empty-trash').hidden, false);
+  assert.equal(app.byId('library-empty-trash').disabled, false);
+  app.click('library-empty-trash');
+  assert.match(app.byId('library-dialog-body').innerHTML, /회의 2개/);
+  assert.match(app.byId('library-dialog-body').innerHTML, /녹음, 음성 기록, 메모와 회의록은 복원할 수 없습니다/);
+  assert.match(app.byId('library-dialog-body').innerHTML, /class="danger"/);
+  assert.equal(app.byId('library-dialog').role, 'alertdialog');
+  assert.equal(app.calls.some(call => call.name === 'purge'), false);
+  app.bridge.purgeMeetings = async ids => {
+    app.calls.push({ name: 'purge', args: [ids] });
+    app.state.snapshot.meetings = app.state.snapshot.meetings.filter(meeting => !ids.includes(meeting.id));
+    return app.snapshot();
+  };
+  await app.submit();
+  assert.deepEqual(app.calls.find(call => call.name === 'purge').args, [['three', 'four']]);
+  assert.equal(app.byId('library-empty-trash').disabled, true);
+  assert.deepEqual(app.state.snapshot.meetings.map(meeting => meeting.id), ['one', 'two']);
+  app.click('library-empty-trash');
+  assert.equal(app.byId('library-dialog').open, false);
+});
+
+test('empty trash cancel preserves meetings and restores its trigger focus', () => {
+  const app = harness();
+  app.state.libraryFilter = 'trash';
+  app.controller.render();
+  app.byId('library-dialog').ownerDocument.activeElement = app.byId('library-empty-trash');
+  app.click('library-empty-trash');
+  app.byId('library-dialog').listeners.cancel({ preventDefault() {} });
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.state.snapshot.meetings.length, 3);
+  assert.equal(app.byId('library-empty-trash').focused, true);
+});
+
+test('empty trash deletes only confirmed IDs even if new meetings enter trash', async () => {
+  const app = harness();
+  app.state.libraryFilter = 'trash';
+  app.click('library-empty-trash');
+  app.state.snapshot.meetings.push({ id: 'four', title: '추가한 회의', deletedAt: 200 });
+  app.click('library-empty-trash');
+  await app.submit();
+  assert.deepEqual(app.calls.find(call => call.name === 'purge').args, [['three']]);
+});
+
+for (const change of ['restored', 'removed', 'trashed-again']) {
+  test(`empty trash refuses a changed confirmed target: ${change}`, async () => {
+    const app = harness();
+    app.state.libraryFilter = 'trash';
+    app.click('library-empty-trash');
+    if (change === 'removed') app.state.snapshot.meetings.pop();
+    else app.state.snapshot.meetings[2].deletedAt = change === 'restored' ? null : 300;
+    await app.submit();
+    assert.equal(app.calls.some(call => call.name === 'purge'), false);
+    assert.equal(app.byId('library-dialog').open, true);
+    assert.match(app.byId('library-dialog-error').textContent, /다시 확인/);
+  });
+}
+
+test('empty trash prevents duplicate submissions and cancellation while purging', async () => {
+  const app = harness();
+  let resolve;
+  app.state.libraryFilter = 'trash';
+  app.state.librarySelection.add('three');
+  app.byId('library-dialog').ownerDocument.activeElement = app.byId('library-empty-trash');
+  app.bridge.purgeMeetings = ids => {
+    app.calls.push({ name: 'purge', args: [ids] });
+    return new Promise(done => { resolve = done; });
+  };
+  app.click('library-empty-trash');
+  await app.submit();
+  assert.equal(app.state.libraryBusy, true);
+  assert.equal(app.byId('library-empty-trash').disabled, true);
+  await app.submit();
+  app.click('library-empty-trash');
+  app.byId('library-dialog').listeners.cancel({ preventDefault() {} });
+  assert.equal(app.byId('library-dialog').open, true);
+  assert.equal(app.calls.filter(call => call.name === 'purge').length, 1);
+  const result = app.snapshot();
+  result.meetings = result.meetings.filter(meeting => meeting.id !== 'three');
+  resolve(result);
+  await settle();
+  assert.equal(app.state.libraryBusy, false);
+  assert.equal(app.state.librarySelection.size, 0);
+  assert.equal(app.byId('library-title').focused, true);
+});
+
+test('empty trash preserves failed targets and selection, and refreshes partial deletion', async () => {
+  const app = harness();
+  app.state.libraryFilter = 'trash';
+  app.state.snapshot.meetings.push({ id: 'four', title: '남는 회의', deletedAt: 200 });
+  app.state.librarySelection = new Set(['three', 'four']);
+  app.bridge.purgeMeetings = async () => {
+    app.state.snapshot.meetings = app.state.snapshot.meetings.filter(meeting => meeting.id !== 'three');
+    throw new Error('파일을 정리하지 못했습니다.');
+  };
+  app.click('library-empty-trash');
+  await app.submit();
+  assert.equal(app.calls.at(-1).name, 'read');
+  assert.deepEqual(app.controller.selectedIds(), ['four']);
+  assert.equal(app.state.libraryBusy, false);
+  assert.equal(app.byId('library-dialog').open, true);
+  assert.match(app.byId('library-dialog-error').textContent, /파일을 정리하지 못했습니다/);
+  assert.equal(app.byId('library-empty-trash').disabled, false);
+});
+
+test('empty trash cannot purge when its latest snapshot cannot be read', async () => {
+  const app = harness({ readSnapshot: async () => { throw new Error('목록을 읽지 못했습니다.'); } });
+  app.state.libraryFilter = 'trash';
+  app.click('library-empty-trash');
+  await app.submit();
+  assert.equal(app.calls.some(call => call.name === 'purge'), false);
+  assert.equal(app.state.snapshot.meetings.length, 3);
+  assert.match(app.byId('library-dialog-error').textContent, /목록을 읽지 못했습니다/);
+});
+
+test('empty trash respects recording protection before opening and at confirmation', async () => {
+  const app = harness();
+  app.state.libraryFilter = 'trash';
+  app.state.snapshot.session = { state: 'paused', meetingId: 'three' };
+  app.click('library-empty-trash');
+  assert.equal(app.byId('library-dialog').open, false);
+  app.state.snapshot.session = null;
+  app.click('library-empty-trash');
+  app.state.snapshot.session = { state: 'recording', meetingId: 'three' };
+  await app.submit();
+  assert.equal(app.calls.some(call => call.name === 'purge'), false);
+  assert.match(app.byId('library-dialog-error').textContent, /녹음을 종료/);
+});

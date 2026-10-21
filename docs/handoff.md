@@ -8,6 +8,13 @@ the private installation and evaluation receipts.
 
 ## Native rewrite source
 
+- Read-only CLI and local stdio MCP share `LibraryReader`, without opening the writer,
+  recovery, migration, microphone or model paths. Queries include active meeting/folder
+  lists, date/folder/content search, corrected transcript ranges, paginated notes and
+  summaries with source/stale metadata. Settings exposes copyable connection configuration.
+  Tauri builds stage the native `nero` executable for macOS and Windows. See
+  [Local agent integration](local-agent.md) for commands, paging and validation boundaries.
+
 - Rebuilding an existing voice record requires confirmation; verified previous runs are
   available in Previous records. Restore compares both current and target versions,
   makes a new revision, preserves raw/initial/audio, and leaves the existing summary stale.
@@ -45,6 +52,11 @@ the private installation and evaluation receipts.
   [Meeting library and speakers](meeting-library-and-speakers.md) for storage, cancellation,
   recovery and validation boundaries; this source contract is not an installed-app receipt.
 
+- Trash has an Empty trash action independent of current search and selection. Its
+  confirmation freezes IDs/deletion timestamps, revalidates before submission, excludes
+  newly trashed meetings, and uses the existing protected purge path. Busy feedback,
+  failure refresh and focus restoration remain available; the CLI/MCP expose no deletion.
+
 - Before the first actual user sharing, architecture and stored formats may change.
   Personal meeting data still requires explicit preservation/migration. The first
   user-shared build establishes the compatibility baseline; notarization or personal
@@ -68,7 +80,7 @@ the private installation and evaluation receipts.
   a clean matching source. macOS packaging can produce separately signed/notarized
   ZIP and DMG artifacts, with distinct receipts and read-only embedded-app verification.
 
-- Settings contains Screen / Recording / Models. Shared appearance behavior is packaged
+- Settings contains Screen / Recording / Models / Agent integration. Shared appearance behavior is packaged
   for both windows, with six colors and independent Light / Dark / System brightness.
   The native app uses its own saved preference instead of forcing green on every launch.
   Meeting title/notes autosave without a permanent Saved label or manual Save button;

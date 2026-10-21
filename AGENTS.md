@@ -30,6 +30,11 @@ This file applies to the entire repository.
   as an approximate identity. Legacy source upgrades are a separate startup operation,
   with immutable before/after evidence; ordinary reads must not migrate or reconstruct.
   Keep float_roundtrip in the shared workspace JSON dependency for stable persistence.
+- Read-only CLI and stdio MCP share `reader::LibraryReader`. Never call `CoreHandle::open`
+  from a query tool: opening the writer acquires its lock and runs recovery. Ordinary
+  reads must not initialize directories, migrate, load models or start capture. Keep
+  paging/source revisions and read-only tool annotations consistent across both entry
+  points. See `docs/local-agent.md`; do not edit another AI client's settings implicitly.
 - Model selection will prefer qualified GPU paths and retain CPU compatibility.
   Initial diarization support targets up to eight actual speakers; more attendees
   must not block recording or transcription. Preserve transcription on speaker-stage failure.
@@ -229,6 +234,7 @@ New desktop validation, run sequentially:
 
 ```bash
 cargo test -p grove-core --locked -- --test-threads=1
+cargo test -p nero-cli --locked -- --test-threads=1
 npm --prefix apps/desktop test
 npm --prefix apps/desktop run build
 cargo check -p grove-desktop --locked
