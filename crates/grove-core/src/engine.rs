@@ -1,15 +1,17 @@
 use crate::capture::{self, Capture};
+use crate::library::{Folder, Library};
 use crate::store::{self, CapturePhase, Manifest, Store, StoredMeeting};
 use crate::{
     CoreError, Device, Meeting, MeetingStatus, Result, SessionSnapshot, SessionState, Snapshot,
 };
 use cpal::traits::DeviceTrait;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub(crate) struct Engine {
     pub(crate) store: Store,
     pub(crate) meetings: BTreeMap<String, StoredMeeting>,
+    library: Library,
     pub(crate) capture: Option<Capture>,
     last_session: Option<SessionSnapshot>,
     revision: u64,
@@ -19,11 +21,13 @@ pub(crate) struct Engine {
 impl Engine {
     pub fn open(root: PathBuf) -> Result<Self> {
         let store = Store::open(root)?;
-        let mut meetings = store.load()?;
+        let library = store.load_library()?;
+        let mut meetings = store.load_with_library(&library)?;
         store.recover(&mut meetings)?;
         Ok(Self {
             store,
             meetings,
+            library,
             capture: None,
             last_session: None,
             revision: 0,
@@ -76,11 +80,197 @@ impl Engine {
         Ok(meeting)
     }
 
+    pub(crate) fn require_active_meeting(&self, id: &str) -> Result<()> {
+        store::validate_id(id)?;
+        self.meetings
+            .get(id)
+            .filter(|stored| stored.meeting.deleted_at.is_none())
+            .ok_or(CoreError::MeetingNotFound)?;
+        Ok(())
+    }
+
+    pub fn folders(&self) -> Vec<Folder> {
+        self.library.folders()
+    }
+
+    pub fn retry_purge_cleanup(&mut self) -> Result<()> {
+        self.store.cleanup_purges(&self.library)
+    }
+
+    fn commit_library(&mut self, library: Library) -> Result<()> {
+        if self.quitting {
+            return Err(CoreError::Unavailable);
+        }
+        if let Err(error) = self.store.save_library(&library) {
+            // Directory sync can fail after atomic replacement. Reflect the
+            // complete committed document rather than returning an older snapshot.
+            if self.store.load_library().ok().as_ref() == Some(&library) {
+                self.apply_library(library);
+            }
+            return Err(error);
+        }
+        self.apply_library(library);
+        Ok(())
+    }
+
+    fn apply_library(&mut self, library: Library) {
+        self.library = library;
+        self.meetings
+            .retain(|id, _| !self.library.pending_purges.contains(id));
+        for stored in self.meetings.values_mut() {
+            self.library.project(&mut stored.meeting);
+        }
+        if self
+            .last_session
+            .as_ref()
+            .is_some_and(|session| self.library.pending_purges.contains(&session.meeting_id))
+        {
+            self.last_session = None;
+        }
+        self.revision = self.revision.saturating_add(1);
+    }
+
+    pub fn create_folder(&mut self, name: String) -> Result<Folder> {
+        let name = self.library.check_name(&name, None)?;
+        let folder = Folder {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+        };
+        let mut library = self.library.clone();
+        library.folders.insert(folder.id.clone(), folder.clone());
+        self.commit_library(library)?;
+        Ok(folder)
+    }
+
+    pub fn rename_folder(&mut self, id: &str, name: String) -> Result<Folder> {
+        store::validate_id(id)?;
+        if !self.library.folders.contains_key(id) {
+            return Err(CoreError::InvalidInput("폴더를 찾을 수 없습니다.".into()));
+        }
+        let folder = Folder {
+            id: id.into(),
+            name: self.library.check_name(&name, Some(id))?,
+        };
+        let mut library = self.library.clone();
+        library.folders.insert(id.into(), folder.clone());
+        self.commit_library(library)?;
+        Ok(folder)
+    }
+
+    pub fn delete_folder(&mut self, id: &str) -> Result<()> {
+        store::validate_id(id)?;
+        let mut library = self.library.clone();
+        if library.folders.remove(id).is_none() {
+            return Err(CoreError::InvalidInput("폴더를 찾을 수 없습니다.".into()));
+        }
+        for placement in library.placements.values_mut() {
+            if placement.folder_id.as_deref() == Some(id) {
+                placement.folder_id = None;
+            }
+        }
+        self.commit_library(library)
+    }
+
+    fn library_ids(&self, ids: &[String], allow_purged: bool) -> Result<BTreeSet<String>> {
+        if self.quitting {
+            return Err(CoreError::Unavailable);
+        }
+        if ids.is_empty() {
+            return Err(CoreError::InvalidInput("회의를 선택해 주세요.".into()));
+        }
+        let ids: BTreeSet<_> = ids.iter().cloned().collect();
+        for id in &ids {
+            store::validate_id(id)?;
+            if !self.meetings.contains_key(id)
+                && !(allow_purged && self.library.pending_purges.contains(id))
+            {
+                return Err(CoreError::MeetingNotFound);
+            }
+        }
+        Ok(ids)
+    }
+
+    pub fn move_meetings(&mut self, ids: &[String], folder_id: Option<String>) -> Result<()> {
+        let ids = self.library_ids(ids, false)?;
+        if let Some(id) = &folder_id {
+            store::validate_id(id)?;
+            if !self.library.folders.contains_key(id) {
+                return Err(CoreError::InvalidInput("폴더를 찾을 수 없습니다.".into()));
+            }
+        }
+        for id in &ids {
+            self.require_active_meeting(id)?;
+        }
+        let mut library = self.library.clone();
+        for id in ids {
+            library.placements.entry(id).or_default().folder_id = folder_id.clone();
+        }
+        self.commit_library(library)
+    }
+
+    pub fn trash_meetings(&mut self, ids: &[String]) -> Result<()> {
+        let ids = self.library_ids(ids, false)?;
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|capture| ids.contains(&capture.manifest.meeting_id))
+        {
+            return Err(CoreError::InvalidState(
+                "녹음을 종료한 뒤 삭제해 주세요.".into(),
+            ));
+        }
+        let mut library = self.library.clone();
+        let now = store::now();
+        for id in ids {
+            library
+                .placements
+                .entry(id)
+                .or_default()
+                .deleted_at
+                .get_or_insert(now);
+        }
+        self.commit_library(library)
+    }
+
+    pub fn restore_meetings(&mut self, ids: &[String]) -> Result<()> {
+        let ids = self.library_ids(ids, false)?;
+        let mut library = self.library.clone();
+        for id in ids {
+            library.placements.entry(id).or_default().deleted_at = None;
+        }
+        self.commit_library(library)
+    }
+
+    pub fn purge_meetings(&mut self, ids: &[String]) -> Result<()> {
+        let ids = self.library_ids(ids, true)?;
+        for id in &ids {
+            if self
+                .meetings
+                .get(id)
+                .is_some_and(|stored| stored.meeting.deleted_at.is_none())
+            {
+                return Err(CoreError::InvalidState(
+                    "휴지통에 있는 회의만 영구 삭제할 수 있습니다.".into(),
+                ));
+            }
+        }
+        self.store.validate_purge(&ids)?;
+        let mut library = self.library.clone();
+        for id in &ids {
+            library.placements.remove(id);
+            library.pending_purges.insert(id.clone());
+        }
+        self.commit_library(library)?;
+        self.store.cleanup_purges(&self.library).map_err(|_| CoreError::Storage(
+            "회의를 목록에서 제거했지만 일부 파일을 삭제하지 못했습니다. 앱을 다시 열면 재시도합니다.".into()
+        ))
+    }
+
     pub fn update_meeting(&mut self, id: &str, title: String, notes: String) -> Result<Meeting> {
         if self.quitting {
             return Err(CoreError::Unavailable);
         }
-        store::validate_id(id)?;
+        self.require_active_meeting(id)?;
         store::validate_text(&title, &notes)?;
         let mut stored = self
             .meetings
@@ -100,7 +290,7 @@ impl Engine {
         if self.quitting {
             return Err(CoreError::Unavailable);
         }
-        store::validate_id(id)?;
+        self.require_active_meeting(id)?;
         if let Some(date) = &meeting_date {
             store::validate_meeting_date(date)?;
         }
@@ -128,7 +318,7 @@ impl Engine {
         if self.quitting {
             return Err(CoreError::Unavailable);
         }
-        store::validate_id(id)?;
+        self.require_active_meeting(id)?;
         if self.capture.is_some() {
             return Err(CoreError::RecordingBusy);
         }
@@ -349,6 +539,7 @@ impl Engine {
         self.revision = self.revision.saturating_add(1);
         Snapshot {
             revision: self.revision,
+            folders: self.folders(),
             meetings: self.meetings(),
             session: self
                 .capture
@@ -359,7 +550,7 @@ impl Engine {
     }
 
     pub fn audio_path(&self, meeting_id: &str) -> Result<PathBuf> {
-        store::validate_id(meeting_id)?;
+        self.require_active_meeting(meeting_id)?;
         let meeting = &self
             .meetings
             .get(meeting_id)
@@ -1184,5 +1375,235 @@ mod tests {
         let link = engine.store.root.with_file_name("linked-dev");
         symlink(&engine.store.root, &link).unwrap();
         assert!(CoreHandle::open(link).is_err());
+    }
+
+    #[test]
+    fn library_folders_and_placements_survive_reopening_without_moving_audio() {
+        let (_temporary, mut engine) = engine();
+        let folder = engine.create_folder("  주간 회의  ".into()).unwrap();
+        assert_eq!(folder.name, "주간 회의");
+        assert!(engine.create_folder("주간 회의".into()).is_err());
+        let other = engine.create_folder("Planning".into()).unwrap();
+        assert!(engine.create_folder("planning".into()).is_err());
+        assert!(engine.rename_folder(&other.id, "주간 회의".into()).is_err());
+        let meeting = engine.create_meeting("회의".into(), "메모".into()).unwrap();
+        let (session, mut sink) = synthetic(&mut engine, &meeting.id);
+        sink.write(&[0.5_f32.to_le_bytes(); 2].concat());
+        engine.stop(&session).unwrap();
+        let audio = engine.audio_path(&meeting.id).unwrap();
+        engine
+            .move_meetings(&[meeting.id.clone()], Some(folder.id.clone()))
+            .unwrap();
+        engine
+            .update_meeting(&meeting.id, "바뀐 이름".into(), "수정".into())
+            .unwrap();
+        assert_eq!(engine.audio_path(&meeting.id).unwrap(), audio);
+        let stored: StoredMeeting = store::read_json(
+            &engine
+                .store
+                .root
+                .join("meetings")
+                .join(&meeting.id)
+                .join("meeting.json"),
+        )
+        .unwrap();
+        assert_eq!(stored.meeting.folder_id, None);
+        let root = engine.store.root.clone();
+        drop(engine);
+        let reopened = Engine::open(root).unwrap();
+        assert_eq!(
+            reopened
+                .meetings()
+                .iter()
+                .find(|value| value.id == meeting.id)
+                .unwrap()
+                .folder_id,
+            Some(folder.id)
+        );
+        assert_eq!(reopened.folders().len(), 2);
+        assert_eq!(reopened.audio_path(&meeting.id).unwrap(), audio);
+    }
+
+    #[test]
+    fn batch_validation_prevents_partial_move_trash_or_purge() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine
+            .create_meeting("보존할 회의".into(), "".into())
+            .unwrap();
+        let folder = engine.create_folder("폴더".into()).unwrap();
+        let unknown = Uuid::new_v4().to_string();
+        let ids = [meeting.id.clone(), unknown];
+        assert!(engine.move_meetings(&ids, Some(folder.id)).is_err());
+        assert!(engine.trash_meetings(&ids).is_err());
+        assert_eq!(engine.meetings()[0].folder_id, None);
+        assert_eq!(engine.meetings()[0].deleted_at, None);
+        assert!(engine.purge_meetings(&[meeting.id.clone()]).is_err());
+        assert!(engine
+            .store
+            .root
+            .join("meetings")
+            .join(&meeting.id)
+            .exists());
+    }
+
+    #[test]
+    fn deleting_folder_unfiles_active_and_trashed_meetings_without_deleting_them() {
+        let (_temporary, mut engine) = engine();
+        let folder = engine.create_folder("삭제할 폴더".into()).unwrap();
+        let first = engine.create_meeting("회의 1".into(), "".into()).unwrap();
+        let second = engine.create_meeting("회의 2".into(), "".into()).unwrap();
+        let ids = [first.id.clone(), second.id.clone()];
+        engine.move_meetings(&ids, Some(folder.id.clone())).unwrap();
+        engine.trash_meetings(&[second.id.clone()]).unwrap();
+        engine.delete_folder(&folder.id).unwrap();
+        assert_eq!(engine.meetings().len(), 2);
+        assert!(engine
+            .meetings()
+            .iter()
+            .all(|meeting| meeting.folder_id.is_none()));
+        engine.restore_meetings(&[second.id]).unwrap();
+        assert!(engine
+            .meetings()
+            .iter()
+            .all(|meeting| meeting.deleted_at.is_none()));
+    }
+
+    #[test]
+    fn trash_is_persistent_and_rejects_edits_and_recording_until_restore() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine
+            .create_meeting("회의".into(), "기존 메모".into())
+            .unwrap();
+        engine.trash_meetings(&[meeting.id.clone()]).unwrap();
+        assert!(engine.require_active_meeting(&meeting.id).is_err());
+        assert!(engine
+            .update_meeting(&meeting.id, "변경".into(), "".into())
+            .is_err());
+        assert!(engine
+            .set_meeting_date(&meeting.id, Some("2026-10-21".into()))
+            .is_err());
+        assert!(engine.draft(&meeting.id).is_err());
+        let root = engine.store.root.clone();
+        drop(engine);
+        let mut reopened = Engine::open(root).unwrap();
+        assert!(reopened.meetings()[0].deleted_at.is_some());
+        reopened.restore_meetings(&[meeting.id.clone()]).unwrap();
+        assert!(reopened.require_active_meeting(&meeting.id).is_ok());
+        assert_eq!(reopened.meetings()[0].notes, "기존 메모");
+    }
+
+    #[test]
+    fn recording_cannot_be_trashed_or_permanently_deleted() {
+        let (_temporary, mut engine) = engine();
+        let first = engine
+            .create_meeting("다른 회의".into(), "".into())
+            .unwrap();
+        let meeting = engine.create_meeting("녹음 중".into(), "".into()).unwrap();
+        let (id, _) = synthetic(&mut engine, &meeting.id);
+        assert!(engine
+            .trash_meetings(&[first.id.clone(), meeting.id.clone()])
+            .is_err());
+        assert!(engine
+            .meetings()
+            .iter()
+            .all(|meeting| meeting.deleted_at.is_none()));
+        assert!(engine.purge_meetings(&[meeting.id]).is_err());
+        engine.stop(&id).unwrap();
+    }
+
+    #[test]
+    fn permanent_deletion_removes_only_selected_meeting_and_keeps_tombstone() {
+        let (_temporary, mut engine) = engine();
+        let first = engine.create_meeting("삭제".into(), "".into()).unwrap();
+        let second = engine.create_meeting("보존".into(), "메모".into()).unwrap();
+        let models = engine.store.root.join("models");
+        fs::create_dir(&models).unwrap();
+        fs::write(models.join("model.bin"), b"preserved model").unwrap();
+        engine.trash_meetings(&[first.id.clone()]).unwrap();
+        engine.purge_meetings(&[first.id.clone()]).unwrap();
+        assert!(!engine.store.root.join("meetings").join(&first.id).exists());
+        assert!(engine.store.root.join("meetings").join(&second.id).exists());
+        assert_eq!(
+            fs::read(models.join("model.bin")).unwrap(),
+            b"preserved model"
+        );
+        assert!(engine.library.pending_purges.contains(&first.id));
+        let root = engine.store.root.clone();
+        drop(engine);
+        let reopened = Engine::open(root).unwrap();
+        assert_eq!(reopened.meetings().len(), 1);
+        assert_eq!(reopened.meetings()[0].id, second.id);
+    }
+
+    #[test]
+    fn library_write_failure_does_not_change_batch_in_memory_or_on_disk() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine.create_meeting("회의".into(), "보존".into()).unwrap();
+        fs::create_dir(engine.store.root.join("library.json")).unwrap();
+        assert!(engine.trash_meetings(&[meeting.id.clone()]).is_err());
+        assert_eq!(engine.meetings()[0].deleted_at, None);
+        let stored: StoredMeeting = store::read_json(
+            &engine
+                .store
+                .root
+                .join("meetings")
+                .join(meeting.id)
+                .join("meeting.json"),
+        )
+        .unwrap();
+        assert_eq!(stored.meeting.notes, "보존");
+        assert_eq!(stored.meeting.deleted_at, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn purge_refuses_linked_files_and_preserves_the_external_target() {
+        use std::os::unix::fs::symlink;
+        let (_temporary, mut engine) = engine();
+        let meeting = engine.create_meeting("회의".into(), "".into()).unwrap();
+        let outside = engine.store.root.join("external.txt");
+        fs::write(&outside, b"do not touch").unwrap();
+        symlink(
+            &outside,
+            engine
+                .store
+                .root
+                .join("meetings")
+                .join(&meeting.id)
+                .join("linked.txt"),
+        )
+        .unwrap();
+        engine.trash_meetings(&[meeting.id.clone()]).unwrap();
+        assert!(engine.purge_meetings(&[meeting.id.clone()]).is_err());
+        assert!(!engine.library.pending_purges.contains(&meeting.id));
+        assert_eq!(fs::read(&outside).unwrap(), b"do not touch");
+        assert!(engine.meetings()[0].deleted_at.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn purge_cleanup_is_explicit_and_reports_failure_without_reviving_a_meeting() {
+        use std::os::unix::fs::symlink;
+        let (_temporary, mut engine) = engine();
+        let meeting = engine.create_meeting("회의".into(), "".into()).unwrap();
+        engine.trash_meetings(&[meeting.id.clone()]).unwrap();
+        engine.purge_meetings(&[meeting.id.clone()]).unwrap();
+        let root = engine.store.root.clone();
+        let path = root.join("meetings").join(&meeting.id);
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("unfinished.raw"), b"pending cleanup").unwrap();
+        drop(engine);
+        let mut reopened = Engine::open(root.clone()).unwrap();
+        assert!(reopened.meetings().is_empty());
+        assert!(path.exists());
+        reopened.retry_purge_cleanup().unwrap();
+        assert!(!path.exists());
+        let outside = root.join("external");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.raw"), b"preserved").unwrap();
+        symlink(&outside, &path).unwrap();
+        assert!(reopened.retry_purge_cleanup().is_err());
+        assert_eq!(fs::read(outside.join("keep.raw")).unwrap(), b"preserved");
+        assert!(reopened.meetings().is_empty());
     }
 }

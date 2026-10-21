@@ -10,7 +10,8 @@ mod recorder_policy;
 mod storage_space;
 mod summary;
 use grove_core::{
-    CoreHandle, Device, Meeting, Snapshot, SummaryView, Transcript, TranscriptVersion,
+    CoreHandle, Device, Meeting, Snapshot, SummaryView, Transcript, TranscriptSpeaker,
+    TranscriptVersion,
 };
 use processing::{Processing, Progress};
 use serde::Serialize;
@@ -85,7 +86,9 @@ fn request_recorder_sync(app: &tauri::AppHandle) {
 
 fn snapshot_changed(previous: Option<&Snapshot>, snapshot: &Snapshot) -> bool {
     previous.map_or(true, |value| {
-        value.meetings != snapshot.meetings || value.session != snapshot.session
+        value.meetings != snapshot.meetings
+            || value.folders != snapshot.folders
+            || value.session != snapshot.session
     })
 }
 
@@ -131,6 +134,7 @@ mod snapshot_tests {
         let initial = Snapshot {
             revision: 1,
             meetings: vec![],
+            folders: vec![],
             session: None,
         };
         let mut next = initial.clone();
@@ -150,6 +154,12 @@ mod snapshot_tests {
         elapsed.session.as_mut().unwrap().elapsed_ms += 1;
         assert!(snapshot_changed(Some(&paused), &elapsed));
         assert!(snapshot_changed(Some(&paused), &initial));
+        let mut next = initial.clone();
+        next.folders.push(grove_core::Folder {
+            id: "folder".into(),
+            name: "Project".into(),
+        });
+        assert!(snapshot_changed(Some(&initial), &next));
     }
 }
 
@@ -240,6 +250,73 @@ async fn read_snapshot(
     on_core(state.core.clone(), |core| core.snapshot()).await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResults {
+    ids: Vec<String>,
+    unavailable: usize,
+}
+
+#[tauri::command]
+async fn search_meetings(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    query: String,
+    include_deleted: bool,
+) -> Result<SearchResults, String> {
+    require_main(&window)?;
+    let query = query.trim().to_lowercase();
+    if query.len() > 4096 || query.contains('\0') {
+        return Err("검색어가 너무 길거나 올바르지 않습니다.".into());
+    }
+    let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
+    let mut result = SearchResults {
+        ids: Vec::new(),
+        unavailable: 0,
+    };
+    for meeting in snapshot.meetings {
+        if !include_deleted && meeting.deleted_at.is_some() {
+            continue;
+        }
+        if query.is_empty()
+            || meeting.title.to_lowercase().contains(&query)
+            || meeting.notes.to_lowercase().contains(&query)
+        {
+            result.ids.push(meeting.id);
+            continue;
+        }
+        let id = meeting.id.clone();
+        let transcript = on_core(state.core.clone(), move |core| core.transcript(&id)).await;
+        let mut unavailable = transcript.is_err();
+        let matched = transcript.ok().flatten().is_some_and(|transcript| {
+            transcript
+                .segments
+                .iter()
+                .any(|segment| segment.text.to_lowercase().contains(&query))
+                || transcript
+                    .speakers
+                    .iter()
+                    .any(|speaker| speaker.name.to_lowercase().contains(&query))
+        });
+        if matched {
+            result.ids.push(meeting.id);
+        } else {
+            let id = meeting.id.clone();
+            let summary = on_core(state.core.clone(), move |core| core.summary(&id)).await;
+            unavailable |= summary.is_err();
+            if summary
+                .ok()
+                .flatten()
+                .is_some_and(|summary| summary.document.text.to_lowercase().contains(&query))
+            {
+                result.ids.push(meeting.id);
+            }
+        }
+        result.unavailable += usize::from(unavailable);
+    }
+    Ok(result)
+}
+
 #[tauri::command]
 async fn create_meeting(
     window: WebviewWindow,
@@ -286,6 +363,133 @@ async fn set_meeting_date(
     let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
     publish(&app, &snapshot);
     Ok(meeting)
+}
+
+async fn finish_library_change(
+    app: &tauri::AppHandle,
+    core: CoreHandle,
+    result: Result<(), String>,
+) -> Result<Snapshot, String> {
+    let snapshot = on_core(core, |core| core.snapshot()).await;
+    if let Ok(snapshot) = &snapshot {
+        publish(app, snapshot);
+    }
+    result?;
+    snapshot
+}
+
+#[tauri::command]
+async fn create_folder(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    name: String,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let result = on_core(state.core.clone(), move |core| {
+        core.create_folder(&name).map(|_| ())
+    })
+    .await;
+    finish_library_change(&app, state.core.clone(), result).await
+}
+
+#[tauri::command]
+async fn rename_folder(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    id: String,
+    name: String,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let result = on_core(state.core.clone(), move |core| {
+        core.rename_folder(&id, &name).map(|_| ())
+    })
+    .await;
+    finish_library_change(&app, state.core.clone(), result).await
+}
+
+#[tauri::command]
+async fn delete_folder(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    id: String,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let result = on_core(state.core.clone(), move |core| core.delete_folder(&id)).await;
+    finish_library_change(&app, state.core.clone(), result).await
+}
+
+#[tauri::command]
+async fn move_meetings(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    ids: Vec<String>,
+    folder_id: Option<String>,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let result = on_core(state.core.clone(), move |core| {
+        core.move_meetings(ids, folder_id)
+    })
+    .await;
+    finish_library_change(&app, state.core.clone(), result).await
+}
+
+#[tauri::command]
+async fn trash_meetings(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    ids: Vec<String>,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let processing = state.processing.clone();
+    let result = on_core(state.core.clone(), move |core| {
+        processing.meeting_removal(&core, &ids, || core.trash_meetings(ids.clone()))
+    })
+    .await;
+    finish_library_change(&app, state.core.clone(), result).await
+}
+
+#[tauri::command]
+async fn restore_meetings(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    ids: Vec<String>,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let result = on_core(state.core.clone(), move |core| core.restore_meetings(ids)).await;
+    finish_library_change(&app, state.core.clone(), result).await
+}
+
+#[tauri::command]
+async fn purge_meetings(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    ids: Vec<String>,
+) -> Result<Snapshot, String> {
+    require_main(&window)?;
+    let processing = state.processing.clone();
+    let result = on_core(state.core.clone(), move |core| {
+        processing.meeting_removal(&core, &ids, || {
+            processing.bind_legacy_jobs(&core)?;
+            let result = core.purge_meetings(ids.clone());
+            let remaining = core.list_meetings()?;
+            let purged = ids
+                .iter()
+                .filter(|id| !remaining.iter().any(|meeting| &meeting.id == *id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let cleanup = processing.purge_meeting_jobs(&purged);
+            result.and(cleanup)
+        })
+    })
+    .await;
+    finish_library_change(&app, state.core.clone(), result).await
 }
 
 #[tauri::command]
@@ -721,6 +925,22 @@ async fn save_transcript(
     .await
 }
 
+#[tauri::command]
+async fn save_speakers(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+    expected: TranscriptVersion,
+    speakers: Vec<TranscriptSpeaker>,
+    assignments: Vec<Option<String>>,
+) -> Result<Transcript, String> {
+    require_main(&window)?;
+    on_core(state.core.clone(), move |core| {
+        core.edit_speakers(&meeting_id, expected, speakers, assignments)
+    })
+    .await
+}
+
 #[cfg(target_os = "macos")]
 fn tray_icon(_theme: tauri::Theme) -> tauri::image::Image<'static> {
     tauri::include_image!("icons/tray-template.png")
@@ -745,9 +965,17 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_snapshot,
+            search_meetings,
             create_meeting,
             update_meeting,
             set_meeting_date,
+            create_folder,
+            rename_folder,
+            delete_folder,
+            move_meetings,
+            trash_meetings,
+            restore_meetings,
+            purge_meetings,
             list_devices,
             start_recording,
             pause_recording,
@@ -769,6 +997,7 @@ fn main() {
             cancel_processing,
             read_transcript,
             save_transcript,
+            save_speakers,
             prepare_summary_model,
             summarize_meeting,
             read_summary
@@ -777,6 +1006,7 @@ fn main() {
             let root = app.path().app_data_dir()?;
             let core = CoreHandle::open(&root)?;
             let processing = Processing::new(root, app.path().resource_dir()?);
+            processing.cleanup_removed_meeting_jobs(&core);
             let polling = Arc::new(AtomicBool::new(true));
             app.manage(DesktopState {
                 core: core.clone(),

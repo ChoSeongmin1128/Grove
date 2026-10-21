@@ -47,7 +47,7 @@
     "category": "Productivity",
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "bundleVersion": "3",
+      "bundleVersion": "4",
       "infoPlist": "Info.plist"
     },
     "windows": {

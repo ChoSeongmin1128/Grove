@@ -1,3 +1,4 @@
+use crate::library::Library;
 use crate::{AudioArtifact, CoreError, Meeting, MeetingStatus, Result};
 use fs2::FileExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -185,18 +186,41 @@ impl Store {
     }
 
     pub fn load(&self) -> Result<BTreeMap<String, StoredMeeting>> {
+        self.load_with_library(&self.load_library()?)
+    }
+
+    pub fn load_library(&self) -> Result<Library> {
+        let path = checked_path(&self.root, Path::new("library.json"))?;
+        let library = if path.exists() {
+            read_json(&path)?
+        } else {
+            Library::default()
+        };
+        library.validate()?;
+        Ok(library)
+    }
+
+    pub fn save_library(&self, library: &Library) -> Result<()> {
+        library.validate()?;
+        write_json(&self.root, Path::new("library.json"), library)
+    }
+
+    pub fn load_with_library(&self, library: &Library) -> Result<BTreeMap<String, StoredMeeting>> {
         let meetings_path = checked_path(&self.root, Path::new("meetings"))?;
         let mut meetings = BTreeMap::new();
         let mut seen = BTreeSet::new();
         for entry in fs::read_dir(meetings_path)? {
             let entry = entry?;
+            let id = entry.file_name().to_string_lossy().into_owned();
+            validate_id(&id)?;
+            if library.pending_purges.contains(&id) {
+                continue;
+            }
             if entry.file_type()?.is_symlink() || !entry.file_type()?.is_dir() {
                 return Err(CoreError::Storage(
                     "회의 폴더의 형식이 올바르지 않습니다.".into(),
                 ));
             }
-            let id = entry.file_name().to_string_lossy().into_owned();
-            validate_id(&id)?;
             let relative = Path::new("meetings").join(&id).join("meeting.json");
             let path = checked_path(&self.root, &relative)?;
             if !path.exists() {
@@ -211,7 +235,7 @@ impl Store {
                 }
                 continue;
             }
-            let stored: StoredMeeting = read_json(&path)?;
+            let mut stored: StoredMeeting = read_json(&path)?;
             if stored.schema_version != SCHEMA_VERSION
                 || stored.meeting.id != id
                 || !seen.insert(stored.meeting.id.clone())
@@ -231,6 +255,7 @@ impl Store {
                 validate_artifact(&id, audio)?;
                 checked_path(&self.root, Path::new(&audio.relative_path))?;
             }
+            library.project(&mut stored.meeting);
             meetings.insert(id, stored);
         }
         Ok(meetings)
@@ -252,6 +277,8 @@ impl Store {
             error: None,
             warning: None,
             transcript_id: None,
+            folder_id: None,
+            deleted_at: None,
         };
         let relative = Path::new("meetings").join(&meeting.id);
         let directory = checked_path(&self.root, &relative)?;
@@ -270,7 +297,35 @@ impl Store {
         let relative = Path::new("meetings")
             .join(&stored.meeting.id)
             .join("meeting.json");
-        write_json(&self.root, &relative, stored)
+        let mut base = stored.clone();
+        base.meeting.folder_id = None;
+        base.meeting.deleted_at = None;
+        write_json(&self.root, &relative, &base)
+    }
+
+    pub fn validate_purge(&self, ids: &BTreeSet<String>) -> Result<()> {
+        for id in ids {
+            validate_id(id)?;
+            let path = checked_path(&self.root, &Path::new("meetings").join(id))?;
+            if path.exists() {
+                validate_removal_tree(&path)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn cleanup_purges(&self, library: &Library) -> Result<()> {
+        self.validate_purge(&library.pending_purges)?;
+        for id in &library.pending_purges {
+            let path = checked_path(&self.root, &Path::new("meetings").join(id))?;
+            if path.exists() {
+                // remove_dir_all does not follow links. Validation also refuses linked
+                // or special entries, and the root never includes model directories.
+                fs::remove_dir_all(&path)?;
+                sync_parent(&path)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn prepare_capture(&self, manifest: &Manifest) -> Result<File> {
@@ -659,6 +714,21 @@ fn validate_existing(path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+fn validate_removal_tree(path: &Path) -> Result<()> {
+    validate_existing(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            validate_removal_tree(&entry?.path())?;
+        }
+    } else if !metadata.is_file() {
+        return Err(CoreError::Storage(
+            "일반 녹음 파일이 아닌 항목은 삭제할 수 없습니다.".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_directory(path: &Path) -> Result<()> {

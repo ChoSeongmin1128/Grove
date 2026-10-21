@@ -20,6 +20,11 @@ This file applies to the entire repository.
   Packaged llama.cpp enables on-demand Gemma 4 E4B Q4 summaries with separately stored
   source revisions. Windows transcription, independent diarization, speaker matching and
   integrations remain unconnected. Do not fabricate transcripts or summary results.
+- Native speaker editing preserves MOSS labels within their `asr_chunk` scope; never
+  equate the same label across independently recognized chunks. Manual names/merges
+  are transcript revisions, not automatic identity verification. Independent
+  full-recording diarization is still unconnected; eight actual speakers remain a
+  validation target, not a qualified support claim. See `docs/meeting-library-and-speakers.md`.
 - Model selection will prefer qualified GPU paths and retain CPU compatibility.
   Initial diarization support targets up to eight actual speakers; more attendees
   must not block recording or transcription. Preserve transcription on speaker-stage failure.
@@ -238,6 +243,9 @@ codesign --verify --deep --strict .work/dist/Grove.app
 
 ## Document index
 
+- [`docs/meeting-library-and-speakers.md`](docs/meeting-library-and-speakers.md): native
+  folders, trash/purge and cancellation ownership, speaker revisions, chunk-scoped
+  model labels, content search and platform/quality validation boundaries.
 - [`docs/automatic-speaker-identification.md`](docs/automatic-speaker-identification.md):
   microphone enrollment, optional pinned voice model, attendance candidates and encrypted
   registry; automatic naming remains blocked pending independent-session qualification.

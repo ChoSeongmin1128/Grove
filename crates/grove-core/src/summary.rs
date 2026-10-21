@@ -69,6 +69,7 @@ impl Engine {
         Ok(Some(SummaryView { document, stale }))
     }
     pub fn commit_summary(&mut self, id: &str, draft: SummaryDraft) -> Result<Summary> {
+        self.require_active_meeting(id)?;
         if self.quitting {
             return Err(CoreError::Unavailable);
         }

@@ -43,7 +43,9 @@ export function documentExport(meeting, transcript, summary, kind, format = 'txt
     if (!transcript?.segments?.length) throw new Error('내보낼 음성 기록이 없습니다.');
     body = transcript.segments.map(segment => {
       const timestamp = duration(segment.start * 1000);
-      return format === 'md' ? `**${timestamp}**\n\n${markdown(segment.text)}` : `[${timestamp}] ${segment.text}`;
+      const name = transcript.speakers?.find(speaker => speaker.id === segment.speakerId)?.name;
+      const label = name ? `${timestamp} ${name}` : timestamp;
+      return format === 'md' ? `**${markdown(label)}**\n\n${markdown(segment.text)}` : `[${label}] ${segment.text}`;
     }).join('\n\n');
   } else {
     if (!summary?.document?.text) throw new Error('내보낼 요약이 없습니다.');

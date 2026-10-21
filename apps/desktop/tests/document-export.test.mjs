@@ -33,3 +33,9 @@ test('empty results and unsupported formats fail before a save dialog is request
   assert.throws(() => documentExport(meeting, null, null, 'summary', 'md'), /요약이 없습니다/);
   assert.throws(() => documentExport(meeting, transcript, null, 'transcript', 'html'), /지원하지 않는/);
 });
+
+test('voice export includes the current speaker names without exposing original model labels', () => {
+  const doc = { speakers: [{id:'S1',name:'진행자 [수정]'}], segments:[{start:10,speakerId:'S1',text:'현재 내용',originalText:'수정 전'}] };
+  assert.match(documentExport(meeting,doc,null,'transcript','txt').text,/\[00:10 진행자 \[수정\]\] 현재 내용/);
+  assert.ok(documentExport(meeting,doc,null,'transcript','md').text.includes('진행자 \\[수정\\]'));
+});

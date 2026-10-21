@@ -1,10 +1,12 @@
 mod capture;
 mod engine;
+mod library;
 mod store;
 mod summary;
 mod transcript;
 pub use summary::{Summary, SummaryDraft, SummaryProvenance, SummaryView};
-pub use transcript::{Transcript, TranscriptSegment, TranscriptVersion};
+pub use transcript::{Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptVersion};
+pub use library::Folder;
 
 use engine::Engine;
 use serde::{Deserialize, Serialize};
@@ -90,6 +92,10 @@ pub struct Meeting {
     pub warning: Option<String>,
     #[serde(default)]
     pub transcript_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,6 +128,7 @@ pub struct SessionSnapshot {
 pub struct Snapshot {
     pub revision: u64,
     pub meetings: Vec<Meeting>,
+    pub folders: Vec<Folder>,
     pub session: Option<SessionSnapshot>,
 }
 
@@ -214,6 +221,34 @@ impl CoreHandle {
         self.call(move |engine| engine.create_meeting(title, notes))
     }
 
+    pub fn create_folder(&self, name: &str) -> Result<Folder> {
+        let name = name.to_owned();
+        self.call(move |engine| engine.create_folder(name))
+    }
+    pub fn rename_folder(&self, id: &str, name: &str) -> Result<Folder> {
+        let (id, name) = (id.to_owned(), name.to_owned());
+        self.call(move |engine| engine.rename_folder(&id, name))
+    }
+    pub fn delete_folder(&self, id: &str) -> Result<()> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.delete_folder(&id))
+    }
+    pub fn move_meetings(&self, ids: Vec<String>, folder_id: Option<String>) -> Result<()> {
+        self.call(move |engine| engine.move_meetings(&ids, folder_id))
+    }
+    pub fn trash_meetings(&self, ids: Vec<String>) -> Result<()> {
+        self.call(move |engine| engine.trash_meetings(&ids))
+    }
+    pub fn restore_meetings(&self, ids: Vec<String>) -> Result<()> {
+        self.call(move |engine| engine.restore_meetings(&ids))
+    }
+    pub fn retry_purge_cleanup(&self) -> Result<()> {
+        self.call(|engine| engine.retry_purge_cleanup())
+    }
+    pub fn purge_meetings(&self, ids: Vec<String>) -> Result<()> {
+        self.call(move |engine| engine.purge_meetings(&ids))
+    }
+
     pub fn import_audio(&self, title: &str, source: &Path, prepared: &Path) -> Result<Meeting> {
         let (title, source, prepared) = (title.to_owned(), source.to_owned(), prepared.to_owned());
         self.call(move |engine| engine.import_audio(title, source, prepared))
@@ -242,6 +277,11 @@ impl CoreHandle {
     ) -> Result<Transcript> {
         let id = id.to_owned();
         self.call(move |engine| engine.edit_transcript(&id, expected, texts))
+    }
+
+    pub fn edit_speakers(&self, id: &str, expected: TranscriptVersion, speakers: Vec<TranscriptSpeaker>, assignments: Vec<Option<String>>) -> Result<Transcript> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.edit_speakers(&id, expected, speakers, assignments))
     }
 
     pub fn summary(&self, id: &str) -> Result<Option<SummaryView>> {

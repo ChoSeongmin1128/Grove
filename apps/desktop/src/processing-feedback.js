@@ -1,5 +1,6 @@
 const modelJobs = new Set(['setup', 'model', 'summary-model']);
 const jobTitles = {
+  cleanup: '임시 파일 정리',
   setup: '모델 준비',
   model: '음성 인식 모델 준비',
   'summary-model': '요약 모델 준비',

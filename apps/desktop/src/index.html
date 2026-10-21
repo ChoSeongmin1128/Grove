@@ -20,8 +20,8 @@
         <header class="library-header"><strong class="brand">Nero</strong><button id="create-meeting" class="primary with-icon" type="button" disabled>새 회의</button></header>
         <div class="library-actions"><button id="import-audio" type="button" class="quiet small" disabled>음성 가져오기</button></div>
         <label class="search-field"><span class="sr-only">회의 검색</span><input id="search" class="text-input text-input--compact" type="search" placeholder="회의 검색" autocomplete="off"></label>
-        <div class="library-heading"><h2>회의</h2><span id="meeting-count" class="muted type-caption"></span></div>
-        <nav id="meeting-list" class="meeting-list" aria-label="저장한 회의"></nav>
+        <div class="library-heading"><h2>폴더</h2><button id="new-folder" class="quiet small" type="button" aria-label="새 폴더">추가</button></div>
+        <nav id="folder-list" class="folder-list" aria-label="회의 분류"></nav>
         <footer class="library-footer"><button id="settings" class="quiet small" type="button">설정</button></footer>
       </aside>
       <main class="main-content">
@@ -45,9 +45,15 @@
             <p id="setup-message" class="setup-message" role="status">준비 상태 확인 중</p><div class="setup-actions"><button id="setup-download" class="primary" type="button" disabled>다운로드</button><button id="setup-cancel" class="quiet" type="button" hidden>취소</button><button id="setup-start" class="primary" type="button" hidden>새 회의</button><button id="setup-back" class="quiet" type="button" hidden>회의로 돌아가기</button></div>
           </div>
         </section>
+        <section id="library-screen" class="library-screen" aria-labelledby="library-title" hidden>
+          <header class="library-screen-header"><div><h1 id="library-title" tabindex="-1">전체 회의</h1><span id="library-count" class="type-caption muted"></span></div><button id="library-select-toggle" type="button" class="quiet small">선택</button></header>
+          <div id="library-batch" class="library-batch" hidden><span id="library-selected-count"></span><button id="library-select-all" type="button" class="quiet small">전체 선택</button><button id="library-move" type="button" class="small">이동</button><button id="library-trash" type="button" class="small">휴지통으로 이동</button><button id="library-restore" type="button" class="small" hidden>복원</button><button id="library-purge" type="button" class="small danger-text" hidden>영구 삭제</button><button id="library-selection-clear" type="button" class="quiet small">선택 해제</button></div>
+          <p id="library-search-status" class="muted type-caption" role="status" hidden></p>
+          <nav id="meeting-list" class="meeting-list" aria-label="저장한 회의"></nav><span id="meeting-count" class="sr-only"></span>
+        </section>
         <section id="welcome" class="welcome" hidden><div class="welcome-icon" aria-hidden="true"></div><h1>회의를 시작하세요</h1><p id="welcome-message">새 회의를 만들어 녹음하고 메모를 남기세요.</p><button id="welcome-create" class="primary with-icon" type="button" disabled>새 회의</button></section>
         <section id="meeting-detail" class="meeting-detail" hidden aria-label="회의 내용">
-          <header class="detail-header">
+          <header class="detail-header"><div class="detail-library-actions"><button id="library-back" type="button" class="quiet small">회의 목록</button><div class="row"><button id="meeting-move" type="button" class="quiet small">폴더 이동</button><button id="meeting-trash" type="button" class="quiet small">휴지통으로 이동</button></div></div>
             <div class="detail-context"><div class="meeting-day-field"><label for="meeting-day">회의 날짜</label><input id="meeting-day" data-field="meeting-day" type="date"></div><span id="meeting-status"></span></div>
             <span id="meeting-date-message" class="meeting-date-message type-caption" role="status" hidden></span>
             <label class="sr-only" for="meeting-title">회의 제목</label><input id="meeting-title" class="text-input text-input--title meeting-title" type="text" placeholder="회의 제목" maxlength="200" autocomplete="off">
@@ -77,7 +83,7 @@
           </section>
           <section class="notes-section"><div class="section-heading"><h2><label for="meeting-notes">메모</label></h2></div><textarea id="meeting-notes" class="text-input" placeholder="안건이나 기억할 내용을 적어 두세요." spellcheck="false"></textarea></section>
           <section id="transcript-section" class="transcript-section" aria-label="음성 기록">
-            <div class="section-heading transcript-heading"><h2>음성 기록</h2><div class="row"><button id="transcribe" type="button" class="small primary" disabled>텍스트로 변환</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button><button id="copy-transcript" type="button" class="small quiet" hidden>복사</button><details id="transcript-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
+            <div class="section-heading transcript-heading"><h2>음성 기록</h2><div class="row"><button id="speakers-button" type="button" class="small quiet" hidden>화자 편집</button><button id="transcribe" type="button" class="small primary" disabled>텍스트로 변환</button><button id="save-transcript" type="button" class="small" disabled>수정 저장</button><button id="copy-transcript" type="button" class="small quiet" hidden>복사</button><details id="transcript-export-menu" class="document-export" hidden><summary>내보내기</summary><div><button type="button" data-export-format="txt">텍스트 (.txt)</button><button type="button" data-export-format="md">Markdown (.md)</button></div></details></div></div>
             <p id="transcript-message" class="muted type-caption"></p><div id="transcript-rows"></div>
           </section>
           <section id="summary-section" class="summary-section" aria-label="회의록">
@@ -152,6 +158,8 @@
         </div>
       </div>
     </dialog>
+    <dialog id="speaker-dialog" class="speaker-dialog" aria-labelledby="speaker-dialog-title"><div id="speaker-dialog-body"></div></dialog>
+    <dialog id="library-dialog" class="library-dialog" aria-labelledby="library-dialog-title"><div id="library-dialog-body"></div></dialog>
     <dialog id="quit-dialog" class="quit-dialog" aria-labelledby="quit-title"></dialog>
     <script type="module" src="/main.js"></script>
   </body>

@@ -1,7 +1,7 @@
 use grove_core::{CoreHandle, SessionState, Snapshot};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -76,6 +76,13 @@ struct Running {
     id: String,
     cancel: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+    import_existing: Option<HashSet<String>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct JobOwner {
+    meeting_id: String,
 }
 
 #[derive(Default)]
@@ -275,6 +282,242 @@ impl Processing {
         self.update(|p| p.message = "취소 중".into());
         Ok(())
     }
+
+    pub fn meeting_removal<T>(
+        &self,
+        core: &CoreHandle,
+        ids: &[String],
+        action: impl FnOnce() -> grove_core::Result<T>,
+    ) -> grove_core::Result<T> {
+        let mut running = self.running.lock().unwrap();
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(grove_core::CoreError::InvalidState(
+                "앱을 종료하고 있습니다.".into(),
+            ));
+        }
+        let snapshot = core.snapshot()?;
+        if ids.is_empty()
+            || ids
+                .iter()
+                .any(|id| !snapshot.meetings.iter().any(|meeting| &meeting.id == id))
+        {
+            return Err(grove_core::CoreError::MeetingNotFound);
+        }
+        if snapshot.session.as_ref().is_some_and(|session| {
+            matches!(
+                session.state,
+                SessionState::Recording | SessionState::Paused
+            ) && ids.contains(&session.meeting_id)
+        }) {
+            return Err(grove_core::CoreError::InvalidState(
+                "녹음을 마친 뒤 삭제해 주세요.".into(),
+            ));
+        }
+        let affected = self
+            .progress
+            .lock()
+            .unwrap()
+            .meeting_id
+            .as_ref()
+            .is_some_and(|id| ids.contains(id))
+            || running
+                .as_ref()
+                .and_then(|job| job.import_existing.as_ref())
+                .is_some_and(|existing| {
+                    snapshot.meetings.iter().any(|meeting| {
+                        ids.contains(&meeting.id)
+                            && !existing.contains(&meeting.id)
+                            && meeting.audio.is_some()
+                    })
+                });
+        if affected {
+            if let Some(job) = running.take() {
+                job.cancel.store(true, Ordering::Release);
+                self.update(|progress| progress.message = "취소 중".into());
+                job.handle.join().map_err(|_| {
+                    grove_core::CoreError::InvalidState(
+                        "음성 처리 종료를 확인하지 못했습니다. 다시 시도해 주세요.".into(),
+                    )
+                })?;
+            }
+        }
+        action()
+    }
+
+    fn bind_job(path: &Path, meeting_id: &str) -> Result<(), String> {
+        let mut owner = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path.join("owner.json"))
+            .map_err(message)?;
+        serde_json::to_writer(
+            &mut owner,
+            &JobOwner {
+                meeting_id: meeting_id.into(),
+            },
+        )
+        .map_err(message)?;
+        owner.sync_all().map_err(message)
+    }
+
+    fn artifact_hash(path: &Path) -> Result<String, String> {
+        let mut file = plain_file(path)?;
+        if file.metadata().map_err(message)?.len() > 16 * 1024 * 1024 {
+            return Err("처리 결과가 너무 큽니다.".into());
+        }
+        let mut hash = Sha256::new();
+        let mut buffer = [0; 64 * 1024];
+        let mut total = 0;
+        loop {
+            let bytes = file.read(&mut buffer).map_err(message)?;
+            if bytes == 0 {
+                break;
+            }
+            total += bytes;
+            if total > 16 * 1024 * 1024 {
+                return Err("처리 결과가 너무 큽니다.".into());
+            }
+            hash.update(&buffer[..bytes]);
+        }
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
+    pub fn bind_legacy_jobs(&self, core: &CoreHandle) -> grove_core::Result<()> {
+        let mut owners: HashMap<String, Option<String>> = HashMap::new();
+        for meeting in core.list_meetings()? {
+            let path = self
+                .root
+                .join("meetings")
+                .join(&meeting.id)
+                .join("transcripts");
+            match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => (),
+                _ => return Ok(()),
+            }
+            let Ok(entries) = fs::read_dir(path) else {
+                return Ok(());
+            };
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    return Ok(());
+                };
+                let Ok(kind) = entry.file_type() else {
+                    return Ok(());
+                };
+                if !kind.is_dir() || Uuid::parse_str(&entry.file_name().to_string_lossy()).is_err()
+                {
+                    return Ok(());
+                }
+                let raw = entry.path().join("raw.json");
+                let Ok(hash) = Self::artifact_hash(&raw) else {
+                    return Ok(());
+                };
+                owners
+                    .entry(hash)
+                    .and_modify(|owner| {
+                        if owner.as_deref() != Some(meeting.id.as_str()) {
+                            *owner = None;
+                        }
+                    })
+                    .or_insert(Some(meeting.id.clone()));
+            }
+        }
+        let path = self.root.join("processing");
+        if !path.exists() {
+            return Ok(());
+        }
+        let path = directory(&self.root, "processing").map_err(grove_core::CoreError::Storage)?;
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir()
+                || Uuid::parse_str(&entry.file_name().to_string_lossy()).is_err()
+            {
+                continue;
+            }
+            let path = entry.path();
+            if fs::symlink_metadata(path.join("owner.json")).is_ok() {
+                continue;
+            }
+            let Ok(hash) = Self::artifact_hash(&path.join("moss.json")) else {
+                continue;
+            };
+            if let Some(Some(meeting_id)) = owners.get(&hash) {
+                Self::bind_job(&path, meeting_id).map_err(grove_core::CoreError::Storage)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn owned_jobs(&self) -> grove_core::Result<Vec<(PathBuf, JobOwner)>> {
+        let mut jobs = Vec::new();
+        let root = self.root.join("processing");
+        if !root.exists() {
+            return Ok(jobs);
+        }
+        let root = directory(&self.root, "processing").map_err(grove_core::CoreError::Storage)?;
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if Uuid::parse_str(&entry.file_name().to_string_lossy()).is_err()
+                || !entry.file_type()?.is_dir()
+            {
+                continue;
+            }
+            let path = entry.path();
+            let owner_path = path.join("owner.json");
+            let Ok(owner) = plain_file(&owner_path) else {
+                continue;
+            };
+            if owner.metadata()?.len() > 4096 {
+                continue;
+            }
+            let Ok(owner) = serde_json::from_reader::<_, JobOwner>(owner.take(4096)) else {
+                continue;
+            };
+            if Uuid::parse_str(&owner.meeting_id).is_err() {
+                continue;
+            }
+            jobs.push((path, owner));
+        }
+        Ok(jobs)
+    }
+
+    pub fn purge_meeting_jobs(&self, ids: &[String]) -> grove_core::Result<()> {
+        for (path, owner) in self.owned_jobs()? {
+            if ids.contains(&owner.meeting_id) {
+                fs::remove_dir_all(path)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn cleanup_removed_meeting_jobs(&self, core: &CoreHandle) {
+        let canonical_cleanup = core.retry_purge_cleanup();
+        let result = (|| -> grove_core::Result<()> {
+            let existing = core
+                .list_meetings()?
+                .into_iter()
+                .map(|meeting| meeting.id)
+                .collect::<HashSet<_>>();
+            for (path, owner) in self.owned_jobs()? {
+                if !existing.contains(&owner.meeting_id) {
+                    fs::remove_dir_all(path)?;
+                }
+            }
+            Ok(())
+        })();
+        if canonical_cleanup.is_err() || result.is_err() {
+            self.update(|progress| {
+                *progress = Progress {
+                    id: Some(Uuid::new_v4().to_string()),
+                    kind: "cleanup".into(),
+                    status: "failed".into(),
+                    message: "삭제한 회의의 임시 파일을 정리하지 못했습니다.".into(),
+                    ..Default::default()
+                };
+            });
+        }
+    }
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         if let Some(job) = self.running.lock().unwrap().take() {
@@ -289,6 +532,17 @@ impl Processing {
         self: &Arc<Self>,
         kind: &str,
         meeting_id: Option<String>,
+        action: impl FnOnce(Arc<Self>, Arc<AtomicBool>, PathBuf) -> Result<Option<String>, String>
+            + Send
+            + 'static,
+    ) -> Result<Progress, String> {
+        self.start_scoped(kind, meeting_id, None, action)
+    }
+    fn start_scoped(
+        self: &Arc<Self>,
+        kind: &str,
+        meeting_id: Option<String>,
+        importing_core: Option<CoreHandle>,
         action: impl FnOnce(Arc<Self>, Arc<AtomicBool>, PathBuf) -> Result<Option<String>, String>
             + Send
             + 'static,
@@ -308,8 +562,23 @@ impl Processing {
         if let Some(old) = running.take() {
             let _ = old.handle.join();
         }
+        let import_existing = importing_core
+            .map(|core| {
+                core.list_meetings()
+                    .map(|meetings| {
+                        meetings
+                            .into_iter()
+                            .map(|meeting| meeting.id)
+                            .collect::<HashSet<_>>()
+                    })
+                    .map_err(message)
+            })
+            .transpose()?;
         let id = Uuid::new_v4().to_string();
         let path = directory(&self.root, &format!("processing/{id}"))?;
+        if let Some(meeting_id) = &meeting_id {
+            Self::bind_job(&path, meeting_id)?;
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         self.update(|p| {
             *p = Progress {
@@ -344,7 +613,12 @@ impl Processing {
                 }
             });
         });
-        *running = Some(Running { id, cancel, handle });
+        *running = Some(Running {
+            id,
+            cancel,
+            handle,
+            import_existing,
+        });
         Ok(self.snapshot())
     }
     pub fn prepare_model(self: &Arc<Self>) -> Result<Progress, String> {
@@ -566,64 +840,72 @@ impl Processing {
         action()
     }
     pub fn import(self: &Arc<Self>, core: CoreHandle, source: PathBuf) -> Result<Progress, String> {
-        self.start("import", None, move |this, cancel, path| {
-            let source = source.canonicalize().map_err(message)?;
-            let mut input = plain_file(&source)?;
-            let ext = source
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("audio");
-            if !["wav", "m4a", "mp3", "aac", "aiff", "aif", "caf"]
-                .contains(&ext.to_ascii_lowercase().as_str())
-            {
-                return Err("지원하지 않는 음성 파일입니다.".into());
-            }
-            let copied = directory(&path, "source")?
-                .join(source.file_name().ok_or("음성 파일 이름이 필요합니다.")?);
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&copied)
-                .map_err(message)?;
-            let before = input.metadata().map_err(message)?;
-            let mut buffer = [0u8; 128 * 1024];
-            let mut bytes = 0u64;
-            loop {
-                cancelled(&cancel)?;
-                let n = input.read(&mut buffer).map_err(message)?;
-                if n == 0 {
-                    break;
+        self.start_scoped(
+            "import",
+            None,
+            Some(core.clone()),
+            move |this, cancel, path| {
+                let source = source.canonicalize().map_err(message)?;
+                let mut input = plain_file(&source)?;
+                let ext = source
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("audio");
+                if !["wav", "m4a", "mp3", "aac", "aiff", "aif", "caf"]
+                    .contains(&ext.to_ascii_lowercase().as_str())
+                {
+                    return Err("지원하지 않는 음성 파일입니다.".into());
                 }
-                output.write_all(&buffer[..n]).map_err(message)?;
-                bytes += n as u64;
-            }
-            output.sync_all().map_err(message)?;
-            drop(output);
-            if bytes != before.len()
-                || input.metadata().map_err(message)?.modified().ok() != before.modified().ok()
-            {
-                return Err("가져오는 동안 파일이 변경됐습니다. 다시 선택해 주세요.".into());
-            }
-            this.update(|p| p.message = "음성을 준비하고 있습니다.".into());
-            let prepared = path.join("analysis.wav");
-            this.run_worker(
-                &this.worker("AudioPrepare"),
-                &[&copied, &prepared],
-                &path.join("prepare.log"),
-                &cancel,
-            )?;
-            cancelled(&cancel)?;
-            let title = source
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("가져온 회의")
-                .chars()
-                .take(200)
-                .collect::<String>();
-            core.import_audio(&title, &copied, &prepared)
-                .map(|m| Some(m.id))
-                .map_err(message)
-        })
+                let copied = directory(&path, "source")?
+                    .join(source.file_name().ok_or("음성 파일 이름이 필요합니다.")?);
+                let mut output = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&copied)
+                    .map_err(message)?;
+                let before = input.metadata().map_err(message)?;
+                let mut buffer = [0u8; 128 * 1024];
+                let mut bytes = 0u64;
+                loop {
+                    cancelled(&cancel)?;
+                    let n = input.read(&mut buffer).map_err(message)?;
+                    if n == 0 {
+                        break;
+                    }
+                    output.write_all(&buffer[..n]).map_err(message)?;
+                    bytes += n as u64;
+                }
+                output.sync_all().map_err(message)?;
+                drop(output);
+                if bytes != before.len()
+                    || input.metadata().map_err(message)?.modified().ok() != before.modified().ok()
+                {
+                    return Err("가져오는 동안 파일이 변경됐습니다. 다시 선택해 주세요.".into());
+                }
+                this.update(|p| p.message = "음성을 준비하고 있습니다.".into());
+                let prepared = path.join("analysis.wav");
+                this.run_worker(
+                    &this.worker("AudioPrepare"),
+                    &[&copied, &prepared],
+                    &path.join("prepare.log"),
+                    &cancel,
+                )?;
+                cancelled(&cancel)?;
+                let title = source
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("가져온 회의")
+                    .chars()
+                    .take(200)
+                    .collect::<String>();
+                let meeting = core
+                    .import_audio(&title, &copied, &prepared)
+                    .map_err(message)?;
+                this.update(|progress| progress.meeting_id = Some(meeting.id.clone()));
+                Self::bind_job(&path, &meeting.id)?;
+                Ok(Some(meeting.id))
+            },
+        )
     }
     pub fn transcribe(
         self: &Arc<Self>,
@@ -642,6 +924,7 @@ impl Processing {
             "transcribe",
             Some(meeting_id.clone()),
             move |this, cancel, path| {
+                core.audio_path(&meeting_id).map_err(message)?;
                 if core.snapshot().map_err(message)?.session.is_some_and(|s| {
                     matches!(
                         s.state,
@@ -709,6 +992,7 @@ mod tests {
     fn completed_recording(session_id: &str, meeting_id: &str) -> Snapshot {
         serde_json::from_value(serde_json::json!({
             "revision": 1,
+            "folders": [],
             "meetings": [{
                 "id": meeting_id, "title": "Meeting", "notes": "", "createdAt": 1, "updatedAt": 2,
                 "status": "completed", "error": null,
@@ -809,6 +1093,7 @@ mod tests {
             id: "summary".into(),
             cancel,
             handle,
+            import_existing: None,
         });
         process.update(|p| {
             p.kind = "summary".into();
@@ -821,6 +1106,245 @@ mod tests {
             })
             .unwrap();
         assert!(process.running.lock().unwrap().is_none());
+    }
+    #[test]
+    fn removing_a_meeting_waits_for_its_worker_and_blocks_new_start_until_storage_finishes() {
+        let (_temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let meeting = core.create_meeting("Meeting", "").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let ended = finished.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            ended.store(true, Ordering::Release);
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "job".into(),
+            cancel,
+            handle,
+            import_existing: None,
+        });
+        process.update(|progress| {
+            progress.meeting_id = Some(meeting.id.clone());
+            progress.kind = "transcribe".into();
+            progress.status = "running".into();
+        });
+        process
+            .meeting_removal(&core, &[meeting.id], || {
+                assert!(finished.load(Ordering::Acquire));
+                assert!(process.running.try_lock().is_err());
+                Ok(())
+            })
+            .unwrap();
+        assert!(process.running.lock().unwrap().is_none());
+    }
+    #[test]
+    fn deleting_another_meeting_does_not_cancel_an_unrelated_job() {
+        let (_temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let meeting = core.create_meeting("Meeting", "").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "download".into(),
+            cancel: cancel.clone(),
+            handle,
+            import_existing: None,
+        });
+        process.update(|progress| {
+            progress.kind = "summary-model".into();
+            progress.status = "running".into();
+        });
+        process
+            .meeting_removal(&core, &[meeting.id], || Ok(()))
+            .unwrap();
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(process.running.lock().unwrap().is_some());
+        process.shutdown();
+    }
+    #[test]
+    fn import_completion_is_joined_before_removing_its_new_meeting() {
+        let (_temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let audio = process.root.join("source.wav");
+        let mut wave = Vec::from(b"RIFF".as_slice());
+        wave.extend_from_slice(&38u32.to_le_bytes());
+        wave.extend_from_slice(b"WAVEfmt ");
+        wave.extend_from_slice(&16u32.to_le_bytes());
+        for value in [1u16, 1u16] {
+            wave.extend_from_slice(&value.to_le_bytes());
+        }
+        wave.extend_from_slice(&16000u32.to_le_bytes());
+        wave.extend_from_slice(&32000u32.to_le_bytes());
+        for value in [2u16, 16u16] {
+            wave.extend_from_slice(&value.to_le_bytes());
+        }
+        wave.extend_from_slice(b"data");
+        wave.extend_from_slice(&2u32.to_le_bytes());
+        wave.extend_from_slice(&0i16.to_le_bytes());
+        fs::write(&audio, wave).unwrap();
+        let meeting = core.import_audio("Imported", &audio, &audio).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let ended = Arc::new(AtomicBool::new(false));
+        let finished = ended.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            finished.store(true, Ordering::Release);
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "import".into(),
+            cancel,
+            handle,
+            import_existing: Some(HashSet::new()),
+        });
+        process.update(|progress| {
+            progress.kind = "import".into();
+            progress.status = "running".into();
+        });
+        process
+            .meeting_removal(&core, &[meeting.id], || {
+                assert!(ended.load(Ordering::Acquire));
+                Ok(())
+            })
+            .unwrap();
+    }
+    #[test]
+    fn purge_removes_only_owned_job_copies_for_selected_meetings() {
+        let (_temp, process) = setup();
+        let selected_id = Uuid::new_v4().to_string();
+        let other_id = Uuid::new_v4().to_string();
+        let owned = directory(&process.root, &format!("processing/{}", Uuid::new_v4())).unwrap();
+        Processing::bind_job(&owned, &selected_id).unwrap();
+        fs::write(owned.join("analysis.wav"), b"audio").unwrap();
+        let other = directory(&process.root, &format!("processing/{}", Uuid::new_v4())).unwrap();
+        Processing::bind_job(&other, &other_id).unwrap();
+        let unknown = directory(&process.root, &format!("processing/{}", Uuid::new_v4())).unwrap();
+        fs::write(unknown.join("analysis.wav"), b"legacy").unwrap();
+        let model = directory(&process.root, "models/shared").unwrap();
+        fs::write(model.join("weights"), b"model").unwrap();
+        process.purge_meeting_jobs(&[selected_id]).unwrap();
+        assert!(!owned.exists());
+        assert!(other.exists());
+        assert!(unknown.exists());
+        assert!(model.join("weights").exists());
+    }
+    #[test]
+    fn startup_retries_owned_orphan_cleanup_and_preserves_existing_and_unknown_jobs() {
+        let (_temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let existing = core.create_meeting("Existing", "").unwrap();
+        let job = |owner: Option<&str>| {
+            let path = directory(&process.root, &format!("processing/{}", Uuid::new_v4())).unwrap();
+            fs::write(path.join("analysis.wav"), b"audio").unwrap();
+            if let Some(owner) = owner {
+                Processing::bind_job(&path, owner).unwrap();
+            }
+            path
+        };
+        let orphan = job(Some(&Uuid::new_v4().to_string()));
+        let active = job(Some(&existing.id));
+        let unknown = job(None);
+        let invalid = job(Some("invalid"));
+        process.cleanup_removed_meeting_jobs(&core);
+        assert!(!orphan.exists());
+        assert!(active.exists());
+        assert!(unknown.exists());
+        assert!(invalid.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn startup_cleanup_failure_is_visible_and_does_not_take_the_processing_gate() {
+        let (temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        std::os::unix::fs::symlink(temp.path(), process.root.join("processing")).unwrap();
+        process.cleanup_removed_meeting_jobs(&core);
+        let status = process.progress.lock().unwrap().clone();
+        assert_eq!(status.kind, "cleanup");
+        assert_eq!(status.status, "failed");
+        assert_eq!(
+            status.message,
+            "삭제한 회의의 임시 파일을 정리하지 못했습니다."
+        );
+        assert!(status.id.is_some());
+        assert!(process.running.lock().unwrap().is_none());
+        process.recording_start(|| Ok(())).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn canonical_purge_retry_failure_remains_visible_after_job_cleanup_succeeds() {
+        let (temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let meeting = core.create_meeting("Removed", "").unwrap();
+        drop(core);
+        fs::write(
+            process.root.join("library.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 1, "folders": {}, "placements": {}, "pendingPurges": [meeting.id],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            temp.path(),
+            process
+                .root
+                .join("meetings")
+                .join(&meeting.id)
+                .join("linked"),
+        )
+        .unwrap();
+        let core = CoreHandle::open(&process.root).unwrap();
+        assert!(core.list_meetings().unwrap().is_empty());
+        process.cleanup_removed_meeting_jobs(&core);
+        let status = process.progress.lock().unwrap().clone();
+        assert_eq!(status.kind, "cleanup");
+        assert_eq!(status.status, "failed");
+        assert!(!status.message.contains(&meeting.id));
+        assert!(process.root.join("meetings").join(&meeting.id).exists());
+    }
+    #[test]
+    fn historic_job_ownership_requires_a_unique_exact_raw_result() {
+        let (_temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let first = core.create_meeting("First", "").unwrap();
+        let second = core.create_meeting("Second", "").unwrap();
+        let canonical = |id: &str, bytes: &[u8]| {
+            let path = directory(
+                &process.root,
+                &format!("meetings/{id}/transcripts/{}", Uuid::new_v4()),
+            )
+            .unwrap();
+            fs::write(path.join("raw.json"), bytes).unwrap();
+        };
+        canonical(&first.id, b"unique");
+        canonical(&first.id, b"shared");
+        canonical(&second.id, b"shared");
+        let job = |bytes: &[u8]| {
+            let path = directory(&process.root, &format!("processing/{}", Uuid::new_v4())).unwrap();
+            fs::write(path.join("moss.json"), bytes).unwrap();
+            path
+        };
+        let unique = job(b"unique");
+        let shared = job(b"shared");
+        let unknown = job(b"unknown");
+        process.bind_legacy_jobs(&core).unwrap();
+        let owner: JobOwner =
+            serde_json::from_reader(plain_file(&unique.join("owner.json")).unwrap()).unwrap();
+        assert_eq!(owner.meeting_id, first.id);
+        assert!(!shared.join("owner.json").exists());
+        assert!(!unknown.join("owner.json").exists());
     }
     #[test]
     fn fixed_manifest_hash_rejects_changed_model_files() {

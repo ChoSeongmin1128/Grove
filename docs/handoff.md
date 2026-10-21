@@ -8,6 +8,14 @@ the private installation and evaluation receipts.
 
 ## Native rewrite source
 
+- Meeting management now includes single-folder placement, batch move, trash/restore,
+  permanent deletion with tombstone recovery, and content search. Speaker names and
+  assignments share transcript revision checks and preserve raw results/corrections.
+  MOSS labels are scoped to independent recognition chunks; cross-chunk identity and
+  qualified eight-person diarization remain unimplemented/unverified. See
+  [Meeting library and speakers](meeting-library-and-speakers.md) for storage, cancellation,
+  recovery and validation boundaries; this source contract is not an installed-app receipt.
+
 - Before the first actual user sharing, architecture and stored formats may change.
   Personal meeting data still requires explicit preservation/migration. The first
   user-shared build establishes the compatibility baseline; notarization or personal
@@ -66,7 +74,8 @@ the private installation and evaluation receipts.
 - `crates/grove-core` owns meetings and recording on a dedicated command thread.
   A bounded callback queue and separate file writer retain native PCM; finalization
   creates a distinct float32 WAV. Original audio survives conversion failures.
-- Current UI supports meeting creation/search, title/notes editing, microphone choice
+- Current UI supports meeting creation/content search, folders and trash/restore,
+  title/notes editing, microphone choice
   in Settings / Recording (persisted app-local preference),
   pause/resume/stop, finalized playback and a 236 x 44 draggable transparent control window.
   Hiding/minimizing the main window first shows the control window. It then stays on top
@@ -124,7 +133,8 @@ the private installation and evaluation receipts.
   output fails rather than replacing prior content. This does not establish summary quality.
 - Model preparation now resumes validated Range responses and verifies full-file SHA256.
   Existing partial/invalid files are preserved; no automatic preparation or private uploads.
-- Independent diarization, identity matching, Calendar and Notion remain unconnected. Windows transcription is not implemented. No weights are downloaded
+- Independent full-recording diarization, cross-chunk identity matching, Calendar and
+  Notion remain unconnected. Windows transcription is not implemented. No weights are downloaded
   automatically. No notch panel or platform-specific nonactivating floating-window
   contract is implemented yet.
 - A macOS development bundle builds. Windows-native CI is prepared separately;

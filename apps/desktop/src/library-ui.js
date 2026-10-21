@@ -1,0 +1,328 @@
+export function filterLibraryMeetings(meetings, filter = 'all', query = '') {
+  const term = query.trim().toLocaleLowerCase();
+  return meetings.filter(meeting => {
+    const deleted = meeting.deletedAt != null;
+    const inView = filter === 'trash' ? deleted : !deleted && (filter === 'all' || (filter === 'unfiled' ? !meeting.folderId : meeting.folderId === filter));
+    return inView && (!term || `${meeting.title}\n${meeting.notes || ''}`.toLocaleLowerCase().includes(term));
+  });
+}
+
+export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnapshot, selectMeeting, render: renderApp, showError, escape, icon, onViewChanged }) {
+  const dialog = byId('library-dialog');
+  const dialogBody = byId('library-dialog-body');
+  const owner = dialog.ownerDocument;
+  let folderKey = '', pending = null, returnFocus = null, dragIds = [];
+  let activeMenu = null, dropTarget = null;
+  const state = () => getState();
+  const selection = () => state().librarySelection ||= new Set();
+  const selectedIds = () => [...selection()];
+  const query = () => byId('search')?.value?.trim() || '';
+  const current = id => state().snapshot.meetings.find(meeting => meeting.id === id);
+  const runningRecording = ids => {
+    const session = state().snapshot.session;
+    return session && ['recording', 'paused'].includes(session.state) && ids.includes(session.meetingId);
+  };
+  function visibleMeetings() {
+    const meetings = filterLibraryMeetings(state().snapshot.meetings, state().libraryFilter);
+    const found = state().librarySearchIds;
+    const ids = found != null ? new Set(found) : null;
+    return query() && ids ? meetings.filter(meeting => ids.has(meeting.id)) : filterLibraryMeetings(meetings, state().libraryFilter, query());
+  }
+  function resetSelection() {
+    selection().clear();
+    state().librarySelecting = false;
+  }
+  async function show(filter = 'all') {
+    try {
+      await finishEditing(() => {});
+      const changed = state().libraryFilter !== filter;
+      state().libraryFilter = filter;
+      state().libraryOpen = true;
+      resetSelection();
+      renderApp();
+      byId('library-title')?.focus({ preventScroll: true });
+      if (changed || query()) await onViewChanged?.(filter);
+    } catch (error) { showError(error); }
+  }
+  function toggleSelection(id) {
+    if (state().libraryBusy || !visibleMeetings().some(meeting => meeting.id === id)) return;
+    state().librarySelecting = true;
+    if (selection().has(id)) selection().delete(id); else selection().add(id);
+    renderApp();
+  }
+  function setDialogBusy(busy) {
+    if (!dialog.open) return;
+    dialog.setAttribute('aria-busy', String(busy));
+    dialogBody.querySelectorAll('button,input').forEach(node => { node.disabled = busy; });
+    const submit = dialogBody.querySelector('[data-library-confirm]');
+    if (submit) {
+      submit.innerHTML = busy ? '<span class="activity-spinner" aria-hidden="true"></span><span>처리 중</span>' : escape(pending?.confirm || '저장');
+    }
+  }
+  function closeDialog() {
+    if (state().libraryBusy) return;
+    dialog.close();
+    pending = null;
+    restoreFocus();
+  }
+  function restoreFocus(onlyIfIdle = false) {
+    const active = dialog.ownerDocument?.activeElement;
+    if (onlyIfIdle && active && active !== dialog.ownerDocument.body && !dialog.contains?.(active)) return;
+    const target = returnFocus?.isConnected ? returnFocus : byId(state().libraryOpen ? 'library-title' : 'new-folder');
+    target?.focus({ preventScroll: true });
+  }
+  function openDialog({ title, content, confirm = '저장', destructive = false, action, detach = false }) {
+    if (state().libraryBusy) return;
+    returnFocus = dialog.ownerDocument?.activeElement;
+    pending = { confirm, action, detach };
+    dialogBody.innerHTML = `<form class="library-form"><header class="dialog-header"><h2 id="library-dialog-title">${escape(title)}</h2><button type="button" class="quiet icon-button" data-library-close aria-label="닫기">${icon('x')}</button></header><div class="library-dialog-content">${content}<p id="library-dialog-error" class="field-error" role="alert" hidden></p></div><footer class="dialog-actions"><button type="button" data-library-close>취소</button><button type="submit" class="${destructive ? 'danger' : 'primary'}" data-library-confirm>${escape(confirm)}</button></footer></form>`;
+    dialog.setAttribute('aria-labelledby', 'library-dialog-title');
+    if (!dialog.open) dialog.showModal();
+    const input = dialogBody.querySelector('[autofocus]');
+    if (input) { input.focus(); input.select?.(); }
+  }
+  function report(error) {
+    const field = dialog.open && byId('library-dialog-error');
+    if (field) { field.textContent = error instanceof Error ? error.message : String(error); field.hidden = false; }
+    else showError(error);
+  }
+  async function mutate(action, done = () => {}, { detach = false } = {}) {
+    if (state().libraryBusy) return false;
+    state().libraryBusy = true;
+    renderApp();
+    setDialogBusy(true);
+    try {
+      // Complete saves before releasing edit locks for the potentially long native job.
+      await finishEditing(() => {});
+      const operation = action();
+      // Confirmation is complete. The native cancellation may take time, so let
+      // the user navigate and edit other meetings while only library actions wait.
+      if (detach && dialog.open) dialog.close();
+      const snapshot = await operation;
+      if (snapshot?.meetings) acceptSnapshot(snapshot);
+      else acceptSnapshot(await bridge.readSnapshot());
+      done();
+      await onViewChanged?.(state().libraryFilter);
+      if (dialog.open) dialog.close();
+      pending = null;
+      return true;
+    } catch (error) {
+      // Purging may commit its tombstone before physical cleanup reports a failure.
+      try { acceptSnapshot(await bridge.readSnapshot()); } catch {}
+      report(error);
+      return false;
+    } finally {
+      state().libraryBusy = false;
+      renderApp();
+      setDialogBusy(false);
+      if (dialog.open) dialogBody.querySelector('[autofocus]')?.focus();
+      else restoreFocus(detach);
+    }
+  }
+  const description = ids => ids.length === 1 ? `"${current(ids[0])?.title || '제목 없는 회의'}"` : `${ids.length}개 회의`;
+  function folderDialog(id = null) {
+    const folder = state().snapshot.folders?.find(value => value.id === id);
+    if (id && !folder) return;
+    openDialog({ title: folder ? '폴더 이름 변경' : '새 폴더', content: `<label for="library-folder-name">폴더 이름</label><input id="library-folder-name" class="text-input" type="text" value="${escape(folder?.name || '')}" maxlength="120" required autofocus autocomplete="off">`, confirm: folder ? '저장' : '만들기', action: () => {
+      const name = byId('library-folder-name').value.trim();
+      if (!name) throw new Error('폴더 이름을 입력해 주세요.');
+      return folder ? bridge.renameFolder(id, name) : bridge.createFolder(name);
+    } });
+  }
+  function deleteFolder(id) {
+    const folder = state().snapshot.folders?.find(value => value.id === id);
+    if (!folder) return;
+    openDialog({ title: '폴더를 삭제할까요?', content: `<p>${escape(folder.name)}</p><p class="muted">회의는 삭제하지 않고 미분류로 옮깁니다.</p>`, confirm: '폴더 삭제', destructive: true, action: () => bridge.deleteFolder(id) });
+  }
+  function renameMeeting(id) {
+    const meeting = current(id);
+    if (!meeting || meeting.deletedAt != null) return;
+    openDialog({ title: '회의 이름 변경', content: `<label for="library-meeting-name">회의 이름</label><input id="library-meeting-name" class="text-input" type="text" value="${escape(meeting.title)}" required autofocus autocomplete="off">`, action: () => {
+      const title = byId('library-meeting-name').value.trim();
+      if (!title) throw new Error('회의 이름을 입력해 주세요.');
+      const latest = current(id);
+      if (!latest || latest.deletedAt != null) throw new Error('회의를 찾을 수 없습니다.');
+      return bridge.updateMeeting(id, title, latest.notes || '');
+    } });
+  }
+  function moveDialog(ids) {
+    if (!ids.length) return;
+    let folderId = ids.every(id => current(id)?.folderId === current(ids[0])?.folderId) ? current(ids[0])?.folderId || '' : null;
+    const folders = [{ id: '', name: '미분류' }, ...(state().snapshot.folders || [])];
+    openDialog({ title: '폴더로 이동', content: `<p class="muted">${escape(description(ids))}</p><div class="library-folder-choices" role="radiogroup" aria-label="이동할 폴더">${folders.map(folder => `<label class="library-folder-choice"><input type="radio" name="library-destination" value="${escape(folder.id)}"${folderId === folder.id ? ' checked' : ''}><span>${icon(folder.id ? 'folder' : 'inbox')}${escape(folder.name)}</span></label>`).join('')}</div>`, confirm: '이동', action: () => {
+      const chosen = dialogBody.querySelector('input[name="library-destination"]:checked');
+      if (!chosen) throw new Error('이동할 폴더를 선택해 주세요.');
+      return bridge.moveMeetings(ids, chosen.value || null);
+    } });
+  }
+  function trashDialog(ids) {
+    if (!ids.length) return;
+    if (runningRecording(ids)) { showError('녹음을 종료한 뒤 삭제해 주세요.'); return; }
+    const job = state().processing;
+    const cancels = job?.status === 'running' && ids.includes(job.meetingId);
+    openDialog({ title: '휴지통으로 이동할까요?', content: `<p>${escape(description(ids))}</p><p class="muted">${cancels ? '진행 중인 처리를 취소한 뒤 이동합니다. ' : ''}휴지통에서 복원할 수 있습니다.</p>`, confirm: cancels ? '처리 취소 후 휴지통' : '휴지통으로 이동', destructive: true, detach: true, action: () => bridge.trashMeetings(ids) });
+  }
+  function purgeDialog(ids) {
+    if (!ids.length) return;
+    openDialog({ title: '회의를 영구 삭제할까요?', content: `<p>${escape(description(ids))}</p><p class="muted">원음, 음성 기록, 메모와 회의록을 삭제합니다. 복원할 수 없습니다.</p>`, confirm: '영구 삭제', destructive: true, detach: true, action: () => bridge.purgeMeetings(ids) });
+  }
+  function afterRemoval() {
+    state().libraryOpen = true;
+    resetSelection();
+  }
+  function render() {
+    const snapshot = state().snapshot;
+    const folders = snapshot.folders || [];
+    if (!['all', 'unfiled', 'trash'].includes(state().libraryFilter) && !folders.some(folder => folder.id === state().libraryFilter)) state().libraryFilter = 'unfiled';
+    const visible = visibleMeetings();
+    const visibleIds = new Set(visible.map(meeting => meeting.id));
+    for (const id of selection()) if (!visibleIds.has(id)) selection().delete(id);
+    const filter = state().libraryFilter;
+    const disabled = Boolean(state().libraryBusy || !state().connected);
+    const navigation = [{ id: 'all', name: '전체 회의', icon: 'notebook-pen' }, { id: 'unfiled', name: '미분류', icon: 'inbox' }, ...folders.map(folder => ({ ...folder, icon: 'folder' })), { id: 'trash', name: '휴지통', icon: 'trash-2' }];
+    const key = JSON.stringify([filter, state().libraryOpen, folders, disabled, snapshot.meetings.map(meeting => [meeting.id, meeting.folderId, meeting.deletedAt])]);
+    if (key !== folderKey) {
+      folderKey = key;
+      const focused = dialog.ownerDocument?.activeElement?.dataset?.libraryFilter;
+      byId('folder-list').innerHTML = navigation.map(item => `<div class="library-folder-item"><button type="button" class="quiet library-folder-link" data-library-filter="${escape(item.id)}"${state().libraryOpen && filter === item.id ? ' aria-current="page"' : ''}${disabled ? ' disabled' : ''}>${icon(item.icon)}<span>${escape(item.name)}</span><span class="library-folder-count">${filterLibraryMeetings(snapshot.meetings, item.id).length}</span></button>${folders.some(folder => folder.id === item.id) ? `<details class="library-folder-menu"><summary aria-label="${escape(item.name)} 폴더 메뉴">${icon('ellipsis')}</summary><div class="action-menu"><button type="button" data-folder-rename="${escape(item.id)}"${disabled ? ' disabled' : ''}>이름 변경</button><button type="button" class="danger" data-folder-delete="${escape(item.id)}"${disabled ? ' disabled' : ''}>폴더 삭제</button></div></details>` : ''}</div>`).join('');
+      if (focused) [...byId('folder-list').querySelectorAll('[data-library-filter]')].find(node => node.dataset.libraryFilter === focused)?.focus({ preventScroll: true });
+    }
+    byId('library-title').textContent = navigation.find(item => item.id === filter)?.name || '회의';
+    byId('library-count').innerHTML = state().libraryBusy ? '<span class="activity-spinner" aria-hidden="true"></span><span role="status">처리 중</span>' : `${visible.length}개`;
+    const count = selection().size;
+    byId('library-batch').hidden = !state().librarySelecting;
+    byId('library-selected-count').textContent = `${count}개 선택`;
+    byId('library-select-toggle').textContent = state().librarySelecting ? '선택 취소' : '선택';
+    byId('library-select-toggle').disabled = disabled || !visible.length;
+    for (const id of ['library-move', 'library-trash', 'library-restore', 'library-purge']) byId(id).disabled = disabled || !count;
+    byId('library-move').hidden = filter === 'trash';
+    byId('library-trash').hidden = filter === 'trash';
+    byId('library-restore').hidden = filter !== 'trash';
+    byId('library-purge').hidden = filter !== 'trash';
+    byId('library-select-all').disabled = disabled || !visible.length;
+    byId('library-selection-clear').disabled = disabled || !count;
+    byId('new-folder').disabled = disabled;
+    const meeting = current(state().selectedId);
+    byId('meeting-move').disabled = disabled || !meeting || meeting.deletedAt != null;
+    byId('meeting-trash').disabled = disabled || !meeting || meeting.deletedAt != null || Boolean(meeting && runningRecording([meeting.id]));
+  }
+  function actionFor(action, ids) {
+    if (!ids.length || state().libraryBusy) return;
+    if (action === 'rename') renameMeeting(ids[0]);
+    if (action === 'move') moveDialog(ids);
+    if (action === 'trash') trashDialog(ids);
+    if (action === 'purge') purgeDialog(ids);
+    if (action === 'restore') void mutate(() => bridge.restoreMeetings(ids), afterRemoval);
+  }
+  function menuContent(menu) { return menu?.querySelector(':scope > div'); }
+  function closeMenu(menu = activeMenu, restore = false) {
+    if (!menu) return;
+    menu.open = false;
+    menu.classList?.remove('is-open');
+    if (activeMenu === menu) activeMenu = null;
+    if (restore && menu.isConnected) menu.querySelector('summary')?.focus({ preventScroll: true });
+  }
+  function positionMenu(menu) {
+    const content = menuContent(menu), trigger = menu.querySelector('summary');
+    if (!content || !trigger) return;
+    if (activeMenu && activeMenu !== menu) closeMenu(activeMenu);
+    activeMenu = menu;
+    menu.classList.add('is-open');
+    const view = owner.defaultView;
+    const width = view?.innerWidth || owner.documentElement?.clientWidth || 1024;
+    const height = view?.innerHeight || owner.documentElement?.clientHeight || 768;
+    content.style.width = `${Math.min(180, Math.max(0, width - 16))}px`;
+    content.style.maxHeight = `${Math.max(0, height - 16)}px`;
+    content.style.overflowY = 'auto';
+    const anchor = trigger.getBoundingClientRect(), rect = content.getBoundingClientRect();
+    const below = anchor.bottom + 6;
+    const top = below + rect.height <= height - 8 ? below : anchor.top - rect.height - 6;
+    content.style.left = `${Math.max(8, Math.min(anchor.right - rect.width, width - rect.width - 8))}px`;
+    content.style.top = `${Math.max(8, Math.min(top, height - rect.height - 8))}px`;
+  }
+  function clearDropTarget() {
+    dropTarget?.classList.remove('is-drop-target');
+    dropTarget = null;
+  }
+  owner?.addEventListener?.('toggle', event => {
+    const menu = event.target;
+    if (!menu.matches?.('[data-meeting-menu],.library-folder-menu')) return;
+    if (menu.open) positionMenu(menu); else closeMenu(menu);
+  }, true);
+  owner?.addEventListener?.('pointerdown', event => { if (activeMenu && !activeMenu.contains(event.target)) closeMenu(); }, true);
+  owner?.addEventListener?.('keydown', event => {
+    if (event.key !== 'Escape' || !activeMenu) return;
+    event.preventDefault(); event.stopPropagation(); closeMenu(activeMenu, true);
+  }, true);
+  owner?.addEventListener?.('scroll', event => {
+    if (activeMenu && !menuContent(activeMenu)?.contains(event.target)) closeMenu();
+  }, true);
+  owner?.defaultView?.addEventListener('resize', () => closeMenu());
+  owner?.addEventListener?.('drop', clearDropTarget, true);
+  owner?.addEventListener?.('dragend', () => { dragIds = []; clearDropTarget(); });
+  dialog.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!pending || state().libraryBusy) return;
+    const intent = pending;
+    void mutate(intent.action, () => { resetSelection(); if (state().snapshot.meetings.every(meeting => meeting.id !== state().selectedId || meeting.deletedAt != null)) state().libraryOpen = true; }, { detach: intent.detach });
+  });
+  dialog.addEventListener('click', event => { if (event.target.closest('[data-library-close]')) closeDialog(); });
+  dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
+  byId('new-folder').addEventListener('click', () => folderDialog());
+  byId('folder-list').addEventListener('click', event => {
+    const filter = event.target.closest('[data-library-filter]');
+    const rename = event.target.closest('[data-folder-rename]');
+    const remove = event.target.closest('[data-folder-delete]');
+    if (filter) void show(filter.dataset.libraryFilter);
+    if (rename) folderDialog(rename.dataset.folderRename);
+    if (remove) deleteFolder(remove.dataset.folderDelete);
+    if (rename || remove) event.target.closest('details')?.removeAttribute('open');
+  });
+  byId('library-back').addEventListener('click', () => void show(state().libraryFilter));
+  byId('library-select-toggle').addEventListener('click', () => { if (state().libraryBusy) return; if (state().librarySelecting) resetSelection(); else state().librarySelecting = true; renderApp(); });
+  byId('library-select-all').addEventListener('click', () => { if (state().libraryBusy) return; visibleMeetings().forEach(meeting => selection().add(meeting.id)); renderApp(); });
+  byId('library-selection-clear').addEventListener('click', () => { selection().clear(); renderApp(); });
+  for (const action of ['move', 'trash', 'restore', 'purge']) byId(`library-${action}`).addEventListener('click', () => actionFor(action, selectedIds()));
+  for (const action of ['move', 'trash']) byId(`meeting-${action}`).addEventListener('click', () => actionFor(action, [state().selectedId].filter(Boolean)));
+  byId('meeting-list').addEventListener('click', event => {
+    const toggle = event.target.closest('[data-library-toggle]');
+    const action = event.target.closest('[data-library-action]');
+    if (toggle) { event.preventDefault(); event.stopPropagation(); toggleSelection(toggle.dataset.libraryToggle); }
+    if (action) { event.preventDefault(); event.stopPropagation(); actionFor(action.dataset.libraryAction, [action.dataset.libraryTarget]); action.closest('details')?.removeAttribute('open'); }
+  });
+  byId('meeting-list').addEventListener('contextmenu', event => {
+    const row = event.target.closest('[data-meeting-id]');
+    const menu = row?.querySelector('[data-meeting-menu]');
+    if (!menu) return;
+    event.preventDefault();
+    menu.open = true;
+    positionMenu(menu);
+    menu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
+  });
+  byId('meeting-list').addEventListener('dragstart', event => {
+    const row = event.target.closest('[data-meeting-id]');
+    if (!row || state().libraryBusy || current(row.dataset.meetingId)?.deletedAt != null || event.target.closest('input,summary,[data-library-action]')) { event.preventDefault(); return; }
+    dragIds = selection().has(row.dataset.meetingId) ? selectedIds() : [row.dataset.meetingId];
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-nero-meetings', JSON.stringify(dragIds));
+  });
+  byId('meeting-list').addEventListener('dragend', () => { dragIds = []; clearDropTarget(); });
+  byId('folder-list').addEventListener('dragover', event => {
+    const target = event.target.closest('[data-library-filter]');
+    if (!target || target.dataset.libraryFilter === 'all' || state().libraryBusy || !Array.from(event.dataTransfer.types).includes('application/x-nero-meetings')) { clearDropTarget(); return; }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (dropTarget !== target) { clearDropTarget(); dropTarget = target; target.classList.add('is-drop-target'); }
+  });
+  byId('folder-list').addEventListener('dragleave', event => { if (dropTarget && !dropTarget.contains(event.relatedTarget)) clearDropTarget(); });
+  byId('folder-list').addEventListener('drop', event => {
+    const target = event.target.closest('[data-library-filter]');
+    clearDropTarget();
+    if (!target || target.dataset.libraryFilter === 'all' || state().libraryBusy || !dragIds.length) return;
+    event.preventDefault();
+    const ids = [...dragIds]; dragIds = [];
+    if (target.dataset.libraryFilter === 'trash') trashDialog(ids);
+    else void mutate(() => bridge.moveMeetings(ids, target.dataset.libraryFilter === 'unfiled' ? null : target.dataset.libraryFilter), resetSelection);
+  });
+  return { render, show, resetSelection, toggleSelection, selectedIds, visibleMeetings };
+}

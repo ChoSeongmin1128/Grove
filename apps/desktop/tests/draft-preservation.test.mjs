@@ -5,6 +5,8 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+const librarySource = await readFile(new URL('../src/library-ui.js', import.meta.url), 'utf8');
+const searchSource = await readFile(new URL('../src/meeting-search.js', import.meta.url), 'utf8');
 const feedbackSource = await readFile(new URL('../src/processing-feedback.js', import.meta.url), 'utf8');
 const componentsSource = await readFile(new URL('../../../design-system/components.js', import.meta.url), 'utf8');
 const tick = () => new Promise(setImmediate);
@@ -88,6 +90,11 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
   const executable = source.replace(/^import .*;\n/gm, '');
   const app = await vm.runInContext(`(async () => {
     ${feedbackSource.replace(/^export /gm, '')}
+    ${searchSource.replace(/^export /gm, '')}
+    ${librarySource.slice(0, librarySource.indexOf('export function mountLibrary')).replace(/^export /gm, '')}
+    const mountLibrary = () => ({ render() {}, resetSelection() {}, toggleSelection() {}, show: async () => {} });
+    const mountSpeakers = ({getState}) => ({render() {}, reset() {}, open: async () => {}, label: segment => getState().transcriptDraft?.doc?.speakers?.find(speaker=>speaker.id === segment.speakerId)?.name || '화자 미지정'});
+
     const bridge = testBridge;
     const { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance, documentExport } = testUI;
     ${executable}

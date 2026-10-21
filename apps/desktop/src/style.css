@@ -221,3 +221,25 @@ html.recorder-document { background: transparent; }
 }
 
 .meeting-timestamps:has(#recorded-at[hidden]) { display: none; }
+
+.library-screen { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 24px 32px; overflow: hidden; }
+.library-screen-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.library-screen-header h1 { font-size: var(--text-title-size); margin-bottom: 4px; }
+.library-screen .meeting-list { padding: 0 4px 16px; }
+.meeting-entry { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); position: relative; }
+.meeting-entry .meeting-item { flex: 1; min-width: 0; min-height: 60px; margin: 0; align-items: center; border-radius: 4px; padding: 10px 8px; }
+.meeting-entry .meeting-item strong { font-size: var(--text-body-size); }
+.meeting-entry .meeting-item-meta { justify-content: flex-start; gap: 12px; }
+.meeting-entry .meeting-item-state { font-size: var(--text-caption-size); color: var(--text-secondary); margin-left: auto; }
+.meeting-entry .meeting-item[aria-current="true"] { border-color: transparent; }
+.meeting-entry.is-selected { background: var(--accent-subtle); }
+.meeting-entry > input { flex: none; margin-left: 8px; }
+.meeting-entry > details { flex: none; margin-right: 4px; }
+.meeting-menu > summary { border-color: transparent; background: transparent; padding: 6px; min-width: 30px; }
+.meeting-menu summary svg { width: 16px; height: 16px; }
+.library-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.library-batch > span { margin-right: auto; font-size: var(--text-caption-size); }
+#library-search-status { padding: 0 0 12px; }
+.detail-library-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+.detail-library-actions > .row { display: flex; flex-wrap: wrap; gap: 4px; }
+@media (max-width: 950px) { .library-screen { padding: 20px 24px; } }
