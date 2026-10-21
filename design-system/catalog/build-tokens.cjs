@@ -218,7 +218,6 @@ function build() {
       unresolvedDesignDecisions: [
         'Typography roles are applied; a universal spacing/radius scale is intentionally not asserted for unrelated component geometry.',
         'Different control heights and focus widths remain actual per-component decisions, not a unified standard.',
-        'The app logo remains undecided.',
         'Windows browser shell is a reference. Native Windows panels, notifications and accessibility behavior remain unverified.',
         'Native macOS accessibility and shell behavior are not established by this web prototype.',
       ],
