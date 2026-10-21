@@ -129,7 +129,15 @@ the private installation and evaluation receipts.
 - Packaged llama.cpp b11734 supports explicit preparation of pinned Gemma 4 E4B Q4_0 and
   on-demand local summaries. GPU startup is preferred, with a bundled CPU startup fallback.
   Per-process loopback authentication, serial processing, cancellation/quit/recording-start
-  worker teardown, pressure checks and bounded token budgets are connected.
+  worker teardown and bounded token budgets are connected.
+- Summary memory gating currently rejects startup or fails a running job when the macOS
+  pressure value is not normal (or cannot be read), or Windows memory load is at least
+  90% (or cannot be read). Worker teardown kills/joins the process; this is not pause/resume.
+  These hard thresholds are not hardware-qualified or a consistent app-wide memory policy.
+  GPU-to-CPU startup fallback still passes the same checks and is not proven OOM recovery.
+  Distinguish system warnings, actual allocation failures and engine errors before revising
+  this policy; do not substitute an invented threshold or infer adaptive budgets/model
+  switching. OS/accelerator behavior, recording stability and quality require separate tests.
 - Summary records retain source revisions, model/prompt provenance and receipts. Changed
   sources or competing results cannot replace current summaries. The UI reads/copies them
   and links valid references to transcript playback, with stale-source links disabled.
