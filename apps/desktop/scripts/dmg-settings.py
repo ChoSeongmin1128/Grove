@@ -16,7 +16,7 @@ icon_size = 96
 text_size = 14
 label_pos = "bottom"
 arrange_by = None
-background = "#FFFFFF"
+background = "#ffffff"
 
 show_status_bar = False
 show_tab_view = False

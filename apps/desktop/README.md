@@ -33,7 +33,7 @@ Tauri, Rust and lockfile mirrors, and runs before a frontend build. Update them
 together from the repository root:
 
 ```sh
-node apps/desktop/scripts/version.mjs set 0.0.2 --build 2
+node apps/desktop/scripts/version.mjs set 0.0.2 --build 3
 ```
 
 The [version policy](../../docs/versioning.md) separates product versions, monotonic
@@ -47,8 +47,8 @@ the resulting bundle to a new work directory, then use:
 
 ```sh
 python3 apps/desktop/scripts/sign-macos.py --app WORK/Nero.app \
-  --output WORK/Nero-0.0.1-build1-arm64.zip \
-  --dmg-output WORK/Nero-0.0.1-build1-arm64.dmg --notarize
+  --output WORK/Nero-0.0.1-build2-arm64.zip \
+  --dmg-output WORK/Nero-0.0.1-build2-arm64.dmg --notarize
 ```
 
 Developer ID and notary credentials come from the invoking environment. `dmgbuild`
