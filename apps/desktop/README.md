@@ -33,9 +33,10 @@ Tauri, Rust and lockfile mirrors, and runs before a frontend build. Update them
 together from the repository root:
 
 ```sh
-node apps/desktop/scripts/version.mjs set 0.0.2 --build 3
+node apps/desktop/scripts/version.mjs set 0.0.1 --build 3
 ```
 
+Before first user sharing, development changes may keep `0.0.1` and advance the build.
 The [version policy](../../docs/versioning.md) separates product versions, monotonic
 build numbers and data formats. [Release history](../../docs/release-history.md)
 records source hashes and distribution status. Generated `build-info.json` records

@@ -26,7 +26,7 @@
       </aside>
       <main class="main-content">
         <div id="error" class="notice app-error" role="alert" hidden><span id="error-message"></span><button id="retry-save" class="small" type="button" hidden>다시 저장</button><button id="dismiss-error" class="quiet small" type="button" aria-label="오류 안내 닫기">닫기</button></div>
-        <div id="processing" class="processing-notice" role="status" hidden><span id="processing-message"></span><progress id="processing-progress" hidden></progress><button id="cancel-processing" type="button" class="quiet small">취소</button></div>
+        <div id="processing" class="processing-notice" hidden><span id="processing-spinner" class="activity-spinner" aria-hidden="true"></span><span id="processing-result-icon" class="processing-result-icon" aria-hidden="true" hidden></span><div class="processing-copy" role="status"><strong id="processing-title"></strong><span id="processing-message"></span></div><progress id="processing-progress" aria-label="모델 다운로드 진행률" hidden></progress><span id="processing-percent" class="type-caption" hidden></span><button id="cancel-processing" type="button" class="quiet small">취소</button></div>
         <section id="setup-screen" class="setup-screen" aria-labelledby="setup-title" hidden>
           <div class="setup-content">
             <header class="setup-header"><img class="setup-logo" src="/brand/mark.svg" width="40" height="40" alt=""><div><span class="setup-app-name">Nero</span><h1 id="setup-title" tabindex="-1">초기 설정</h1></div></header>
@@ -41,7 +41,7 @@
                   <div class="setup-summary-actions"><span id="setup-summary-state" class="setup-model-state"></span><label id="setup-summary-choice" class="setup-choice"><input id="setup-summary-option" type="checkbox" aria-label="요약 모델 함께 다운로드"><span>함께 다운로드</span></label><button id="setup-download-summary" type="button" class="small" hidden>요약 모델 다운로드</button></div>
                 </div>
             </div>
-            <div id="setup-progress-region" class="setup-progress-region" hidden><progress id="setup-progress" aria-label="모델 준비 진행률"></progress><div class="setup-progress-meta"><span id="setup-progress-stage"></span><span id="setup-progress-bytes"></span></div></div>
+            <div id="setup-progress-region" class="setup-progress-region" hidden><progress id="setup-progress" aria-label="모델 준비 진행률"></progress><div class="setup-progress-meta"><span class="processing-inline" role="status"><span id="setup-spinner" class="activity-spinner" aria-hidden="true" hidden></span><span id="setup-progress-stage"></span></span><span id="setup-progress-bytes"></span></div></div>
             <p id="setup-message" class="setup-message" role="status">준비 상태 확인 중</p><div class="setup-actions"><button id="setup-download" class="primary" type="button" disabled>다운로드</button><button id="setup-cancel" class="quiet" type="button" hidden>취소</button><button id="setup-start" class="primary" type="button" hidden>새 회의</button><button id="setup-back" class="quiet" type="button" hidden>회의로 돌아가기</button></div>
           </div>
         </section>
@@ -52,7 +52,7 @@
             <span id="meeting-date-message" class="meeting-date-message type-caption" role="status" hidden></span>
             <label class="sr-only" for="meeting-title">회의 제목</label><input id="meeting-title" class="text-input text-input--title meeting-title" type="text" placeholder="회의 제목" maxlength="200" autocomplete="off">
             <div class="meeting-timestamps muted type-caption"><span id="recorded-at" hidden></span></div>
-            <div class="detail-actions"><span id="save-status" class="muted type-caption" role="status" hidden></span></div>
+            <div class="detail-actions"><span id="save-spinner" class="activity-spinner" aria-hidden="true" hidden></span><span id="save-status" class="muted type-caption" role="status" hidden></span></div>
           </header>
           <section class="recording-section" aria-label="녹음">
             <div class="recording-toolbar"><div class="recording-heading"><span id="recording-icon" aria-hidden="true"></span><h2>녹음</h2><span id="recording-time" class="type-timer" hidden>00:00</span></div><div class="recording-actions"><div id="recording-controls" class="recording-controls"></div></div></div>

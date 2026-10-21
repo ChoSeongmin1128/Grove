@@ -50,7 +50,8 @@ for (const [id, variant] of [['meeting-title', 'text-input--title'], ['meeting-n
   const tag = [...desktopHTML.matchAll(/<(?:input|textarea)\b[^>]*>/g)].map(match => match[0]).find(tag => tag.includes(`id="${id}"`));
   assert.ok(tag?.match(/class="([^"]*)"/)?.[1].split(/\s+/).includes(variant), `${id} must consume shared ${variant}`);
 }
-assert.match(desktopRead('src/main.js'), /<textarea class="text-input" data-segment=/, 'Transcript editing must use shared text-field states');
+assert.match(desktopRead('src/main.js'), /GroveUI\.transcriptRow\(/, 'Native transcript must use the shared reading/editing component');
+assert.match(read('components.js'), /<textarea class="text-input"[^;]*data-segment/, 'Transcript editing must use shared text-field states');
 const desktopCSS = parseCSS(desktopRead('src/style.css'), 'apps/desktop/src/style.css');
 for (const declaration of desktopCSS) {
   if (/(?:#meeting-notes|\.meeting-title|\.search-field\s+input)(?![\w-])/.test(declaration.selector)) {

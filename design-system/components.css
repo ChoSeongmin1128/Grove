@@ -261,6 +261,130 @@ input[type="checkbox"] {
   color: var(--accent);
 }
 
+.activity-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: activity-spin .8s linear infinite;
+}
+
+@keyframes activity-spin {
+  to { transform: rotate(360deg); }
+}
+
+.transcript-row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 8px 6px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.transcript-row:hover {
+  background: var(--hover);
+}
+
+.transcript-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.transcript-row .transcript-time {
+  padding-inline: 0;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-content {
+  min-width: 0;
+}
+
+.transcript-row .transcript-text,
+.transcript-row textarea.text-input {
+  font-size: var(--text-reading-size);
+  line-height: var(--leading-reading);
+  letter-spacing: var(--tracking-ui);
+}
+
+.transcript-row .transcript-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.transcript-row-actions {
+  opacity: 0;
+}
+
+.transcript-row:hover .transcript-row-actions,
+.transcript-row:focus-within .transcript-row-actions {
+  opacity: 1;
+}
+
+.transcript-row.is-editing {
+  grid-template-columns: 56px minmax(0, 1fr);
+  background: var(--surface-secondary);
+}
+
+.transcript-row textarea.text-input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  resize: none;
+  overflow-y: hidden;
+}
+
+.transcript-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.transcript-original {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+}
+
+.transcript-original summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.transcript-original summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.transcript-original p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .transcript-row-actions { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner {
+    animation: none;
+    border-top-color: currentColor;
+  }
+}
+
 .modal {
   width: 690px;
   max-width: 100%;

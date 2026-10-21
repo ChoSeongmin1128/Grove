@@ -8,6 +8,19 @@ the private installation and evaluation receipts.
 
 ## Native rewrite source
 
+- Before the first actual user sharing, architecture and stored formats may change.
+  Personal meeting data still requires explicit preservation/migration. The first
+  user-shared build establishes the compatibility baseline; notarization or personal
+  installation alone does not establish it.
+- Native voice records default to compact reading rows, with timestamps for playback.
+  Only the selected row becomes an auto-sizing editor. Completion waits for persistence;
+  failure keeps the editor/input, and cancellation restores the last saved text.
+  Original recognition text is disclosed only on corrected rows. Shared markup/styles
+  live in `design-system/components.js` and `components.css`.
+- Processing shows a shared activity indicator and actual backend stages, with real
+  byte progress for model downloads only. Cancellation stays active/disabled until
+  the backend finishes. Inference does not present an invented completion percentage.
+
 - Nero release numbering starts at 0.0.1 with an independent macOS build number.
   `docs/versioning.md` owns data/version compatibility rules and
   `docs/release-history.md` records exact source commits and distribution status.

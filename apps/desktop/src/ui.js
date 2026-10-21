@@ -24,7 +24,7 @@ export function statusMarkup(state) {
 }
 
 export function sessionControls(session, busy = false) {
-  if (session.state === 'finalizing') return '<span class="muted type-caption" role="status">녹음을 저장하고 있습니다.</span>';
+  if (session.state === 'finalizing') return '<span class="processing-inline muted type-caption" role="status"><span class="activity-spinner" aria-hidden="true"></span>녹음 저장 중</span>';
   return button(session.state === 'paused' ? '계속 녹음' : '일시정지', session.state === 'paused' ? 'resume' : 'pause', session.state === 'paused' ? 'play' : 'pause', '', busy) + button('녹음 종료', 'stop', 'square', 'stop-recording', busy);
 }
 

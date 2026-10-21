@@ -125,8 +125,13 @@ inference, proposals, and unverified items.
 ## Native installation and artifacts
 
 - Nero release versions follow `docs/versioning.md`; keep version mirrors consistent
-  with `node apps/desktop/scripts/version.mjs check`. Preserve the stable application
-  identifier and existing data contracts, including during 0.x development.
+  with `node apps/desktop/scripts/version.mjs check`. Nero has not yet been shared
+  with actual users: internal architecture and stored formats may change, and each
+  feature does not require a product-version bump from 0.0.1. Compatibility obligations
+  begin with the first build actually shared with users; record that baseline.
+  Preserve existing personal meeting data through explicit migration or separate archival
+  when a development change affects it. Do not initialize or discard it implicitly.
+  Preserve historical commits, tags and artifacts rather than rewriting their labels.
 - Record release source commits in `docs/release-history.md`. A dirty build must not
   be attributed to its HEAD alone. Distribution bundles require clean source provenance;
   keep generated binaries, signing/notary receipts and private compatibility evidence in `.work/`.
@@ -204,7 +209,8 @@ inference, proposals, and unverified items.
 1. Read this file and `docs/handoff.md`.
 2. Read only the task-relevant documents and verify important claims in code.
 3. Distinguish research/review from implementation authorization.
-4. Check migration compatibility before changing stored meeting data.
+4. Before stored-data changes, preserve personal data through explicit migration or
+   archival. After first user sharing, also check compatibility with supported releases.
 5. Add proportionate tests and run the relevant validation commands.
 6. Update `docs/handoff.md` with results, remaining risks, and whether the installed app
    changed.

@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const uiSource = await readFile(new URL('../src/ui.js', import.meta.url), 'utf8');
+const feedbackSource = await readFile(new URL('../src/processing-feedback.js', import.meta.url), 'utf8');
 const componentsSource = await readFile(new URL('../../../design-system/components.js', import.meta.url), 'utf8');
 const tick = () => new Promise(setImmediate);
 
@@ -86,10 +87,11 @@ async function openApp(initialTranscript = null, readiness = { status: 'idle', s
   })()`, context);
   const executable = source.replace(/^import .*;\n/gm, '');
   const app = await vm.runInContext(`(async () => {
+    ${feedbackSource.replace(/^export /gm, '')}
     const bridge = testBridge;
     const { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance, documentExport } = testUI;
     ${executable}
-    return { state, selectMeeting, saveDraft, onEdit, onQuitRequest, refreshDevices, acceptSnapshot, saveTranscript, loadTranscript, acceptProcessing, loadSummary, renderSummary, createMeeting, openSetup, openSettings, changeMicrophone, changeMeetingDate, render, prepareAudio, exportDocument };
+    return { state, selectMeeting, saveDraft, onEdit, onQuitRequest, refreshDevices, acceptSnapshot, saveTranscript, loadTranscript, acceptProcessing, loadSummary, renderSummary, createMeeting, openSetup, openSettings, changeMicrophone, changeMeetingDate, render, prepareAudio, exportDocument, editTranscriptRow, completeTranscriptRow, cancelTranscriptRow, cancelProcessing };
   })()`, context);
   await tick();
   return {
@@ -387,7 +389,8 @@ test('optional summary download leaves new meetings enabled and reports transfer
   await page.app.acceptProcessing({ revision: 3, id: 'download', kind: 'summary-model', status: 'running', supported: true, modelReady: true, summarySupported: true, summaryReady: false, message: '요약 모델 다운로드 중', bytes: 25, totalBytes: 100 });
   assert.equal(page.element('create-meeting').disabled, false);
   assert.equal(page.element('setup-screen').hidden, true);
-  assert.equal(page.element('processing-message').textContent, '요약 모델 다운로드 중 25%');
+  assert.equal(page.element('processing-message').textContent, '요약 모델 다운로드 중');
+  assert.equal(page.element('processing-percent').textContent, '25%');
   let created = false;
   page.bridge.createMeeting = async () => { created = true; return { id: 'b' }; };
   await page.app.createMeeting();
@@ -682,4 +685,84 @@ test('delayed date failure belongs to its meeting after navigating elsewhere', a
   assert.equal(page.element('meeting-date-message').hidden, true);
   await page.app.selectMeeting('a');
   assert.equal(page.element('meeting-date-message').hidden, false);
+});
+
+
+test('transcript reading stays compact until a row is explicitly edited', async () => {
+  const page = await openApp(transcriptDocument());
+  assert.doesNotMatch(page.element('transcript-rows').innerHTML, /textarea|원문 보기/);
+  await page.app.editTranscriptRow(0);
+  assert.match(page.element('transcript-rows').innerHTML, /textarea[^>]*rows="1"/);
+  page.editTranscript('읽고 수정한 내용');
+  const writes = page.element('transcript-rows').htmlWrites;
+  await page.app.acceptProcessing({ id: 'other', revision: 6, status: 'running', kind: 'summary', meetingId: 'b', supported: true, modelReady: true });
+  assert.equal(page.element('transcript-rows').htmlWrites, writes);
+  assert.equal(page.app.state.transcriptEditing, 0);
+  const done = page.app.completeTranscriptRow();
+  await tick();
+  assert.equal(page.app.state.transcriptEditing, 0);
+  page.transcriptUpdates[0].pending.resolve();
+  await done;
+  assert.equal(page.app.state.transcriptEditing, null);
+  assert.doesNotMatch(page.element('transcript-rows').innerHTML, /textarea/);
+  assert.match(page.element('transcript-rows').innerHTML, /읽고 수정한 내용/);
+  assert.match(page.element('transcript-rows').innerHTML, /원문 보기/);
+});
+
+test('row completion failure preserves the editor and cancellation only discards unsaved edits', async () => {
+  const page = await openApp(transcriptDocument());
+  await page.app.editTranscriptRow(0);
+  page.editTranscript('실패 시 유지할 내용');
+  const done = page.app.completeTranscriptRow();
+  await tick();
+  page.transcriptUpdates[0].pending.reject(Error('저장 실패'));
+  await done;
+  assert.equal(page.app.state.transcriptEditing, 0);
+  assert.equal(page.app.state.transcriptDraft.doc.segments[0].text, '실패 시 유지할 내용');
+  await page.app.cancelTranscriptRow();
+  assert.equal(page.app.state.transcriptEditing, null);
+  assert.equal(page.app.state.transcriptDraft.dirty, false);
+  assert.equal(page.app.state.transcriptDraft.doc.segments[0].text, '모델 원문');
+  assert.doesNotMatch(page.element('transcript-rows').innerHTML, /textarea/);
+});
+
+test('cancellation after a flushed edit preserves the last successfully saved row', async () => {
+  const page = await openApp(transcriptDocument());
+  await page.app.editTranscriptRow(0);
+  page.editTranscript('이미 저장한 수정');
+  const saving = page.app.saveTranscript();
+  await tick();
+  page.transcriptUpdates[0].pending.resolve();
+  await saving;
+  page.editTranscript('저장 후 임시 수정');
+  await page.app.cancelTranscriptRow();
+  assert.equal(page.app.state.transcriptDraft.doc.segments[0].text, '이미 저장한 수정');
+  assert.equal(page.app.state.transcriptDraft.dirty, false);
+  assert.equal(page.savedTranscript().segments[0].originalText, '모델 원문');
+});
+
+test('processing stays visibly active until cancellation actually finishes', async () => {
+  const page = await openApp();
+  await page.app.acceptProcessing({ id: 'recognition', revision: 3, status: 'running', kind: 'transcribe', meetingId: 'a', supported: true, modelReady: true, message: '텍스트로 변환 중' });
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.element('processing-progress').hidden, true);
+  assert.match(page.element('processing-title').textContent, /변환 중/);
+  let requests = 0;
+  page.bridge.cancelProcessing = async () => { requests++; };
+  await page.app.cancelProcessing();
+  await page.app.cancelProcessing();
+  assert.equal(requests, 1);
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.element('cancel-processing').disabled, true);
+  assert.equal(page.element('cancel-processing').textContent, '취소 중');
+  await page.app.acceptProcessing({ id: 'recognition', revision: 4, status: 'cancelled', kind: 'transcribe', meetingId: 'a', supported: true, modelReady: true, message: '변환을 취소했습니다.' });
+  assert.equal(page.element('processing-spinner').hidden, true);
+  assert.equal(page.element('cancel-processing').hidden, true);
+});
+
+test('setup verification has activity without a misleading zero percent bar', async () => {
+  const page = await openApp(null, { id: 'prepare', kind: 'setup', status: 'running', supported: true, modelReady: false, message: '모델 파일 확인 중', totalBytes: 0 });
+  assert.equal(page.element('setup-spinner').hidden, false);
+  assert.equal(page.element('setup-progress').hidden, true);
+  assert.equal(page.element('setup-progress-bytes').textContent, '');
 });

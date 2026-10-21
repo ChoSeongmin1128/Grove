@@ -1,5 +1,6 @@
 import * as bridge from './bridge.js';
 import { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance, documentExport } from './ui.js';
+import { processingFeedback } from './processing-feedback.js';
 
 applySystemAppearance();
 const byId = (id) => document.getElementById(id);
@@ -14,7 +15,7 @@ function readMicrophonePreference() {
   } catch { return { id: null, name: '' }; }
 }
 const microphonePreference = readMicrophonePreference();
-const state = { snapshot: { meetings: [], session: null }, selectedId: null, devices: [], devicesLoaded: false, deviceId: microphonePreference.id, deviceName: microphonePreference.name, settingsPanel: 'appearance', settingsKey: '', settingsError: '', settingsReturnId: 'settings', setupFromSettings: false, autoRecorder: readAutoRecorder(), recorderSettingBusy: false, snapshotKey: '', processingKey: '', audioRequest: 0, dateSaving: null, dateKey: '', dateError: null, lastError: null, errorIsSave: false, connected: false, busy: false, composing: false, transcriptComposing: false, editLocks: 0, draft: null, saveTimer: null, saveQueue: Promise.resolve(), listKey: '', controlsKey: '', audioKey: '', processing: { status: 'idle', supported: false, modelReady: false }, transcriptDraft: null, transcriptKey: '', transcriptLoadId: 0, transcriptSaveQueue: Promise.resolve(), summary: null, summaryKey: '', summaryLoadId: 0, setupRequested: false };
+const state = { snapshot: { meetings: [], session: null }, selectedId: null, devices: [], devicesLoaded: false, deviceId: microphonePreference.id, deviceName: microphonePreference.name, settingsPanel: 'appearance', settingsKey: '', settingsError: '', settingsReturnId: 'settings', setupFromSettings: false, autoRecorder: readAutoRecorder(), recorderSettingBusy: false, snapshotKey: '', processingKey: '', processingCancellingId: null, transcriptEditing: null, audioRequest: 0, dateSaving: null, dateKey: '', dateError: null, lastError: null, errorIsSave: false, connected: false, busy: false, composing: false, transcriptComposing: false, editLocks: 0, draft: null, saveTimer: null, saveQueue: Promise.resolve(), listKey: '', controlsKey: '', audioKey: '', processing: { status: 'idle', supported: false, modelReady: false }, transcriptDraft: null, transcriptKey: '', transcriptLoadId: 0, transcriptSaveQueue: Promise.resolve(), summary: null, summaryKey: '', summaryLoadId: 0, setupRequested: false };
 const fullDate = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const calendarDay = value => { const date = new Date(value); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; };
 const meetingDay = meeting => meeting.meetingDate || calendarDay(meeting.recordedAt ?? meeting.createdAt);
@@ -67,6 +68,7 @@ function renderList() {
 function renderSaveState() {
   const saving = Boolean(state.draft?.saving);
   byId('save-status').textContent = saving ? '저장 중' : '';
+  byId('save-spinner').hidden = !saving;
   byId('save-status').hidden = !saving;
 }
 
@@ -141,10 +143,12 @@ function renderSetup() {
   byId('setup-download-summary').hidden = !ready || job.summaryReady || !job.summarySupported || running;
   byId('setup-download-summary').disabled = state.busy || processingActive();
   byId('setup-progress-region').hidden = !running;
-  byId('setup-progress').max = job.totalBytes || 1;
-  byId('setup-progress').value = job.bytes || 0;
-  byId('setup-progress-stage').textContent = job.message || '준비 중';
-  byId('setup-progress-bytes').textContent = job.totalBytes ? `${Math.min(100,Math.floor((job.bytes || 0) / job.totalBytes * 100))}%` : '';
+  const feedback = processingFeedback(job, { cancelling: state.processingCancellingId === job.id });
+  byId('setup-spinner').hidden = !running;
+  byId('setup-progress').hidden = !feedback.progress;
+  if (feedback.progress) { byId('setup-progress').max = feedback.progress.max; byId('setup-progress').value = feedback.progress.value; }
+  byId('setup-progress-stage').textContent = feedback.detail || feedback.title;
+  byId('setup-progress-bytes').textContent = feedback.progress ? `${feedback.progress.percent}%` : '';
   const unsupported = state.connected && !job.supported;
   const failed = ['setup','model','summary-model'].includes(job.kind) && ['failed','cancelled'].includes(job.status);
   byId('setup-message').textContent = !state.connected ? '준비 상태 확인 중' : unsupported ? '현재 음성 인식은 Apple Silicon Mac과 macOS 26 이상에서 사용할 수 있습니다.' : running ? '' : failed ? job.message : '';
@@ -154,7 +158,8 @@ function renderSetup() {
   byId('setup-download').disabled = !state.connected || state.busy || processingActive();
   byId('setup-download').textContent = failed ? '다시 다운로드' : '다운로드';
   byId('setup-cancel').hidden = !running;
-  byId('setup-cancel').disabled = state.busy;
+  byId('setup-cancel').disabled = feedback.cancelDisabled || state.busy;
+  byId('setup-cancel').textContent = feedback.cancelLabel;
   byId('setup-start').hidden = !ready || running || state.setupFromSettings;
   byId('setup-start').disabled = state.busy || processingActive();
   byId('setup-back').hidden = !state.selectedId && !state.setupFromSettings;
@@ -269,7 +274,7 @@ async function selectMeeting(id) {
       state.setupRequested = false;
       state.setupFromSettings = false;
       state.selectedId = id;
-      state.transcriptDraft = null; state.transcriptKey = '';
+      state.transcriptDraft = null; state.transcriptKey = ''; state.transcriptEditing = null;
       state.summary = null; state.summaryKey = '';
       void loadSummary(id);
       void loadTranscript(id);
@@ -429,7 +434,7 @@ byId('models').addEventListener('click', () => run(async () => { globalThis.Grov
 byId('setup-back').addEventListener('click', () => { const settings = state.setupFromSettings; state.setupRequested = false; state.setupFromSettings = false; render(); if (settings) void openSettings('models'); else byId('settings').focus({ preventScroll: true }); });
 byId('setup-download').addEventListener('click', () => run(async () => { state.setupRequested = true; await acceptProcessing(await bridge.prepareMeetingModels(Boolean(byId('setup-summary-option').checked) && !state.processing.summaryReady)); }));
 byId('setup-download-summary').addEventListener('click', () => run(async () => { state.setupRequested = true; await acceptProcessing(await bridge.prepareSummaryModel()); }));
-byId('setup-cancel').addEventListener('click', () => run(() => bridge.cancelProcessing(state.processing.id)));
+byId('setup-cancel').addEventListener('click', () => { void cancelProcessing(); });
 byId('retry-save').addEventListener('click', () => saveDraft().catch(() => {}));
 byId('dismiss-error').addEventListener('click', () => clearError());
 byId('recording-controls').addEventListener('click', (event) => {
@@ -489,6 +494,7 @@ async function finishEditing(action) {
   byId('transcript-rows').querySelectorAll('textarea').forEach((input) => { input.readOnly = true; });
   byId('meeting-title').readOnly = true;
   byId('meeting-notes').readOnly = true;
+  if (currentMeeting()) renderTranscript(currentMeeting());
   try {
     const draft = state.draft;
     do { await saveDraft(); await saveTranscript(); } while (state.draft === draft && (draft?.dirty || state.transcriptDraft?.dirty));
@@ -497,7 +503,7 @@ async function finishEditing(action) {
     state.editLocks -= 1;
     byId('meeting-title').readOnly = state.editLocks > 0;
     byId('meeting-notes').readOnly = state.editLocks > 0;
-    byId('transcript-rows').querySelectorAll('textarea').forEach((input) => { input.readOnly = state.editLocks > 0 || (state.processing.status === 'running' && state.processing.meetingId === state.selectedId); });
+    if (currentMeeting()) renderTranscript(currentMeeting());
   }
 }
 
@@ -505,15 +511,43 @@ const processingActive = () => state.processing.status === 'running';
 
 function renderProcessing() {
   const progress = state.processing;
+  const feedback = processingFeedback(progress, { cancelling: state.processingCancellingId === progress.id });
   byId('import-audio').disabled = !state.connected || state.busy || processingActive() || Boolean(activeSession());
-  byId('processing').hidden = !progress.id || progress.kind === 'setup' || progress.status === 'completed';
+  byId('processing').hidden = !feedback.visible || progress.kind === 'setup';
+  byId('processing').dataset.state = feedback.state;
   const owner = state.snapshot.meetings.find(meeting => meeting.id === progress.meetingId);
-  const percent = processingActive() && progress.totalBytes ? ` ${Math.min(100, Math.floor((progress.bytes || 0) / progress.totalBytes * 100))}%` : '';
-  byId('processing-message').textContent = `${owner && owner.id !== state.selectedId ? owner.title + ': ' : ''}${progress.message || ''}${percent}`;
-  byId('cancel-processing').hidden = !processingActive();
-  byId('processing-progress').hidden = !processingActive() || !progress.totalBytes;
-  byId('processing-progress').max = progress.totalBytes || 1;
-  byId('processing-progress').value = progress.bytes || 0;
+  setText('processing-title', `${owner && owner.id !== state.selectedId ? owner.title + ': ' : ''}${feedback.title}`);
+  setText('processing-message', feedback.detail);
+  byId('processing-message').hidden = !feedback.detail;
+  byId('processing-spinner').hidden = !feedback.active;
+  byId('processing-result-icon').hidden = feedback.active;
+  setHTML('processing-result-icon', icon(progress.status === 'failed' ? 'triangle-alert' : 'x'));
+  byId('cancel-processing').hidden = !feedback.cancelVisible;
+  byId('cancel-processing').disabled = feedback.cancelDisabled;
+  setText('cancel-processing', feedback.cancelLabel);
+  byId('processing-progress').hidden = !feedback.progress;
+  setText('processing-percent', feedback.progress ? `${feedback.progress.percent}%` : '');
+  byId('processing-percent').hidden = !feedback.progress;
+  if (feedback.progress) { byId('processing-progress').max = feedback.progress.max; byId('processing-progress').value = feedback.progress.value; }
+}
+
+async function cancelProcessing() {
+  const job = state.processing;
+  if (!processingActive() || state.processingCancellingId === job.id) return;
+  state.processingCancellingId = job.id;
+  render();
+  try { await bridge.cancelProcessing(job.id); }
+  catch (error) { if (state.processingCancellingId === job.id) state.processingCancellingId = null; showError(error); render(); }
+}
+
+function transcriptRenderKey() {
+  return JSON.stringify([state.selectedId, state.transcriptDraft?.doc?.version, state.transcriptLoadId, state.transcriptEditing]);
+}
+
+function resizeTranscriptEditor(input) {
+  if (!input?.style) return;
+  input.style.height = 'auto';
+  input.style.height = `${input.scrollHeight + 2}px`;
 }
 
 function renderTranscript(meeting) {
@@ -528,14 +562,26 @@ function renderTranscript(meeting) {
   byId('copy-transcript').hidden = !draft?.doc?.segments?.length;
   byId('copy-transcript').disabled = state.busy || ownJob;
   byId('transcript-export-menu').hidden = !draft?.doc?.segments?.length;
-  byId('transcript-message').textContent = ownJob ? job.message : draft?.dirty ? '저장되지 않은 수정이 있습니다.' : !job.supported ? '이 환경에서는 음성 기록을 변환할 수 없습니다.' : !job.modelReady ? '음성 인식 모델을 먼저 준비해 주세요.' : '';
+  byId('transcript-message').textContent = ownJob ? '' : draft?.dirty ? '저장되지 않은 수정이 있습니다.' : !job.supported ? '이 환경에서는 음성 기록을 변환할 수 없습니다.' : !job.modelReady ? '음성 인식 모델을 먼저 준비해 주세요.' : '';
 
-  const key = JSON.stringify([meeting.id, draft?.doc?.version, state.transcriptLoadId]);
+  byId('save-transcript').hidden = !draft?.dirty || state.transcriptEditing != null;
+  byId('transcribe').classList?.toggle('primary', !draft?.doc);
+  byId('transcribe').classList?.toggle('quiet', Boolean(draft?.doc));
+  byId('transcript-section').setAttribute('aria-busy', String(ownJob));
+  const key = transcriptRenderKey();
   if (key !== state.transcriptKey) {
     state.transcriptKey = key;
-    byId('transcript-rows').innerHTML = (draft?.doc?.segments || []).map((segment,index) => `<div class="transcript-row">${globalThis.GroveUI.button({ text: duration(segment.start * 1000), className: 'quiet small', attrs: { 'data-seek': segment.start, 'aria-label': duration(segment.start * 1000) + ' 발언 재생' } })}<div><textarea class="text-input" data-segment="${index}" aria-label="${index + 1}번 발언 수정">${escape(segment.text)}</textarea><details><summary>모델 원문</summary><p>${escape(segment.originalText)}</p></details></div></div>`).join('');
+    const scroll = byId('meeting-detail').scrollTop;
+    byId('transcript-rows').innerHTML = (draft?.doc?.segments || []).map((segment,index) => globalThis.GroveUI.transcriptRow({ index, time: duration(segment.start * 1000), start: segment.start, text: segment.text, originalText: segment.originalText, editing: state.transcriptEditing === index, disabled: ownJob || state.editLocks > 0 })).join('');
+    byId('transcript-rows').querySelectorAll('textarea').forEach(resizeTranscriptEditor);
+    byId('meeting-detail').scrollTop = scroll;
   }
   byId('transcript-rows').querySelectorAll('textarea').forEach((input) => { input.readOnly = ownJob || state.editLocks > 0; });
+  byId('transcript-rows').querySelectorAll('[data-transcript-edit], [data-transcript-done], [data-transcript-cancel]').forEach(input => { input.disabled = ownJob || state.editLocks > 0; });
+  byId('transcript-rows').querySelectorAll('[data-transcript-done]').forEach(input => {
+    const html = draft?.saving ? '<span class="activity-spinner" aria-hidden="true"></span>저장 중' : '완료';
+    if (input.innerHTML !== html) input.innerHTML = html;
+  });
 }
 
 async function loadTranscript(id) {
@@ -543,7 +589,8 @@ async function loadTranscript(id) {
   try {
     const doc = await bridge.readTranscript(id);
     if (request !== state.transcriptLoadId || state.selectedId !== id || state.transcriptDraft?.dirty) return;
-    state.transcriptDraft = { id, doc, dirty: false, saving: false, version: 0 };
+    state.transcriptDraft = { id, doc, savedTexts: doc?.segments.map(segment => segment.text) || [], dirty: false, saving: false, version: 0 };
+    state.transcriptEditing = null;
     state.transcriptKey = '';
     render();
   } catch (error) { if (request === state.transcriptLoadId && state.selectedId === id) showError(error); }
@@ -560,6 +607,7 @@ function saveTranscript() {
     const saved = await bridge.saveTranscript(draft.id, draft.doc.version, texts);
     const latest = draft.doc.segments.map((segment) => segment.text);
     draft.doc = saved;
+    draft.savedTexts = saved.segments.map(segment => segment.text);
     if (draft.version === version) draft.dirty = false;
     else draft.doc.segments.forEach((segment,index) => { segment.text = latest[index]; });
   });
@@ -567,7 +615,7 @@ function saveTranscript() {
   return task.catch((error) => { showError(error); throw error; }).finally(() => {
     draft.saving = false;
     if (state.transcriptDraft === draft) {
-      state.transcriptKey = JSON.stringify([state.selectedId, draft.doc.version, state.transcriptLoadId]);
+      state.transcriptKey = transcriptRenderKey();
       render();
     }
   });
@@ -580,6 +628,7 @@ async function acceptProcessing(progress) {
   if (state.processingKey === key) return;
   state.processingKey = key;
   state.processing = progress;
+  if (progress.id !== state.processingCancellingId || progress.status !== 'running') state.processingCancellingId = null;
   render();
   if (progress.status === 'completed' && (previous.id !== progress.id || previous.status !== 'completed') && progress.meetingId) {
     acceptSnapshot(await bridge.readSnapshot());
@@ -603,7 +652,7 @@ function renderSummary(meeting) {
   byId('summarize').textContent = doc ? '다시 요약' : '요약하기';
   byId('copy-summary').disabled = !doc;
   byId('summary-export-menu').hidden = !doc;
-  byId('summary-message').textContent = ownJob ? progress.message : doc && stale ? '음성 기록이 수정되었습니다. 다시 요약해 주세요.' : !progress.summarySupported ? '이 기기에서는 요약을 사용할 수 없습니다.' : '';
+  byId('summary-message').textContent = ownJob ? '' : doc && stale ? '음성 기록이 수정되었습니다. 다시 요약해 주세요.' : !progress.summarySupported ? '이 기기에서는 요약을 사용할 수 없습니다.' : '';
   const key = JSON.stringify([meeting.id, doc?.id, state.transcriptDraft?.doc?.version, Boolean(stale)]);
   if (key !== state.summaryKey) {
     state.summaryKey = key;
@@ -660,7 +709,7 @@ byId('summary-content').addEventListener('click', (event) => {
   if (!reference) return;
   const index = Number(reference.dataset.summarySeek), segment = state.transcriptDraft?.doc?.segments?.[index];
   if (!segment || state.summary?.stale || state.transcriptDraft?.dirty) return;
-  const row = byId('transcript-rows').querySelector(`[data-segment="${index}"]`);
+  const row = byId('transcript-rows').querySelector(`[data-transcript-row="${index}"]`);
   row?.scrollIntoView({ block: 'center', behavior: 'smooth' }); row?.focus({ preventScroll: true });
   const player = byId('audio-player');
   if (player.getAttribute('src')) { player.currentTime = segment.start; player.play().catch(showError); }
@@ -671,7 +720,7 @@ byId('import-audio').addEventListener('click', () => run(() => finishEditing(asy
   const progress = await bridge.importAudio();
   if (progress) await acceptProcessing(progress);
 })));
-byId('cancel-processing').addEventListener('click', () => run(() => bridge.cancelProcessing(state.processing.id)));
+byId('cancel-processing').addEventListener('click', () => { void cancelProcessing(); });
 byId('transcribe').addEventListener('click', () => run(() => finishEditing(async () => acceptProcessing(await bridge.transcribeAudio(state.selectedId)))));
 byId('save-transcript').addEventListener('click', () => finishEditing(() => {}).catch(() => {}));
 function onTranscriptEdit(event) {
@@ -679,18 +728,76 @@ function onTranscriptEdit(event) {
   const draft = state.transcriptDraft;
   if (index == null || !draft?.doc) return;
   draft.doc.segments[Number(index)].text = event.target.value;
-  draft.version += 1; draft.dirty = true;
+  draft.version += 1; draft.dirty = draft.doc.segments.some((segment,index) => segment.text !== draft.savedTexts[index]);
+  resizeTranscriptEditor(event.target);
   renderTranscript(currentMeeting());
   renderSummary(currentMeeting());
 }
+globalThis.addEventListener?.('resize', () => { byId('transcript-rows').querySelectorAll('textarea').forEach(resizeTranscriptEditor); });
 byId('transcript-rows').addEventListener('input', onTranscriptEdit);
 byId('transcript-rows').addEventListener('compositionstart', () => { state.transcriptComposing = true; });
 byId('transcript-rows').addEventListener('compositionend', (event) => { state.transcriptComposing = false; onTranscriptEdit(event); });
+async function editTranscriptRow(index) {
+  const meetingId = state.selectedId;
+  if (state.editLocks || (processingActive() && state.processing.meetingId === meetingId)) return;
+  try {
+    await finishEditing(() => {
+      if (state.selectedId !== meetingId || !state.transcriptDraft?.doc?.segments[index]) return;
+      state.transcriptEditing = index;
+      renderTranscript(currentMeeting());
+    });
+    if (state.selectedId === meetingId && state.transcriptEditing === index) byId('transcript-rows').querySelector(`[data-segment="${index}"]`)?.focus({ preventScroll: true });
+  } catch { return; }
+}
+
+async function completeTranscriptRow() {
+  if (state.editLocks || state.transcriptEditing == null) return;
+  const meetingId = state.selectedId;
+  const index = state.transcriptEditing;
+  try {
+    await finishEditing(() => {
+      if (state.selectedId !== meetingId || state.transcriptEditing !== index) return;
+      state.transcriptEditing = null;
+      renderTranscript(currentMeeting());
+    });
+    if (state.selectedId === meetingId) byId('transcript-rows').querySelector(`[data-transcript-edit="${index}"]`)?.focus({ preventScroll: true });
+  } catch { return; }
+}
+
+async function cancelTranscriptRow() {
+  if (state.editLocks) return;
+  const meetingId = state.selectedId;
+  if (state.transcriptComposing) {
+    document.activeElement?.blur();
+    await new Promise(requestAnimationFrame);
+    state.transcriptComposing = false;
+  }
+  if (state.selectedId !== meetingId) return;
+  const index = state.transcriptEditing, draft = state.transcriptDraft;
+  if (index == null || !draft?.doc?.segments[index]) return;
+  draft.doc.segments[index].text = draft.savedTexts[index];
+  draft.version += 1;
+  draft.dirty = draft.doc.segments.some((segment,index) => segment.text !== draft.savedTexts[index]);
+  state.transcriptEditing = null;
+  renderTranscript(currentMeeting());
+  renderSummary(currentMeeting());
+  byId('transcript-rows').querySelector(`[data-transcript-edit="${index}"]`)?.focus({ preventScroll: true });
+}
+
 byId('transcript-rows').addEventListener('click', (event) => {
+  const edit = event.target.closest('[data-transcript-edit]');
+  if (edit) { void editTranscriptRow(Number(edit.dataset.transcriptEdit)); return; }
+  if (event.target.closest('[data-transcript-done]')) { void completeTranscriptRow(); return; }
+  if (event.target.closest('[data-transcript-cancel]')) { void cancelTranscriptRow(); return; }
   const target = event.target.closest('[data-seek]');
   if (!target) return;
   const player = byId('audio-player');
   if (player.getAttribute('src')) { player.currentTime = Number(target.dataset.seek); player.play().catch(showError); }
+});
+byId('transcript-rows').addEventListener('keydown', event => {
+  if (event.isComposing || state.transcriptComposing || event.target.dataset.segment == null) return;
+  if (event.key === 'Escape') { event.preventDefault(); void cancelTranscriptRow(); }
+  else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void completeTranscriptRow(); }
 });
 
 async function onQuitRequest({ sessionId } = {}) {
