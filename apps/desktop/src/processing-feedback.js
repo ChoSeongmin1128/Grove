@@ -11,7 +11,8 @@ const jobTitles = {
 
 export function processingFeedback(job = {}, { cancelling = false } = {}) {
   const active = Boolean(job.id) && job.status === 'running';
-  const cancelRequested = active && (cancelling || job.message === '취소 중');
+  const committing = active && job.kind === 'summary' && job.summaryCommitting === true;
+  const cancelRequested = active && !committing && (cancelling || job.message === '취소 중');
   const title = jobTitles[job.kind] || '처리';
   let progress = null;
   // Byte counts describe model preparation. Inference messages and chunk counts
@@ -32,9 +33,11 @@ export function processingFeedback(job = {}, { cancelling = false } = {}) {
     state: cancelRequested ? 'cancelling' : active ? 'running' : job.status || 'idle',
     title: heading,
     detail: message && !cancelRequested && !repeated && !['준비 중', '완료', heading].includes(message) ? message : '',
+    warning: active && !cancelRequested && !committing && job.kind === 'summary' && ['warning', 'critical'].includes(job.memoryState)
+      ? '시스템 메모리 경고가 감지되었습니다. 다른 앱을 닫거나 요약을 취소할 수 있습니다.' : '',
     progress,
-    cancelVisible: active,
-    cancelDisabled: cancelRequested,
+    cancelVisible: active && !committing,
+    cancelDisabled: cancelRequested || committing,
     cancelLabel: cancelRequested ? '취소 중' : '취소',
   };
 }

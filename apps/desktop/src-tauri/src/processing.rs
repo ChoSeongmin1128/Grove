@@ -62,6 +62,10 @@ pub struct Progress {
     pub summary_ready: bool,
     pub summary_bytes: u64,
     pub model_stage: Option<String>,
+    pub memory_state: Option<crate::memory::MemoryState>,
+    pub failure_kind: Option<crate::summary_failure::FailureKind>,
+    pub retry_count: u8,
+    pub summary_committing: bool,
 }
 fn meeting_models_ready(progress: &Progress) -> Result<(), String> {
     if !progress.supported {
@@ -117,6 +121,7 @@ pub struct Processing {
     running: Mutex<Option<Running>>,
     recording_transcription: Mutex<RecordingTranscription>,
     shutting_down: AtomicBool,
+    worker_cleanup_failed: AtomicBool,
 }
 
 pub(super) fn message(error: impl std::fmt::Display) -> String {
@@ -201,6 +206,20 @@ pub(super) fn invalidate_readiness(directory: &Path) -> Result<(), String> {
     Ok(())
 }
 pub(super) struct Worker(pub(super) std::process::Child);
+impl Worker {
+    pub(super) fn stop(&mut self) -> Result<std::process::ExitStatus, String> {
+        if let Some(status) = self.0.try_wait().map_err(message)? {
+            return Ok(status);
+        }
+        match self.0.kill() {
+            Ok(()) => self.0.wait().map_err(message),
+            Err(error) => match self.0.try_wait() {
+                Ok(Some(status)) => Ok(status),
+                _ => Err(message(error)),
+            },
+        }
+    }
+}
 impl Drop for Worker {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -218,6 +237,7 @@ impl Processing {
             running: Mutex::new(None),
             recording_transcription: Mutex::new(RecordingTranscription::default()),
             shutting_down: AtomicBool::new(false),
+            worker_cleanup_failed: AtomicBool::new(false),
         })
     }
     fn model(&self) -> Model {
@@ -268,6 +288,24 @@ impl Processing {
             });
         progress
     }
+    pub(super) fn observe_memory(&self, state: crate::memory::MemoryState) -> bool {
+        let mut progress = self.progress.lock().unwrap();
+        if progress.memory_state == Some(state) {
+            return false;
+        }
+        progress.memory_state = Some(state);
+        progress.revision = progress.revision.saturating_add(1);
+        true
+    }
+    pub(super) fn cleanup_failed(&self) {
+        self.worker_cleanup_failed.store(true, Ordering::Release);
+    }
+    fn worker_ready(&self) -> Result<(), String> {
+        if self.worker_cleanup_failed.load(Ordering::Acquire) {
+            return Err("이전 음성 처리의 종료를 확인하지 못했습니다.".into());
+        }
+        Ok(())
+    }
     pub(super) fn update(&self, action: impl FnOnce(&mut Progress)) {
         let mut progress = self.progress.lock().unwrap();
         let revision = progress.revision.saturating_add(1);
@@ -280,9 +318,29 @@ impl Processing {
             .as_ref()
             .filter(|r| r.id == id && !r.handle.is_finished())
             .ok_or("현재 작업과 다른 요청입니다.")?;
+        let mut progress = self.progress.lock().unwrap();
+        if progress.summary_committing {
+            return Err("회의록을 저장하고 있습니다.".into());
+        }
         job.cancel.store(true, Ordering::Release);
-        self.update(|p| p.message = "취소 중".into());
+        progress.message = "취소 중".into();
+        progress.revision = progress.revision.saturating_add(1);
         Ok(())
+    }
+
+    pub(super) fn commit_summary<T>(
+        &self,
+        cancel: &AtomicBool,
+        commit: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        {
+            let mut progress = self.progress.lock().unwrap();
+            cancelled(cancel)?;
+            progress.summary_committing = true;
+            progress.message = "회의록 저장 중".into();
+            progress.revision = progress.revision.saturating_add(1);
+        }
+        commit()
     }
 
     pub fn meeting_removal<T>(
@@ -292,6 +350,8 @@ impl Processing {
         action: impl FnOnce() -> grove_core::Result<T>,
     ) -> grove_core::Result<T> {
         let mut running = self.running.lock().unwrap();
+        self.worker_ready()
+            .map_err(grove_core::CoreError::InvalidState)?;
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(grove_core::CoreError::InvalidState(
                 "앱을 종료하고 있습니다.".into(),
@@ -343,6 +403,8 @@ impl Processing {
                 })?;
             }
         }
+        self.worker_ready()
+            .map_err(grove_core::CoreError::InvalidState)?;
         action()
     }
 
@@ -548,12 +610,15 @@ impl Processing {
         }
     }
 
-    pub fn shutdown(&self) {
+    pub fn shutdown(&self) -> Result<(), String> {
         self.shutting_down.store(true, Ordering::Release);
         if let Some(job) = self.running.lock().unwrap().take() {
             job.cancel.store(true, Ordering::Release);
-            let _ = job.handle.join();
+            job.handle
+                .join()
+                .map_err(|_| "음성 처리 종료를 확인하지 못했습니다.".to_string())?;
         }
+        self.worker_ready()
     }
     pub fn resume(&self) {
         self.shutting_down.store(false, Ordering::Release);
@@ -578,6 +643,7 @@ impl Processing {
             + 'static,
     ) -> Result<Progress, String> {
         let mut running = self.running.lock().unwrap();
+        self.worker_ready()?;
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("앱을 종료하고 있습니다.".into());
         }
@@ -592,6 +658,7 @@ impl Processing {
         if let Some(old) = running.take() {
             let _ = old.handle.join();
         }
+        self.worker_ready()?;
         let import_existing = importing_core
             .map(|core| {
                 core.list_meetings()
@@ -633,7 +700,9 @@ impl Processing {
                     p.message = "완료".into();
                 }
                 Err(error) => {
-                    p.status = if flag.load(Ordering::Acquire) {
+                    p.status = if flag.load(Ordering::Acquire)
+                        && !this.worker_cleanup_failed.load(Ordering::Acquire)
+                    {
                         "cancelled"
                     } else {
                         "failed"
@@ -855,6 +924,7 @@ impl Processing {
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         let mut running = self.running.lock().unwrap();
+        self.worker_ready()?;
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("앱을 종료하고 있습니다.".into());
         }
@@ -867,6 +937,7 @@ impl Processing {
             job.cancel.store(true, Ordering::Release);
             let _ = job.handle.join();
         }
+        self.worker_ready()?;
         action()
     }
     pub fn import(self: &Arc<Self>, core: CoreHandle, source: PathBuf) -> Result<Progress, String> {
@@ -1099,12 +1170,114 @@ mod tests {
     #[test]
     fn shutdown_rejects_new_jobs_even_without_a_running_worker() {
         let (_temp, process) = setup();
-        process.shutdown();
+        process.shutdown().unwrap();
         assert_eq!(
             process.prepare_model().err().unwrap(),
             "앱을 종료하고 있습니다."
         );
         assert!(process.running.lock().unwrap().is_none());
+    }
+    #[test]
+    fn failed_worker_cleanup_blocks_new_capture_even_when_it_happens_during_cancellation() {
+        let (_temp, process) = setup();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let observer = process.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(1));
+            }
+            observer.cleanup_failed();
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "summary".into(),
+            cancel,
+            handle,
+            import_existing: None,
+        });
+        process.update(|p| p.kind = "summary".into());
+        assert!(process
+            .recording_start(|| -> Result<(), String> { panic!("capture must not start") })
+            .is_err());
+        assert!(process.worker_ready().is_err());
+    }
+    #[test]
+    fn cleanup_failure_during_cancellation_blocks_removal_and_successful_shutdown() {
+        let (_temp, process) = setup();
+        let core = CoreHandle::open(&process.root).unwrap();
+        let meeting = core.create_meeting("Meeting", "").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let observer = process.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            observer.cleanup_failed();
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "summary".into(),
+            cancel,
+            handle,
+            import_existing: None,
+        });
+        process.update(|p| p.meeting_id = Some(meeting.id.clone()));
+        assert!(process
+            .meeting_removal(&core, &[meeting.id], || -> grove_core::Result<()> {
+                panic!("removal must not run after unconfirmed termination")
+            })
+            .is_err());
+        assert!(process.shutdown().is_err());
+    }
+    #[test]
+    fn accepted_cancellation_prevents_commit_and_commit_rejects_late_cancellation() {
+        let (_temp, process) = setup();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "summary".into(),
+            cancel: cancel.clone(),
+            handle,
+            import_existing: None,
+        });
+        process.cancel("summary").unwrap();
+        assert!(process
+            .commit_summary(&cancel, || -> Result<(), String> {
+                panic!("accepted cancellation must prevent commit")
+            })
+            .is_err());
+        process.shutdown().unwrap();
+        process.resume();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let handle = thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+        });
+        *process.running.lock().unwrap() = Some(Running {
+            id: "summary".into(),
+            cancel: cancel.clone(),
+            handle,
+            import_existing: None,
+        });
+        assert_eq!(
+            process
+                .commit_summary(&cancel, || {
+                    assert!(process.cancel("summary").is_err());
+                    assert!(!cancel.load(Ordering::Acquire));
+                    Ok("saved")
+                })
+                .unwrap(),
+            "saved"
+        );
+        assert!(process.snapshot().summary_committing);
+        process.shutdown().unwrap();
     }
     #[test]
     fn recording_waits_for_summary_cancellation_before_starting_capture() {
@@ -1199,7 +1372,7 @@ mod tests {
             .unwrap();
         assert!(!cancel.load(Ordering::Acquire));
         assert!(process.running.lock().unwrap().is_some());
-        process.shutdown();
+        process.shutdown().unwrap();
     }
     #[test]
     fn import_completion_is_joined_before_removing_its_new_meeting() {

@@ -88,6 +88,46 @@ test('folder navigation flushes edits and clears the previous selection', async 
   assert.equal(app.byId('library-title').textContent, '미분류');
 });
 
+test('opening a meeting preserves the selected navigation scope and shows its actual folder separately', () => {
+  const app = harness();
+  app.state.libraryFilter = 'all';
+  app.controller.render();
+  const navigation = app.byId('folder-list').innerHTML;
+  app.state.libraryOpen = false;
+  app.controller.render();
+  assert.equal(app.byId('folder-list').innerHTML, navigation);
+  assert.match(navigation, /data-library-filter="all" aria-current="page"/);
+  assert.equal(app.state.libraryFilter, 'all');
+  assert.equal(app.byId('meeting-folder-context').textContent, '프로젝트');
+  assert.equal(app.byId('meeting-folder-context').title, '프로젝트');
+  app.state.snapshot.meetings[0].folderId = null;
+  app.controller.render();
+  assert.equal(app.byId('meeting-folder-context').textContent, '미분류');
+  assert.equal(app.state.libraryFilter, 'all');
+  app.state.libraryFilter = 'project';
+  app.controller.render();
+  assert.match(app.byId('folder-list').innerHTML, /data-library-filter="project" aria-current="page"/);
+  assert.equal(app.byId('meeting-folder-context').textContent, '미분류');
+});
+
+test('renamed folders update detail context and long names keep an escaped full title', () => {
+  const app = harness();
+  const name = '이름이 긴 프로젝트와 반복 회의를 함께 정리하는 폴더 "검토"';
+  app.state.snapshot.folders[0].name = name;
+  app.controller.render();
+  const html = app.byId('folder-list').innerHTML;
+  assert.match(html, /class="library-folder-name" title="이름이 긴 프로젝트/);
+  assert.match(html, /폴더 &quot;검토&quot;/);
+  assert.equal(app.byId('meeting-folder-context').textContent, name);
+  assert.equal(app.byId('meeting-folder-context').title, name);
+  app.state.snapshot.folders[0].name = '변경한 폴더';
+  app.controller.render();
+  assert.equal(app.byId('meeting-folder-context').textContent, '변경한 폴더');
+  app.state.selectedId = null;
+  app.controller.render();
+  assert.equal(app.byId('meeting-folder-context').hidden, true);
+});
+
 test('select all respects full-text search IDs and the current folder scope', () => {
   const app = harness();
   app.byId('search').value = '본문에서만 찾을 표현';

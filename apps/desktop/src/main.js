@@ -562,6 +562,8 @@ function renderProcessing() {
   setText('processing-title', `${owner && owner.id !== state.selectedId ? owner.title + ': ' : ''}${feedback.title}`);
   setText('processing-message', feedback.detail);
   byId('processing-message').hidden = !feedback.detail;
+  setText('processing-warning', feedback.warning);
+  byId('processing-warning').hidden = !feedback.warning;
   byId('processing-spinner').hidden = !feedback.active;
   byId('processing-result-icon').hidden = feedback.active;
   setHTML('processing-result-icon', icon(progress.status === 'failed' ? 'triangle-alert' : 'x'));

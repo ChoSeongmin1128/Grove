@@ -248,10 +248,13 @@ to a provider. First preparation requires network access; verified models run of
 
 Only one processing job runs at a time. A summary worker binds to loopback with an
 unpredictable per-process API key, uses a single slot, two CPU threads and low priority,
-and exits on completion/cancellation/quit. GPU startup is preferred; startup failure can
-fall back to the bundled CPU route. New recording cancels/joins inference before capture.
-Normal quit joins the worker; unexpected process/OS termination is not a validated
-parent-death cleanup guarantee.
+and is explicitly stopped and reaped on completion/cancellation/quit. GPU startup is
+preferred. Only a confirmed unavailable GPU backend selects the bundled CPU route;
+other engine or allocation failures retry with the same backend and settings. All
+recovery paths share a single retry budget within the original job, after the direct
+worker's exit is confirmed. New recording cancels/joins inference before capture.
+Unconfirmed worker cleanup blocks new processing, recording and successful normal quit.
+Unexpected process/OS termination is not a validated parent-death cleanup guarantee.
 
 The initial context is 8,192 tokens, response allowance 2,048 plus a 128-token input
 margin. The actual rendered template is tokenized. Long transcripts are partitioned by
@@ -261,14 +264,18 @@ utterances/non-reducing merge inputs, incomplete responses and invalid numeric s
 fail without overwriting a prior summary. Syntactic reference checks do not verify meaning.
 Source numbers link back to the selected transcript; links are disabled after edits.
 
-macOS refuses loading/continues no inference when OS memory pressure is non-normal.
-Windows uses a conservative initial 90% system-memory-load guard. These are operating
-guards, not 8GB/16GB qualification or a whole-GPU memory guarantee. Users may need to
-wait for other work to finish. Model/prompt quality and hardware acceptance remain gates.
+OS memory observations are advisory and never block or cancel a summary. macOS reads
+an undocumented pressure sysctl on a best-effort basis; Windows queries the official
+low-memory resource notification. Failed or unrecognized observations become `unknown`,
+not task failures. Pinned runtime allocation diagnostics are distinguished from generic
+engine failure; OS warnings and unexplained process death do not prove OOM. See
+[runtime memory policy](../../docs/runtime-memory.md) for failure and recovery rules.
 
 Summaries archive their exact source transcript, provenance and response receipt separately.
 A changed transcript or competing result cannot overwrite the current summary. Failed or
-cancelled runs preserve audio, notes, transcript and prior summaries. Read/reopen/copy and
+cancelled runs preserve audio, notes, transcript and prior summaries. Accepted cancellation
+and final commit are mutually exclusive; once commit begins, cancellation is rejected and
+recording/quit waits for the job. Read/reopen/copy and
 source playback are connected; manual summary editing and additional templates are not
 implemented in this slice.
 

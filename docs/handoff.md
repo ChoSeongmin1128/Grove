@@ -133,17 +133,22 @@ the private installation and evaluation receipts.
   The repository was renamed separately; retaining internal grove crate/event names is
   intentional compatibility, not a second installed product. The approved mark is 23-B r7 A.
 - Packaged llama.cpp b11734 supports explicit preparation of pinned Gemma 4 E4B Q4_0 and
-  on-demand local summaries. GPU startup is preferred, with a bundled CPU startup fallback.
+  on-demand local summaries. GPU startup is preferred; confirmed GPU backend unavailability
+  permits a bundled CPU fallback.
   Per-process loopback authentication, serial processing, cancellation/quit/recording-start
   worker teardown and bounded token budgets are connected.
-- Summary memory gating currently rejects startup or fails a running job when the macOS
-  pressure value is not normal (or cannot be read), or Windows memory load is at least
-  90% (or cannot be read). Worker teardown kills/joins the process; this is not pause/resume.
-  These hard thresholds are not hardware-qualified or a consistent app-wide memory policy.
-  GPU-to-CPU startup fallback still passes the same checks and is not proven OOM recovery.
-  Distinguish system warnings, actual allocation failures and engine errors before revising
-  this policy; do not substitute an invented threshold or infer adaptive budgets/model
-  switching. OS/accelerator behavior, recording stability and quality require separate tests.
+- OS memory observations no longer gate summary startup or execution. macOS uses an
+  undocumented pressure sysctl as a best-effort observation; Windows uses the official
+  low-memory resource notification. Read failures become `unknown`, not task failures.
+  Strict pinned runtime diagnostics distinguish allocation failure and unavailable GPU
+  backends from generic engine failure; OS warnings or unexplained exits do not prove OOM.
+  Recovery is at most one retry in the same job after the direct worker is stopped/reaped.
+  Allocation and generic engine failures retain the backend and generation settings;
+  only confirmed GPU backend unavailability permits CPU fallback. Cleanup failure blocks
+  subsequent processing/recording and successful normal quit. Cancellation prevents a retry;
+  accepted cancellation and final summary commit are mutually exclusive. See
+  [runtime-memory.md](runtime-memory.md). Synthetic worker/loopback coverage does not
+  establish real OOM recovery, Windows execution or 8GB/16GB hardware qualification.
 - Summary records retain source revisions, model/prompt provenance and receipts. Changed
   sources or competing results cannot replace current summaries. The UI reads/copies them
   and links valid references to transcript playback, with stale-source links disabled.

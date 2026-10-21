@@ -4,11 +4,13 @@
 mod app_menu;
 mod downloads;
 mod export;
+mod memory;
 mod microphone_permission;
 mod processing;
 mod recorder_policy;
 mod storage_space;
 mod summary;
+mod summary_failure;
 use grove_core::{
     CoreHandle, Device, Meeting, Snapshot, SummaryView, Transcript, TranscriptSpeaker,
     TranscriptVersion,
@@ -762,9 +764,14 @@ async fn request_quit(
 ) -> Result<(), String> {
     require_main(&window)?;
     let processing = state.processing.clone();
-    tauri::async_runtime::spawn_blocking(move || processing.shutdown())
+    let stopped = tauri::async_runtime::spawn_blocking(move || processing.shutdown())
         .await
-        .map_err(|_| "음성 처리를 종료하지 못했습니다.".to_string())?;
+        .map_err(|_| "음성 처리를 종료하지 못했습니다.".to_string())
+        .and_then(|result| result);
+    if let Err(error) = stopped {
+        state.processing.resume();
+        return Err(error);
+    }
     let result = on_core(state.core.clone(), move |core| {
         core.prepare_shutdown(session_id.as_deref())
     })

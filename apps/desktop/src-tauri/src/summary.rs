@@ -1,12 +1,14 @@
 //! On-demand local summary worker. No provider authentication or remote inference.
+use crate::memory::{MemoryMonitor, MemoryState};
 use crate::processing::{
     cancelled, directory, interruptible, matches_file, message, plain_file, Model, Processing,
     Progress, Worker,
 };
+use crate::summary_failure::{classify_worker_failure, recovery, Failure, FailureKind};
 use grove_core::{CoreHandle, SummaryDraft, SummaryProvenance, Transcript};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -91,58 +93,34 @@ pub fn availability(process: &Processing) -> (bool, bool, u64) {
     });
     (supported, ready, spec.files.iter().map(|f| f.bytes).sum())
 }
-fn pressure_ok() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let result = Command::new("/usr/sbin/sysctl")
-            .args(["-n", "kern.memorystatus_vm_pressure_level"])
-            .output()
-            .map_err(message)?;
-        if !result.status.success() {
-            return Err("메모리 상태를 확인하지 못했습니다. 잠시 후 다시 시도하세요.".into());
-        }
-        if String::from_utf8_lossy(&result.stdout).trim() != "1" {
-            return Err("메모리 여유가 부족합니다. 다른 작업이 끝난 뒤 요약해 주세요.".into());
-        }
-    }
-    #[cfg(windows)]
-    {
-        #[repr(C)]
-        struct Memory {
-            length: u32,
-            load: u32,
-            total: u64,
-            available: u64,
-            page_total: u64,
-            page_available: u64,
-            virtual_total: u64,
-            virtual_available: u64,
-            extended: u64,
-        }
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GlobalMemoryStatusEx(state: *mut Memory) -> i32;
-        }
-        let mut state = Memory {
-            length: std::mem::size_of::<Memory>() as u32,
-            load: 0,
-            total: 0,
-            available: 0,
-            page_total: 0,
-            page_available: 0,
-            virtual_total: 0,
-            virtual_available: 0,
-            extended: 0,
-        };
-        if unsafe { GlobalMemoryStatusEx(&mut state) } == 0 {
-            return Err("메모리 상태를 확인하지 못했습니다.".into());
-        }
-        // Initial conservative operating guard, not a minimum hardware qualification.
-        if state.load >= 90 {
-            return Err("메모리 여유가 부족합니다. 다른 작업이 끝난 뒤 요약해 주세요.".into());
+type SummaryResult<T> = Result<T, Failure>;
+fn check_cancel(cancel: &AtomicBool) -> SummaryResult<()> {
+    cancelled(cancel).map_err(|_| Failure::new(FailureKind::Cancelled, "처리를 취소했습니다."))
+}
+fn storage(error: impl std::fmt::Display) -> Failure {
+    Failure::new(FailureKind::Storage, message(error))
+}
+fn record_memory(process: &Processing, state: MemoryState, path: &Path) {
+    if process.observe_memory(state) {
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path.join("memory-events.jsonl"))
+        {
+            let _ = writeln!(file, "{}", json!({"state": state}));
         }
     }
-    Ok(())
+}
+fn runtime_failure(kind: FailureKind) -> Failure {
+    let text = match kind {
+        FailureKind::Allocation => {
+            "요약에 필요한 메모리를 확보하지 못했습니다. 다른 작업을 마친 뒤 다시 시도해 주세요."
+        }
+        FailureKind::BackendUnavailable => "GPU 실행 환경을 사용할 수 없습니다.",
+        FailureKind::Cleanup => "요약 처리를 종료하지 못했습니다. 앱을 종료해 주세요.",
+        _ => "요약 실행기가 종료되었거나 연결이 끊겼습니다. 다시 시도해 주세요.",
+    };
+    Failure::new(kind, text)
 }
 struct Server {
     worker: Worker,
@@ -151,14 +129,43 @@ struct Server {
     key: String,
     directory: PathBuf,
     response_index: AtomicUsize,
+    log: PathBuf,
+    gpu: bool,
 }
 impl Server {
+    fn diagnose(&self, error: Failure) -> Failure {
+        if error.kind != FailureKind::EngineUnavailable {
+            return error;
+        }
+        let log = plain_file(&self.log)
+            .and_then(|mut file| {
+                let length = file.metadata().map_err(message)?.len();
+                file.seek(SeekFrom::Start(length.saturating_sub(64 * 1024)))
+                    .map_err(message)?;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes).map_err(message)?;
+                Ok(String::from_utf8_lossy(&bytes).into_owned())
+            })
+            .unwrap_or_default();
+        let kind = classify_worker_failure(&log, self.gpu);
+        if kind == FailureKind::EngineUnavailable {
+            error
+        } else {
+            runtime_failure(kind)
+        }
+    }
+    fn stop(&mut self, process: &Processing) -> SummaryResult<()> {
+        self.worker.stop().map(|_| ()).map_err(|_| {
+            process.cleanup_failed();
+            runtime_failure(FailureKind::Cleanup)
+        })
+    }
     async fn request(
         &self,
         route: &str,
         body: Option<Value>,
         cancel: &AtomicBool,
-    ) -> Result<Value, String> {
+    ) -> SummaryResult<Value> {
         let request = match body {
             Some(value) => self
                 .client
@@ -168,27 +175,42 @@ impl Server {
         }
         .bearer_auth(&self.key);
         let response = interruptible(cancel, request.send())
-            .await?
-            .map_err(|_| "요약 실행기와 연결이 끊겼습니다.".to_string())?;
+            .await
+            .map_err(|_| Failure::new(FailureKind::Cancelled, "처리를 취소했습니다."))?
+            .map_err(|_| runtime_failure(FailureKind::EngineUnavailable))?;
         if !response.status().is_success() {
-            return Err(
-                "요약 실행기가 요청을 완료하지 못했습니다. 기존 요약은 유지했습니다.".into(),
-            );
+            let kind = if response.status().is_server_error() {
+                FailureKind::EngineUnavailable
+            } else {
+                FailureKind::Input
+            };
+            return Err(Failure::new(
+                kind,
+                format!(
+                    "요약 요청을 완료하지 못했습니다. (HTTP {})",
+                    response.status().as_u16()
+                ),
+            ));
         }
         let mut response = response;
         let mut bytes = Vec::new();
         while let Some(part) = interruptible(cancel, response.chunk())
-            .await?
-            .map_err(message)?
+            .await
+            .map_err(|_| Failure::new(FailureKind::Cancelled, "처리를 취소했습니다."))?
+            .map_err(|_| runtime_failure(FailureKind::EngineUnavailable))?
         {
             if bytes.len() + part.len() > 16 * 1024 * 1024 {
-                return Err("요약 응답이 너무 큽니다.".into());
+                return Err(Failure::new(
+                    FailureKind::Protocol,
+                    "요약 응답이 너무 큽니다.",
+                ));
             }
             bytes.extend_from_slice(&part);
         }
-        serde_json::from_slice(&bytes).map_err(|_| "요약 응답을 읽지 못했습니다.".into())
+        serde_json::from_slice(&bytes)
+            .map_err(|_| Failure::new(FailureKind::Protocol, "요약 응답을 읽지 못했습니다."))
     }
-    async fn input_tokens(&self, user: &str, cancel: &AtomicBool) -> Result<usize, String> {
+    async fn input_tokens(&self, user: &str, cancel: &AtomicBool) -> SummaryResult<usize> {
         let rendered=self.request("/apply-template",Some(json!({"messages":[{"role":"system","content":SYSTEM},{"role":"user","content":user}],"add_generation_prompt":true,"chat_template_kwargs":{"enable_thinking":false}})),cancel).await?;
         let prompt = rendered["prompt"]
             .as_str()
@@ -206,9 +228,9 @@ impl Server {
         tokens["tokens"]
             .as_array()
             .map(Vec::len)
-            .ok_or("입력 길이를 확인하지 못했습니다.".into())
+            .ok_or_else(|| Failure::new(FailureKind::Protocol, "입력 길이를 확인하지 못했습니다."))
     }
-    async fn generate(&self, user: &str, cancel: &AtomicBool) -> Result<Value, String> {
+    async fn generate(&self, user: &str, cancel: &AtomicBool) -> SummaryResult<Value> {
         if self.input_tokens(user, cancel).await? + OUTPUT + MARGIN > CONTEXT {
             return Err("요약 입력 한도를 넘었습니다. 기존 요약은 유지했습니다.".into());
         }
@@ -216,9 +238,9 @@ impl Server {
         let number = self.response_index.fetch_add(1, Ordering::Relaxed);
         fs::write(
             self.directory.join(format!("response-{number}.json")),
-            serde_json::to_vec(&response).map_err(message)?,
+            serde_json::to_vec(&response).map_err(storage)?,
         )
-        .map_err(message)?;
+        .map_err(storage)?;
         decode(&response)?;
         Ok(response)
     }
@@ -293,15 +315,21 @@ async fn launch(
     gpu: bool,
     path: &Path,
     cancel: &AtomicBool,
-) -> Result<Server, String> {
-    cancelled(cancel)?;
-    pressure_ok()?;
+) -> SummaryResult<Server> {
+    check_cancel(cancel)?;
     if gpu && !gpu_runtime_available() {
-        return Err("GPU 실행 환경을 사용할 수 없습니다.".into());
+        return Err(runtime_failure(FailureKind::BackendUnavailable));
     }
     let binary = executable(process, gpu);
     if !binary.is_file() {
-        return Err("요약 실행기가 앱에 포함되지 않았습니다.".into());
+        return Err(Failure::new(
+            if gpu {
+                FailureKind::BackendUnavailable
+            } else {
+                FailureKind::Input
+            },
+            "요약 실행기가 앱에 포함되지 않았습니다.",
+        ));
     }
     let listener = TcpListener::bind("127.0.0.1:0").map_err(message)?;
     let port = listener.local_addr().map_err(message)?.port();
@@ -313,11 +341,12 @@ async fn launch(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
+    let log_path = path.join(if gpu { "gpu.log" } else { "cpu.log" });
     let log = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path.join(if gpu { "gpu.log" } else { "cpu.log" }))
-        .map_err(message)?;
+        .open(&log_path)
+        .map_err(storage)?;
     command
         .args([
             "--host",
@@ -366,51 +395,70 @@ async fn launch(
     if !gpu {
         command.args(["--device", "none"]);
     }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .map_err(|_| Failure::new(FailureKind::Input, "요약 연결을 준비하지 못했습니다."))?;
     let mut server = Server {
         worker: Worker(
             command
                 .spawn()
-                .map_err(|_| "요약 실행기를 시작하지 못했습니다.".to_string())?,
+                .map_err(|_| runtime_failure(FailureKind::EngineUnavailable))?,
         ),
-        client: reqwest::Client::builder()
-            .no_proxy()
-            .connect_timeout(Duration::from_secs(2))
-            .timeout(Duration::from_secs(1800))
-            .build()
-            .map_err(message)?,
+        client,
         url: format!("http://127.0.0.1:{port}"),
         key,
         directory: path.to_owned(),
         response_index: AtomicUsize::new(0),
+        log: log_path,
+        gpu,
     };
+    let result = wait_ready(&mut server, cancel).await;
+    match result {
+        Ok(()) => Ok(server),
+        Err(error) => {
+            server.stop(process)?;
+            Err(server.diagnose(error))
+        }
+    }
+}
+async fn wait_ready(server: &mut Server, cancel: &AtomicBool) -> SummaryResult<()> {
     let start = Instant::now();
-    let mut last_pressure = Instant::now();
     loop {
-        cancelled(cancel)?;
-        if server.worker.0.try_wait().map_err(message)?.is_some() {
-            return Err("요약 모델을 불러오지 못했습니다.".into());
+        check_cancel(cancel)?;
+        if let Some(status) = server
+            .worker
+            .0
+            .try_wait()
+            .map_err(|_| runtime_failure(FailureKind::EngineUnavailable))?
+        {
+            return Err(Failure::new(
+                FailureKind::EngineUnavailable,
+                format!("요약 모델을 불러오지 못했습니다. ({status})"),
+            ));
         }
-        if last_pressure.elapsed() > Duration::from_secs(2) {
-            pressure_ok()?;
-            last_pressure = Instant::now();
-        }
-        // /props requires the per-process bearer token. Health alone cannot establish ownership.
-        if matches!(
-            tokio::time::timeout(
-                Duration::from_secs(2),
-                server.request("/props", None, cancel)
-            )
-            .await,
-            Ok(Ok(_))
-        ) {
-            return Ok(server);
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            server.request("/props", None, cancel),
+        )
+        .await
+        {
+            Ok(Ok(_)) => return Ok(()),
+            Ok(Err(error)) if error.kind != FailureKind::EngineUnavailable => return Err(error),
+            _ => (),
         }
         if start.elapsed() > Duration::from_secs(120) {
-            return Err("요약 모델 준비 시간이 초과됐습니다.".into());
+            return Err(Failure::new(
+                FailureKind::EngineUnavailable,
+                "요약 모델 준비 시간이 초과됐습니다.",
+            ));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
+
 fn source_lines(source: &Transcript) -> Vec<String> {
     source
         .segments
@@ -438,7 +486,7 @@ async fn summarize(
     source: &Transcript,
     process: &Processing,
     cancel: &AtomicBool,
-) -> Result<(String, Value), String> {
+) -> SummaryResult<(String, Value)> {
     let lines = source_lines(source);
     let full = transcript_user(&lines);
     let mut receipts = Vec::new();
@@ -520,8 +568,112 @@ async fn summarize(
         levels.push(groups);
         parts = next;
     }
-    Err("회의가 길어 요약 통합 한도를 넘었습니다. 기존 요약은 유지했습니다.".into())
+    Err(Failure::new(
+        FailureKind::Output,
+        "회의가 길어 요약 통합 한도를 넘었습니다. 기존 요약은 유지했습니다.",
+    ))
 }
+async fn monitor_attempt<T>(
+    process: &Processing,
+    path: &Path,
+    mut sample: impl FnMut() -> MemoryState,
+    interval: Duration,
+    future: impl std::future::Future<Output = SummaryResult<T>>,
+) -> SummaryResult<T> {
+    record_memory(process, sample(), path);
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = tokio::time::sleep(interval) => record_memory(process, sample(), path),
+        }
+    }
+}
+
+async fn recover_summary<F, Fut>(
+    process: &Processing,
+    path: &Path,
+    cancel: &AtomicBool,
+    mut attempt: F,
+) -> SummaryResult<(String, Value)>
+where
+    F: FnMut(bool, PathBuf) -> Fut,
+    Fut: std::future::Future<Output = SummaryResult<(String, Value)>>,
+{
+    let mut gpu = true;
+    let mut attempts = Vec::new();
+    for number in 0..2 {
+        check_cancel(cancel)?;
+        let folder = directory(path, &format!("attempt-{number}")).map_err(storage)?;
+        process.update(|p| {
+            p.retry_count = number;
+            p.message = if number == 0 {
+                "요약 모델을 불러오고 있습니다."
+            } else {
+                "요약을 다시 준비하고 있습니다."
+            }
+            .into();
+        });
+        let result = attempt(gpu, folder.clone()).await;
+        let cleanup_failed = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.kind == FailureKind::Cleanup);
+        let result = if cancel.load(Ordering::Acquire) && !cleanup_failed {
+            Err(Failure::new(FailureKind::Cancelled, "처리를 취소했습니다."))
+        } else {
+            result
+        };
+        let record = json!({"attempt":number,"backend":if gpu {"gpu"} else {"cpu"},"failureKind":result.as_ref().err().map(|error|error.kind)});
+        let evidence = fs::write(
+            folder.join("outcome.json"),
+            serde_json::to_vec(&record).map_err(storage)?,
+        );
+        if !cleanup_failed {
+            evidence.map_err(storage)?;
+        }
+        attempts.push(record);
+        match result {
+            Ok((text, mut receipt)) => {
+                receipt["runtimeAttempts"] = json!(attempts);
+                return Ok((text, receipt));
+            }
+            Err(error) => match recovery(error.kind, gpu, number > 0) {
+                Some(next_gpu) => {
+                    check_cancel(cancel)?;
+                    gpu = next_gpu;
+                }
+                None => return Err(error),
+            },
+        }
+    }
+    unreachable!("recovery is bounded to one retry")
+}
+
+async fn run_summary(
+    process: &Processing,
+    source: &Transcript,
+    weights: &Path,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> SummaryResult<(String, Value)> {
+    let monitor = MemoryMonitor::new();
+    monitor_attempt(
+        process,
+        path,
+        || monitor.sample(),
+        Duration::from_secs(2),
+        recover_summary(process, path, cancel, |gpu, folder| async move {
+            let mut server = launch(process, weights, gpu, &folder, cancel).await?;
+            process.update(|p| p.message = "요약 중".into());
+            let result = summarize(&server, source, process, cancel).await;
+            server.stop(process)?;
+            result.map_err(|error| server.diagnose(error))
+        }),
+    )
+    .await
+}
+
 impl Processing {
     pub fn prepare_summary(self: &Arc<Self>) -> Result<Progress, String> {
         self.prepare_named_model(MANIFEST, "summary-model", "Gemma4-E4B")
@@ -534,7 +686,6 @@ impl Processing {
         if !availability(self).1 {
             return Err("먼저 요약 모델을 준비해 주세요.".into());
         }
-        pressure_ok()?;
         let source = core
             .transcript(&meeting_id)
             .map_err(message)?
@@ -546,30 +697,387 @@ impl Processing {
             .summary(&meeting_id)
             .map_err(message)?
             .map(|v| v.document.id);
-        self.start("summary",Some(meeting_id.clone()),move |process,cancel,path| {
-            if !core.snapshot().map_err(message)?.meetings.iter().any(|meeting| meeting.id == meeting_id && meeting.deleted_at.is_none()) { return Err("휴지통에 있는 회의는 요약할 수 없습니다.".into()); }
-            if core.snapshot().map_err(message)?.session.is_some_and(|s|matches!(s.state,grove_core::SessionState::Recording|grove_core::SessionState::Paused)) { return Err("녹음을 마친 뒤 요약해 주세요.".into()); }
-            process.update(|p|p.message="모델을 확인하고 있습니다.".into());let spec=model();let dir=model_dir(&process)?;
-            for item in &spec.files { if !matches_file(&dir.join(&item.name),item,&cancel) { cancelled(&cancel)?;crate::processing::invalidate_readiness(&dir)?;return Err("요약 모델을 다시 준비해 주세요.".into()); } }
-            let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(message)?;
-            let (text,receipt)=runtime.block_on(async {
-                process.update(|p|p.message="요약 모델을 불러오고 있습니다.".into());
-                let server=match launch(&process,&dir.join(&spec.files[0].name),true,&path,&cancel).await { Ok(server)=>server, Err(gpu_error)=> { cancelled(&cancel)?;pressure_ok()?;if !executable(&process,false).is_file() { return Err(gpu_error); }launch(&process,&dir.join(&spec.files[0].name),false,&path,&cancel).await? } };
-                process.update(|p|p.message="요약 중".into());
-                let future=summarize(&server,&source,&process,&cancel);tokio::pin!(future);
-                loop { tokio::select! { result=&mut future=>break result, _=tokio::time::sleep(Duration::from_secs(2))=> { cancelled(&cancel)?;pressure_ok()?; } } }
-                // server is dropped and joined here, before storage or a new model job.
-            })?;
-            cancelled(&cancel)?;
-            validate_references(&text, source.segments.len())?;
-            let draft=SummaryDraft { source,expected_id:expected,text,provenance:SummaryProvenance { model:spec.repository,model_revision:spec.revision,model_sha256:spec.files[0].sha256.clone(),runtime:"llama.cpp b11734-f3fb2fcdb".into(),prompt_version:"nero-minutes-speakers-v2".into(),template:"minutes".into() },receipt };
-            core.commit_summary(&meeting_id,draft).map_err(message)?;Ok(Some(meeting_id))
-        })
+        self.start(
+            "summary",
+            Some(meeting_id.clone()),
+            move |process, cancel, path| {
+                if !core
+                    .snapshot()
+                    .map_err(message)?
+                    .meetings
+                    .iter()
+                    .any(|meeting| meeting.id == meeting_id && meeting.deleted_at.is_none())
+                {
+                    return Err("휴지통에 있는 회의는 요약할 수 없습니다.".into());
+                }
+                if core.snapshot().map_err(message)?.session.is_some_and(|s| {
+                    matches!(
+                        s.state,
+                        grove_core::SessionState::Recording | grove_core::SessionState::Paused
+                    )
+                }) {
+                    return Err("녹음을 마친 뒤 요약해 주세요.".into());
+                }
+                process.update(|p| p.message = "모델을 확인하고 있습니다.".into());
+                let spec = model();
+                let dir = model_dir(&process)?;
+                for item in &spec.files {
+                    if !matches_file(&dir.join(&item.name), item, &cancel) {
+                        cancelled(&cancel)?;
+                        crate::processing::invalidate_readiness(&dir)?;
+                        return Err("요약 모델을 다시 준비해 주세요.".into());
+                    }
+                }
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(message)?;
+                let outcome = runtime.block_on(run_summary(
+                    &process,
+                    &source,
+                    &dir.join(&spec.files[0].name),
+                    &path,
+                    &cancel,
+                ));
+                let (text, receipt) = outcome.map_err(|error| {
+                    process.update(|p| p.failure_kind = Some(error.kind));
+                    error.message
+                })?;
+                cancelled(&cancel)?;
+                validate_references(&text, source.segments.len()).map_err(|error| {
+                    process.update(|p| p.failure_kind = Some(FailureKind::Output));
+                    error
+                })?;
+                let draft = SummaryDraft {
+                    source,
+                    expected_id: expected,
+                    text,
+                    provenance: SummaryProvenance {
+                        model: spec.repository,
+                        model_revision: spec.revision,
+                        model_sha256: spec.files[0].sha256.clone(),
+                        runtime: "llama.cpp b11734-f3fb2fcdb".into(),
+                        prompt_version: "nero-minutes-speakers-v2".into(),
+                        template: "minutes".into(),
+                    },
+                    receipt,
+                };
+                process.commit_summary(&cancel, || {
+                    core.commit_summary(&meeting_id, draft).map_err(|error| {
+                        process.update(|p| {
+                            p.failure_kind =
+                                Some(if matches!(error, grove_core::CoreError::Storage(_)) {
+                                    FailureKind::Storage
+                                } else {
+                                    FailureKind::Input
+                                })
+                        });
+                        message(error)
+                    })
+                })?;
+                Ok(Some(meeting_id))
+            },
+        )
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+    #[test]
+    fn cleanup_failure_is_not_hidden_by_cancellation_or_failed_evidence_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let process = Processing::new(temp.path().into(), temp.path().into());
+        let cancel = AtomicBool::new(false);
+        let error = runtime()
+            .block_on(recover_summary(
+                &process,
+                temp.path(),
+                &cancel,
+                |_, folder| {
+                    fs::create_dir(folder.join("outcome.json")).unwrap();
+                    cancel.store(true, Ordering::Release);
+                    std::future::ready(Err(Failure::new(FailureKind::Cleanup, "worker not reaped")))
+                },
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, FailureKind::Cleanup);
+        assert!(!temp.path().join("attempt-1").exists());
+        let temp = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let error = runtime()
+            .block_on(recover_summary(
+                &process,
+                temp.path(),
+                &cancel,
+                |_, folder| {
+                    fs::create_dir(folder.join("outcome.json")).unwrap();
+                    std::future::ready(Ok(("complete".into(), json!({}))))
+                },
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, FailureKind::Storage);
+    }
+    #[test]
+    fn memory_warnings_and_failed_observations_do_not_stop_or_reconfigure_a_job() {
+        for state in [
+            MemoryState::Warning,
+            MemoryState::Critical,
+            MemoryState::Unknown,
+            MemoryState::Normal,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let process = Processing::new(temp.path().into(), temp.path().into());
+            process.update(|p| {
+                p.id = Some("same-job".into());
+                p.kind = "summary".into();
+                p.status = "running".into();
+                p.message = "요약 중".into();
+            });
+            let value = runtime()
+                .block_on(monitor_attempt(
+                    &process,
+                    temp.path(),
+                    || state,
+                    Duration::from_millis(1),
+                    async {
+                        tokio::time::sleep(Duration::from_millis(3)).await;
+                        Ok("finished")
+                    },
+                ))
+                .unwrap();
+            assert_eq!(value, "finished");
+            let progress = process.snapshot();
+            assert_eq!(progress.id.as_deref(), Some("same-job"));
+            assert_eq!(progress.memory_state, Some(state));
+            assert_eq!(progress.status, "running");
+            assert_eq!(progress.message, "요약 중");
+            assert_eq!(progress.retry_count, 0);
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let process = Processing::new(temp.path().into(), temp.path().into());
+        let file = temp.path().join("not-a-directory");
+        fs::write(&file, b"kept").unwrap();
+        assert!(runtime()
+            .block_on(monitor_attempt(
+                &process,
+                &file,
+                || MemoryState::Unknown,
+                Duration::from_millis(1),
+                async { Ok(()) }
+            ))
+            .is_ok());
+    }
+    #[test]
+    fn retries_share_one_job_and_never_save_failed_partial_results() {
+        use std::cell::RefCell;
+        for kind in [
+            FailureKind::Allocation,
+            FailureKind::EngineUnavailable,
+            FailureKind::BackendUnavailable,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let process = Processing::new(temp.path().into(), temp.path().into());
+            process.update(|p| {
+                p.id = Some("same-job".into());
+                p.status = "running".into();
+            });
+            let original = temp.path().join("prior-summary");
+            fs::write(&original, b"original summary").unwrap();
+            let seen = RefCell::new(Vec::new());
+            let result = runtime()
+                .block_on(recover_summary(
+                    &process,
+                    temp.path(),
+                    &AtomicBool::new(false),
+                    |gpu, folder| {
+                        seen.borrow_mut().push(gpu);
+                        let first = seen.borrow().len() == 1;
+                        async move {
+                            if first {
+                                fs::write(folder.join("partial.json"), b"not committed").unwrap();
+                                Err(Failure::new(kind, "reported failure"))
+                            } else {
+                                Ok(("complete".into(), json!({"strategy":"whole"})))
+                            }
+                        }
+                    },
+                ))
+                .unwrap();
+            assert_eq!(
+                *seen.borrow(),
+                if kind == FailureKind::BackendUnavailable {
+                    vec![true, false]
+                } else {
+                    vec![true, true]
+                }
+            );
+            assert_eq!(result.0, "complete");
+            assert_eq!(result.1["runtimeAttempts"].as_array().unwrap().len(), 2);
+            assert_eq!(process.snapshot().retry_count, 1);
+            assert_eq!(process.snapshot().status, "running");
+            assert_eq!(process.snapshot().id.as_deref(), Some("same-job"));
+            assert_eq!(fs::read(original).unwrap(), b"original summary");
+            assert!(temp.path().join("attempt-0/outcome.json").is_file());
+            assert!(temp.path().join("attempt-1/outcome.json").is_file());
+        }
+    }
+    #[test]
+    fn repeated_engine_failure_and_nonrecoverable_errors_have_a_fixed_attempt_limit() {
+        use std::cell::Cell;
+        for (kind, expected) in [
+            (FailureKind::Allocation, 2),
+            (FailureKind::EngineUnavailable, 2),
+            (FailureKind::Protocol, 1),
+            (FailureKind::Input, 1),
+            (FailureKind::Output, 1),
+            (FailureKind::Storage, 1),
+            (FailureKind::Cleanup, 1),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let process = Processing::new(temp.path().into(), temp.path().into());
+            let calls = Cell::new(0);
+            let result = runtime().block_on(recover_summary(
+                &process,
+                temp.path(),
+                &AtomicBool::new(false),
+                |_, _| {
+                    calls.set(calls.get() + 1);
+                    async move { Err(Failure::new(kind, "failure")) }
+                },
+            ));
+            assert_eq!(result.unwrap_err().kind, kind);
+            assert_eq!(calls.get(), expected);
+        }
+    }
+    #[test]
+    fn cancellation_after_failed_attempt_prevents_a_second_launch() {
+        let temp = tempfile::tempdir().unwrap();
+        let process = Processing::new(temp.path().into(), temp.path().into());
+        let cancel = AtomicBool::new(false);
+        let calls = std::cell::Cell::new(0);
+        let result = runtime().block_on(recover_summary(&process, temp.path(), &cancel, |_, _| {
+            calls.set(calls.get() + 1);
+            cancel.store(true, Ordering::Release);
+            async { Err(Failure::new(FailureKind::Allocation, "allocation reported")) }
+        }));
+        assert_eq!(result.unwrap_err().kind, FailureKind::Cancelled);
+        assert_eq!(calls.get(), 1);
+        assert!(!temp.path().join("attempt-1").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_worker_is_reaped_before_the_next_attempt_and_stop_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let process = Processing::new(temp.path().into(), temp.path().into());
+        let calls = std::cell::Cell::new(0);
+        let result = runtime().block_on(recover_summary(
+            &process,
+            temp.path(),
+            &AtomicBool::new(false),
+            |_, _| {
+                calls.set(calls.get() + 1);
+                let first = calls.get() == 1;
+                let mut worker = Worker(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+                worker.stop().unwrap();
+                assert!(worker.0.try_wait().unwrap().is_some());
+                worker.stop().unwrap();
+                async move {
+                    if first {
+                        Err(Failure::new(FailureKind::EngineUnavailable, "stopped"))
+                    } else {
+                        Ok(("done".into(), json!({})))
+                    }
+                }
+            },
+        ));
+        assert!(result.is_ok());
+        assert_eq!(calls.get(), 2);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn reported_startup_allocation_failure_reaps_each_real_worker_and_preserves_attempt_logs() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let process = Processing::new(temp.path().into(), temp.path().into());
+        let binary = executable(&process, true);
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(
+            &binary,
+            "#!/bin/sh\necho 'ggml_malloc: failed to allocate 4.00 MB' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let source:Transcript=serde_json::from_value(json!({"version":{"id":"source","revision":0},"sourceSessionId":"audio","model":"test","modelRevision":"test","segments":[{"id":"one","start":0,"end":1,"text":"내용","originalText":"내용"}]})).unwrap();
+        let error = runtime()
+            .block_on(run_summary(
+                &process,
+                &source,
+                &temp.path().join("unused.gguf"),
+                temp.path(),
+                &AtomicBool::new(false),
+            ))
+            .unwrap_err();
+        assert_eq!(error.kind, FailureKind::Allocation);
+        assert_eq!(process.snapshot().retry_count, 1);
+        for attempt in [0, 1] {
+            assert!(temp
+                .path()
+                .join(format!("attempt-{attempt}/gpu.log"))
+                .is_file());
+        }
+        assert!(!temp.path().join("attempt-2").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn http_failure_protocol_failure_and_cancellation_are_not_labeled_as_memory_exhaustion() {
+        use std::io::Write;
+        for (status, body, expected) in [
+            (400, "{}", FailureKind::Input),
+            (503, "{}", FailureKind::EngineUnavailable),
+            (200, "out of memory", FailureKind::Protocol),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).unwrap();
+                assert!(String::from_utf8_lossy(&request[..count])
+                    .to_lowercase()
+                    .contains("authorization: bearer token"));
+                write!(stream,"HTTP/1.1 {status} Result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            });
+            let server = Server {
+                worker: Worker(Command::new("/usr/bin/true").spawn().unwrap()),
+                client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                url: format!("http://{address}"),
+                key: "token".into(),
+                directory: temp.path().into(),
+                response_index: AtomicUsize::new(0),
+                log: temp.path().join("log"),
+                gpu: true,
+            };
+            let error = runtime()
+                .block_on(server.request("/props", None, &AtomicBool::new(false)))
+                .unwrap_err();
+            assert_eq!(error.kind, expected);
+            thread.join().unwrap();
+            let cancelled = runtime()
+                .block_on(server.request("/props", None, &AtomicBool::new(true)))
+                .unwrap_err();
+            assert_eq!(cancelled.kind, FailureKind::Cancelled);
+        }
+    }
     #[test]
     fn incomplete_or_empty_generation_is_not_saved_as_success() {
         assert!(decode(
@@ -698,6 +1206,8 @@ mod tests {
             key: "test-token".into(),
             directory: temporary.path().into(),
             response_index: AtomicUsize::new(0),
+            log: temporary.path().join("worker.log"),
+            gpu: false,
         };
         let process = Processing::new(temporary.path().into(), temporary.path().into());
         let cancel = AtomicBool::new(false);

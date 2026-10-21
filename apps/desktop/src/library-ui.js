@@ -180,11 +180,11 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
     const filter = state().libraryFilter;
     const disabled = Boolean(state().libraryBusy || !state().connected);
     const navigation = [{ id: 'all', name: '전체 회의', icon: 'notebook-pen' }, { id: 'unfiled', name: '미분류', icon: 'inbox' }, ...folders.map(folder => ({ ...folder, icon: 'folder' })), { id: 'trash', name: '휴지통', icon: 'trash-2' }];
-    const key = JSON.stringify([filter, state().libraryOpen, folders, disabled, snapshot.meetings.map(meeting => [meeting.id, meeting.folderId, meeting.deletedAt])]);
+    const key = JSON.stringify([filter, folders, disabled, snapshot.meetings.map(meeting => [meeting.id, meeting.folderId, meeting.deletedAt])]);
     if (key !== folderKey) {
       folderKey = key;
       const focused = dialog.ownerDocument?.activeElement?.dataset?.libraryFilter;
-      byId('folder-list').innerHTML = navigation.map(item => `<div class="library-folder-item"><button type="button" class="quiet library-folder-link" data-library-filter="${escape(item.id)}"${state().libraryOpen && filter === item.id ? ' aria-current="page"' : ''}${disabled ? ' disabled' : ''}>${icon(item.icon)}<span>${escape(item.name)}</span><span class="library-folder-count">${filterLibraryMeetings(snapshot.meetings, item.id).length}</span></button>${folders.some(folder => folder.id === item.id) ? `<details class="library-folder-menu"><summary aria-label="${escape(item.name)} 폴더 메뉴">${icon('ellipsis')}</summary><div class="action-menu"><button type="button" data-folder-rename="${escape(item.id)}"${disabled ? ' disabled' : ''}>이름 변경</button><button type="button" class="danger" data-folder-delete="${escape(item.id)}"${disabled ? ' disabled' : ''}>폴더 삭제</button></div></details>` : ''}</div>`).join('');
+      byId('folder-list').innerHTML = navigation.map(item => `<div class="library-folder-item"><button type="button" class="quiet library-folder-link" data-library-filter="${escape(item.id)}"${filter === item.id ? ' aria-current="page"' : ''}${disabled ? ' disabled' : ''}>${icon(item.icon)}<span class="library-folder-name" title="${escape(item.name)}">${escape(item.name)}</span><span class="library-folder-count">${filterLibraryMeetings(snapshot.meetings, item.id).length}</span></button>${folders.some(folder => folder.id === item.id) ? `<details class="library-folder-menu"><summary aria-label="${escape(item.name)} 폴더 메뉴">${icon('ellipsis')}</summary><div class="action-menu"><button type="button" data-folder-rename="${escape(item.id)}"${disabled ? ' disabled' : ''}>이름 변경</button><button type="button" class="danger" data-folder-delete="${escape(item.id)}"${disabled ? ' disabled' : ''}>폴더 삭제</button></div></details>` : ''}</div>`).join('');
       if (focused) [...byId('folder-list').querySelectorAll('[data-library-filter]')].find(node => node.dataset.libraryFilter === focused)?.focus({ preventScroll: true });
     }
     byId('library-title').textContent = navigation.find(item => item.id === filter)?.name || '회의';
@@ -203,6 +203,13 @@ export function mountLibrary({ bridge, getState, byId, finishEditing, acceptSnap
     byId('library-selection-clear').disabled = disabled || !count;
     byId('new-folder').disabled = disabled;
     const meeting = current(state().selectedId);
+    const location = byId('meeting-folder-context');
+    if (location) {
+      const name = folders.find(folder => folder.id === meeting?.folderId)?.name || '미분류';
+      location.textContent = name;
+      location.title = name;
+      location.hidden = !meeting;
+    }
     byId('meeting-move').disabled = disabled || !meeting || meeting.deletedAt != null;
     byId('meeting-trash').disabled = disabled || !meeting || meeting.deletedAt != null || Boolean(meeting && runningRecording([meeting.id]));
   }

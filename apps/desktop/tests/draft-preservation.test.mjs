@@ -407,6 +407,81 @@ test('optional summary download leaves new meetings enabled and reports transfer
   assert.equal(page.app.state.selectedId, 'b');
 });
 
+test('memory warnings and same-job summary retries preserve readiness, new meetings and cancellation', async () => {
+  const page = await openApp();
+  const job = { id: 'summary-memory', kind: 'summary', status: 'running', meetingId: 'a', supported: true, modelReady: true, summarySupported: true, summaryReady: true, failureKind: null };
+  await page.app.acceptProcessing({ ...job, revision: 3, memoryState: 'warning', retryCount: 0, message: '요약 모델을 불러오고 있습니다.' });
+  assert.equal(page.element('processing-warning').hidden, false);
+  assert.match(page.element('processing-warning').textContent, /시스템 메모리 경고/);
+  assert.equal(page.element('processing-message').textContent, '요약 모델을 불러오고 있습니다.');
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.element('processing-percent').hidden, true);
+  assert.equal(page.element('cancel-processing').disabled, false);
+  assert.equal(page.element('create-meeting').disabled, false);
+  assert.equal(page.app.state.lastError, null);
+  let created = false;
+  page.bridge.createMeeting = async () => { created = true; return { id: 'b' }; };
+  await page.app.createMeeting();
+  assert.equal(created, true);
+  assert.equal(page.app.state.selectedId, 'b');
+  await page.app.acceptProcessing({ ...job, revision: 4, memoryState: 'critical', retryCount: 1, message: '요약을 다시 준비하고 있습니다.' });
+  assert.equal(page.app.state.processing.id, 'summary-memory');
+  assert.equal(page.app.state.processing.retryCount, 1);
+  assert.equal(page.app.state.processing.modelReady, true);
+  assert.equal(page.app.state.processing.summaryReady, true);
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.element('create-meeting').disabled, false);
+  assert.equal(page.element('cancel-processing').disabled, false);
+  const cancellations = [];
+  page.bridge.cancelProcessing = async id => { cancellations.push(id); };
+  await page.app.cancelProcessing();
+  assert.deepEqual(cancellations, ['summary-memory']);
+  assert.equal(page.element('processing-warning').hidden, true);
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.element('cancel-processing').disabled, true);
+  await page.app.acceptProcessing({ ...job, revision: 5, status: 'cancelled', memoryState: 'critical', retryCount: 1, message: '처리를 취소했습니다.' });
+  assert.equal(page.element('processing-warning').hidden, true);
+  assert.equal(page.element('processing-spinner').hidden, true);
+});
+
+test('unknown memory observations and worker failures do not fabricate low-memory errors', async () => {
+  const page = await openApp();
+  const job = { id: 'summary-observation', kind: 'summary', meetingId: 'a', supported: true, modelReady: true, summarySupported: true, summaryReady: true, retryCount: 0 };
+  await page.app.acceptProcessing({ ...job, revision: 3, status: 'running', memoryState: 'unknown', failureKind: null, message: '요약 중' });
+  assert.equal(page.element('processing-warning').hidden, true);
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.app.state.lastError, null);
+  await page.app.acceptProcessing({ ...job, revision: 4, status: 'failed', memoryState: 'critical', failureKind: 'workerExit', message: '요약 실행기가 종료되었습니다.' });
+  assert.equal(page.element('processing-warning').hidden, true);
+  assert.equal(page.element('processing-message').textContent, '요약 실행기가 종료되었습니다.');
+  assert.equal(page.element('processing-spinner').hidden, true);
+  assert.equal(page.element('create-meeting').disabled, false);
+  assert.equal(page.app.state.lastError, null);
+});
+
+test('summary commit keeps its spinner and save stage without cancellation or stale pressure warnings', async () => {
+  const page = await openApp();
+  const job = { id: 'summary-commit', kind: 'summary', status: 'running', meetingId: 'a', supported: true, modelReady: true, summarySupported: true, summaryReady: true, memoryState: 'critical' };
+  await page.app.acceptProcessing({ ...job, revision: 3, message: '요약 중' });
+  assert.equal(page.element('processing-warning').hidden, false);
+  assert.equal(page.element('cancel-processing').hidden, false);
+  page.app.state.processingCancellingId = job.id;
+  await page.app.acceptProcessing({ ...job, revision: 4, summaryCommitting: true, message: '회의록을 저장하고 있습니다.' });
+  assert.equal(page.element('processing-warning').hidden, true);
+  assert.equal(page.element('cancel-processing').hidden, true);
+  assert.equal(page.element('cancel-processing').disabled, true);
+  assert.equal(page.element('processing-spinner').hidden, false);
+  assert.equal(page.element('processing').dataset.state, 'running');
+  assert.equal(page.element('processing-message').textContent, '회의록을 저장하고 있습니다.');
+  assert.equal(page.element('processing-percent').hidden, true);
+  assert.equal(page.element('create-meeting').disabled, false);
+  assert.equal(page.app.state.lastError, null);
+  await page.app.acceptProcessing({ ...job, revision: 5, status: 'completed', summaryCommitting: false, message: '완료' });
+  assert.equal(page.element('processing-warning').hidden, true);
+  assert.equal(page.element('processing-spinner').hidden, true);
+  assert.equal(page.element('processing').hidden, true);
+});
+
 test('export saves the latest transcript correction before opening the native save dialog', async () => {
   const page = await openApp(transcriptDocument());
   const exports = [];
