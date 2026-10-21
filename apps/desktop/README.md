@@ -58,6 +58,11 @@ a ZIP/DMG, then independently signs/notarizes/staples the DMG. The image contain
 Nero and an Applications link. Verification mounts it read-only, checks the embedded
 app against the signed source, and detaches it. Receipts contain source commit,
 version/build, notarization IDs and final artifact SHA256. Output paths must be new.
+With `--dmg-only`, `--output` points to an existing ZIP and receipt. The script
+verifies its SHA256 and exact embedded app before making a new DMG, without
+rebuilding/resigning the app. The DMG receipt separately records the packaging
+commit. Archive rejected, undistributed containers before reusing an output path;
+never replace an already distributed artifact.
 
 `npm run tauri -- dev` starts a development app. `npm run dev` alone serves its
 frontend, whose actions require the native bridge; it does not supply fake meetings.

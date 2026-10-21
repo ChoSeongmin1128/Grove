@@ -27,4 +27,5 @@ show_item_info = False
 show_icon_preview = False
 include_icon_view_settings = True
 include_list_view_settings = False
-hide_extensions = ["Nero.app"]
+# SetFile extension flags add FinderInfo to the already-signed app.
+hide_extensions = []
