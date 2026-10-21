@@ -1,9 +1,12 @@
-# Grove
+# Nero
 
-Grove is a local meeting recorder being rewritten for macOS and Windows.
+Nero (formerly Grove) is a local meeting recorder for macOS and Windows.
 Audio and meeting metadata stay on the device unless the user explicitly exports them.
 
 ## Native rewrite
+
+Nero release versions and data compatibility follow the [version policy](docs/versioning.md).
+Source commits and distribution status are recorded in the [release history](docs/release-history.md).
 
 The new [desktop application](apps/desktop/README.md) uses Tauri and a shared
 [Rust recording core](crates/grove-core/README.md). It has its own application identity
@@ -13,14 +16,15 @@ The first development slice contains meeting creation, notes, microphone selecti
 recording/pause/stop, PCM preservation, interrupted-file recovery, WAV playback and
 a compact recording window. With packaged workers, Apple silicon/macOS 26 also
 supports local audio import, explicit pinned MOSS model preparation, transcription
-and separately versioned corrections. Windows transcription, independent diarization
-and summaries remain unconnected. Native macOS and Windows acceptance results must
+and separately versioned corrections. With a packaged llama.cpp worker, explicit model
+preparation enables on-demand Gemma 4 E4B Q4 meeting summaries linked to transcript
+revisions. Windows transcription and independent diarization remain unconnected. Native macOS and Windows acceptance results must
 be recorded separately.
 
 The Swift source below is retained temporarily as the legacy implementation.
 
-> Grove is a local beta, not a production-ready recorder or a self-contained model
-> distribution. Packaging requires prepared native workers; the app can download and verify the default model weights.
+> Nero is in development. Packaging requires prepared native workers. Model weights
+> are downloaded and verified only after explicit preparation in the app.
 
 ## Rewrite design system
 

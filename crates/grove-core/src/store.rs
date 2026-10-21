@@ -49,6 +49,36 @@ pub(crate) enum CapturePhase {
     Interrupted,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CaptureQuality {
+    pub xrun_count: u64,
+    pub realtime_denied_count: u64,
+    pub route_changed_count: u64,
+}
+
+impl CaptureQuality {
+    pub fn warning(&self) -> Option<String> {
+        let mut warnings = Vec::new();
+        if self.xrun_count != 0 {
+            warnings.push(format!(
+                "오디오 처리 지연이 {}회 감지되었습니다. 일부 음성이 누락되었을 수 있습니다.",
+                self.xrun_count
+            ));
+        }
+        if self.realtime_denied_count != 0 {
+            warnings.push(
+                "오디오 처리 우선순위를 확보하지 못했습니다. 입력이 끊길 수 있습니다.".into(),
+            );
+        }
+        if self.route_changed_count != 0 {
+            warnings
+                .push("녹음 중 오디오 장치가 변경되었습니다. 녹음 내용을 확인해 주세요.".into());
+        }
+        (!warnings.is_empty()).then(|| warnings.join(" "))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Manifest {
@@ -64,6 +94,10 @@ pub(crate) struct Manifest {
     pub phase: CapturePhase,
     pub saved_frames: u64,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<CaptureQuality>,
 }
 
 impl Manifest {
@@ -88,6 +122,8 @@ impl Manifest {
             phase: CapturePhase::Prepared,
             saved_frames: 0,
             error: None,
+            warning: None,
+            quality: None,
         }
     }
 
@@ -185,6 +221,9 @@ impl Store {
                 ));
             }
             validate_text(&stored.meeting.title, &stored.meeting.notes)?;
+            if let Some(date) = &stored.meeting.meeting_date {
+                validate_meeting_date(date)?;
+            }
             if let Some(capture_id) = &stored.capture_id {
                 validate_id(capture_id)?;
             }
@@ -206,9 +245,12 @@ impl Store {
             notes,
             created_at: timestamp,
             updated_at: timestamp,
+            meeting_date: None,
+            recorded_at: None,
             status: MeetingStatus::Draft,
             audio: None,
             error: None,
+            warning: None,
             transcript_id: None,
         };
         let relative = Path::new("meetings").join(&meeting.id);
@@ -271,6 +313,16 @@ impl Store {
                     "회의와 녹음 정보가 일치하지 않습니다.".into(),
                 ));
             }
+            let recording_date_added =
+                stored.meeting.recorded_at.is_none() && manifest.device_id != "import";
+            if recording_date_added {
+                stored.meeting.recorded_at = Some(manifest.started_at);
+            }
+            if manifest.warning.is_none() {
+                manifest.warning = manifest.quality.as_ref().and_then(CaptureQuality::warning);
+            }
+            let warning_changed = stored.meeting.warning != manifest.warning;
+            stored.meeting.warning = manifest.warning.clone();
             let unfinished = matches!(
                 manifest.phase,
                 CapturePhase::Prepared | CapturePhase::Recording | CapturePhase::Paused
@@ -282,6 +334,9 @@ impl Store {
                 || manifest.phase == CapturePhase::Interrupted;
             let playback_needs_repair = interrupted && self.audio_path(&stored.meeting).is_err();
             if !unfinished && !playback_needs_repair {
+                if recording_date_added || warning_changed {
+                    self.save(stored)?;
+                }
                 continue;
             }
             let raw = checked_path(&self.root, &manifest.relative_dir().join("audio.pcm"))
@@ -362,6 +417,36 @@ pub(crate) fn validate_text(title: &str, notes: &str) -> Result<()> {
         return Err(CoreError::InvalidInput(
             "제목 또는 메모가 너무 길거나 올바르지 않습니다.".into(),
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_meeting_date(date: &str) -> Result<()> {
+    let bytes = date.as_bytes();
+    let invalid =
+        || CoreError::InvalidInput("회의 날짜를 YYYY-MM-DD 형식으로 입력해 주세요.".into());
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+    let year: u16 = date[..4].parse().map_err(|_| invalid())?;
+    let month: u8 = date[5..7].parse().map_err(|_| invalid())?;
+    let day: u8 = date[8..].parse().map_err(|_| invalid())?;
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+        2 => 28,
+        _ => return Err(invalid()),
+    };
+    if year == 0 || day == 0 || day > days {
+        return Err(invalid());
     }
     Ok(())
 }

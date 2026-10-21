@@ -1,7 +1,7 @@
-# Grove desktop
+# Nero desktop
 
 First native development slice for macOS and Windows. The application is named
-Grove. It has a separate identity and never opens the legacy Swift library.
+Nero. It has a separate identity and never opens the legacy Swift library.
 
 ## Build
 
@@ -25,6 +25,39 @@ the workspace's `.work/rust-target`. Run Rust tests from the repository root wit
 For a macOS local test bundle, apply ad hoc signing after bundling and then run
 `codesign --verify --deep --strict` on that bundle. This does not provide Developer ID
 signing or notarization; use a separate distribution configuration for a release.
+
+## Version and macOS distribution
+
+The product version is owned by `package.json`. `npm run version:check` verifies
+Tauri, Rust and lockfile mirrors, and runs before a frontend build. Update them
+together from the repository root:
+
+```sh
+node apps/desktop/scripts/version.mjs set 0.0.2 --build 2
+```
+
+The [version policy](../../docs/versioning.md) separates product versions, monotonic
+build numbers and data formats. [Release history](../../docs/release-history.md)
+records source hashes and distribution status. Generated `build-info.json` records
+the exact Git commit/tree, dirty state, version/build and build host. It is packaged
+as an app resource; signing a distribution refuses a dirty or mismatched source.
+
+For macOS distribution, build `app` from a clean commit with prepared workers, copy
+the resulting bundle to a new work directory, then use:
+
+```sh
+python3 apps/desktop/scripts/sign-macos.py --app WORK/Nero.app \
+  --output WORK/Nero-0.0.1-build1-arm64.zip \
+  --dmg-output WORK/Nero-0.0.1-build1-arm64.dmg --notarize
+```
+
+Developer ID and notary credentials come from the invoking environment. `dmgbuild`
+is a build-time prerequisite, optionally selected with `--dmg-builder`; it is not
+required on the user's Mac. The script signs/notarizes/staples the app before making
+a ZIP/DMG, then independently signs/notarizes/staples the DMG. The image contains
+Nero and an Applications link. Verification mounts it read-only, checks the embedded
+app against the signed source, and detaches it. Receipts contain source commit,
+version/build, notarization IDs and final artifact SHA256. Output paths must be new.
 
 `npm run tauri -- dev` starts a development app. `npm run dev` alone serves its
 frontend, whose actions require the native bridge; it does not supply fake meetings.
@@ -53,6 +86,89 @@ The application identifier is `io.github.choseongmin1128.grove.desktop`.
 Tauri resolves its own OS application data directory. No automatic legacy migration,
 Keychain access, automatic model installation or account connection occurs.
 
+## First use
+
+New meetings, new recordings and file import require speech recognition to be
+prepared. Meeting summary is optional: an unchecked choice includes it in the initial
+download, or it can be downloaded separately later. Preparation starts only after a
+click, verifies each model and retains completed models and partial downloads.
+Normal controls show no model sizes. Available disk space is checked before transfer
+and periodically while downloading; insufficient space surfaces a recovery message.
+The UI calls the generated text "음성 기록" and the summary "회의록".
+
+Saved meetings, notes, playback and existing results remain accessible when models
+are unavailable. Active recording pause/resume/stop does not depend on readiness.
+Missing platform workers show an unsupported state instead of offering a download;
+the current complete meeting pipeline therefore still requires Apple silicon/macOS 26.
+
+## Appearance
+
+Settings / Screen exposes six color themes and independent Light / Dark / System
+brightness. The main app and compact recorder use the same shared appearance code
+and app-local preference. System follows the OS; an explicit brightness remains fixed.
+Theme changes do not change meetings or model preparation.
+
+## Recording and dates
+
+macOS permission is resolved before opening the stream. The meeting and capture are
+prepared before input begins. Recoverable CPAL overload, scheduling and route notices
+keep recording active with a separately saved quality warning; device failure, queue
+overflow and write failure still interrupt capture. A warning is not a measured loss
+duration or evidence that all speech was preserved.
+
+Normal recording completion automatically starts speech recognition for that finalized
+session. Cancellation retains audio; reopening or cancelling does not repeatedly restart
+recognition. The main window exposes retry/re-recognition only when needed.
+
+During recording, hiding or minimizing the main window automatically shows the compact
+control window. Once shown, it stays above other windows even after the main window
+returns. Only recording completion, an explicit dismissal or disabling the setting hides it.
+An explicit dismissal lasts for that session. Settings / Recording can disable
+this behavior; the separate grip moves the native transparent window, while the timer
+opens the meeting. Hiding the compact window does not stop recording.
+
+Meeting date is a separately editable calendar day. Actual microphone start time remains
+read-only; imported files do not acquire an invented recording timestamp. Creation and
+update timestamps keep their storage semantics. Default meeting titles get a free numeric
+suffix; explicitly named recurring meetings may share a title.
+The meeting list shows local date and 24-hour time, ordered by actual microphone
+start time or creation time when recording time is unavailable. Hover distinguishes
+recording from creation and shows the separately editable meeting date. Imported
+files are not assigned an inferred original recording time.
+
+## Playback and exports
+
+Playback uses Korean controls for play/pause, seek, mute and speed instead of the
+webview's native media controls. Source text is labelled "음성 기록" and the generated
+summary "회의록". Both support copying and UTF-8 TXT/Markdown export through the native
+save dialog. Pending corrections are saved before export, original model text is not
+substituted, and an outdated summary retains a source-change warning in the exported file.
+Writes complete in a temporary file before atomically replacing the chosen destination.
+
+The optional summary model is prepared separately from result export. Model download
+shows a byte-based percentage; it does not represent recognition or summarization
+completion. Creating a meeting remains available while that optional download runs.
+
+## Recording settings
+
+Input-device selection and device refresh live under Settings / Recording. The
+meeting view contains recording actions and an error recovery link when no usable
+input is available. The device ID/name preference persists in the app webview's
+local storage; it is separate from meeting data and never written to the repository.
+A missing explicit selection blocks the next recording instead of silently switching
+to another device. Recording start refreshes availability. Existing capture keeps its
+input and disables preference changes until it ends. Settings / Models links to the
+existing preparation screen without duplicating download logic.
+
+## Brand assets
+
+The application and tray icons use the approved Nero 23-B r7 A mark.
+`brand/mark.svg` owns the geometry; `brand/app-background.svg` supplies the light
+application-icon background. `npm run prepare:icons` composes these for macOS/Windows
+app assets using the pinned Tauri CLI. Tray assets retain the transparent mark. macOS uses a monochrome menu-bar template.
+Windows switches the monochrome tray asset on reported window-theme changes;
+contrast on separately configured taskbar/application themes needs Windows validation.
+
 ## Optional macOS transcription workers
 
 Build the pinned Release/macOS `MossHarness` scheme as described in
@@ -73,10 +189,12 @@ is not implemented. Models remain outside the application bundle in its own data
 
 The model snapshot and file hashes are shared with the retained Swift implementation
 through `Sources/GroveApp/Resources/Models/moss.json`. Preparation starts only from the
-app's explicit model button. The current downloader retains interrupted files but does
-not resume partial bytes; retry checks complete files and downloads missing files again.
+app's explicit model button. The downloader retains interrupted partial files, resumes verified Range responses,
+and checks the complete file SHA256 before publishing a readiness marker.
 
-The packaging icon is temporary; the final Grove logo has not been selected.
+The product name is Nero. Packaging uses the approved 23-B r7 A mark and light
+application-icon background. The existing application identifier and
+data location intentionally remain stable so the rename does not hide existing data.
 
 ## Remaining acceptance work
 
@@ -90,6 +208,75 @@ The current recorder has a RIFF WAV size limit and no automatic device reconnect
 It interrupts rather than silently claiming success on device/queue/write errors.
 See the core README for queue capacity and file recovery details.
 
-Diarization, summaries, domain dictionaries and reference-based summary context remain
+Diarization, domain dictionaries and reference-based summary context remain
 future integrations. MOSS worker execution does not establish transcript accuracy or
 speaker identities; model qualification and release acceptance remain separate work.
+
+
+## On-demand summaries
+
+Package the pinned native runtime before building the app (build-time Python only):
+
+```sh
+python3 scripts/native-summary/prepare.py --target macos-arm64
+# On Windows x64, from the repository root:
+python scripts/native-summary/prepare.py --target windows-x64
+```
+
+The builder downloads only the checksum-pinned llama.cpp b11734 runtime and its libraries
+into ignored `apps/desktop/.generated/native/summary`. No model is installed by this
+script. The resulting app needs no Python, Homebrew, Ollama or separately installed
+llama.cpp. The summary runtime requires Apple silicon/macOS 13.3+ or Windows x64.
+Windows packaging also copies the app-local Microsoft C++ runtime from the installed
+Visual Studio redistributables (`VCToolsRedistDir`, auto-detected VS, or `--msvc-redist`).
+Packaging fails if required DLLs are absent; end users do not manually install them.
+A missing system Vulkan loader selects the CPU route without installing a GPU driver.
+Windows includes separate Vulkan and CPU bundles; unsupported architectures
+remain unavailable. A runtime build does not prove Windows execution or GPU support.
+
+In the app, prepare the optional `요약 모델 다운로드` in Settings / Models, then
+select `요약하기` on a meeting with an existing voice record.
+`models/summary.json` pins the exact Gemma 4 E4B QAT Q4_0 revision, size and SHA256.
+Weights are kept in the app's own data directory. No recording or transcript is sent
+to a provider. First preparation requires network access; verified models run offline.
+
+Only one processing job runs at a time. A summary worker binds to loopback with an
+unpredictable per-process API key, uses a single slot, two CPU threads and low priority,
+and exits on completion/cancellation/quit. GPU startup is preferred; startup failure can
+fall back to the bundled CPU route. New recording cancels/joins inference before capture.
+Normal quit joins the worker; unexpected process/OS termination is not a validated
+parent-death cleanup guarantee.
+
+The initial context is 8,192 tokens, response allowance 2,048 plus a 128-token input
+margin. The actual rendered template is tokenized. Long transcripts are partitioned by
+whole utterances, all chunks are included, then their summaries are hierarchically merged without dropping late chunks. Merging
+is bounded to eight levels and must reduce the number of parts. Oversized
+utterances/non-reducing merge inputs, incomplete responses and invalid numeric source references
+fail without overwriting a prior summary. Syntactic reference checks do not verify meaning.
+Source numbers link back to the selected transcript; links are disabled after edits.
+
+macOS refuses loading/continues no inference when OS memory pressure is non-normal.
+Windows uses a conservative initial 90% system-memory-load guard. These are operating
+guards, not 8GB/16GB qualification or a whole-GPU memory guarantee. Users may need to
+wait for other work to finish. Model/prompt quality and hardware acceptance remain gates.
+
+Summaries archive their exact source transcript, provenance and response receipt separately.
+A changed transcript or competing result cannot overwrite the current summary. Failed or
+cancelled runs preserve audio, notes, transcript and prior summaries. Read/reopen/copy and
+source playback are connected; manual summary editing and additional templates are not
+implemented in this slice.
+
+
+## macOS signing
+
+Build an optimized app with `npm run tauri -- build --bundles app --ci -- --locked`.
+The release profile retains symbols to avoid the macOS 27/Rust Mach-O stripping issue;
+optimization remains enabled. Signing credentials are never packaged or committed.
+
+`apps/desktop/scripts/sign-macos.py --app APP_PATH --output NEW_ZIP_PATH --notarize`
+signs all nested native code with the `NERO_SIGN_IDENTITY` Developer ID identity,
+then signs the app with the microphone entitlement. Notarization uses either
+`NERO_NOTARY_PROFILE` or `NERO_NOTARY_KEY_PATH`/`NERO_NOTARY_KEY_ID`/
+`NERO_NOTARY_ISSUER_ID` from the invoking environment. It requires Accepted status,
+stapling, and Gatekeeper verification before producing the final ZIP. It never
+replaces an installed app or uploads source recordings/model weights.

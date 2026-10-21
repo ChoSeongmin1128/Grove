@@ -1,7 +1,9 @@
 mod capture;
 mod engine;
 mod store;
+mod summary;
 mod transcript;
+pub use summary::{Summary, SummaryDraft, SummaryProvenance, SummaryView};
 pub use transcript::{Transcript, TranscriptSegment, TranscriptVersion};
 
 use engine::Engine;
@@ -28,9 +30,9 @@ pub enum CoreError {
     Audio(String),
     #[error("저장할 수 없습니다: {0}")]
     Storage(String),
-    #[error("이미 이 저장소를 사용하는 Grove가 있습니다.")]
+    #[error("이미 이 저장소를 사용하는 Nero가 있습니다.")]
     StoreBusy,
-    #[error("Grove가 종료되어 요청을 처리할 수 없습니다.")]
+    #[error("Nero가 종료되어 요청을 처리할 수 없습니다.")]
     Unavailable,
 }
 
@@ -77,9 +79,15 @@ pub struct Meeting {
     pub notes: String,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meeting_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<u64>,
     pub status: MeetingStatus,
     pub audio: Option<AudioArtifact>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
     #[serde(default)]
     pub transcript_id: Option<String>,
 }
@@ -105,6 +113,8 @@ pub struct SessionSnapshot {
     pub sample_rate: u32,
     pub channels: u16,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -234,9 +244,23 @@ impl CoreHandle {
         self.call(move |engine| engine.edit_transcript(&id, expected, texts))
     }
 
+    pub fn summary(&self, id: &str) -> Result<Option<SummaryView>> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.summary(&id))
+    }
+    pub fn commit_summary(&self, id: &str, draft: SummaryDraft) -> Result<Summary> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.commit_summary(&id, draft))
+    }
+
     pub fn update_meeting(&self, id: &str, title: &str, notes: &str) -> Result<Meeting> {
         let (id, title, notes) = (id.to_owned(), title.to_owned(), notes.to_owned());
         self.call(move |engine| engine.update_meeting(&id, title, notes))
+    }
+
+    pub fn set_meeting_date(&self, id: &str, meeting_date: Option<String>) -> Result<Meeting> {
+        let id = id.to_owned();
+        self.call(move |engine| engine.set_meeting_date(&id, meeting_date))
     }
 
     pub fn devices(&self) -> Result<Vec<Device>> {

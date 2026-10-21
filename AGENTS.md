@@ -1,4 +1,4 @@
-# Grove Agent Instructions
+# Nero Agent Instructions
 
 This file applies to the entire repository.
 
@@ -17,7 +17,8 @@ This file applies to the entire repository.
 - The native app provides meetings, notes, microphone recording and playback. With
   packaged workers, Apple silicon/macOS 26 supports native file import and local MOSS
   transcription, explicit pinned model preparation and separately versioned corrections.
-  Windows transcription, independent diarization, summaries, speaker matching and
+  Packaged llama.cpp enables on-demand Gemma 4 E4B Q4 summaries with separately stored
+  source revisions. Windows transcription, independent diarization, speaker matching and
   integrations remain unconnected. Do not fabricate transcripts or summary results.
 - Model selection will prefer qualified GPU paths and retain CPU compatibility.
   Initial diarization support targets up to eight actual speakers; more attendees
@@ -123,7 +124,14 @@ inference, proposals, and unverified items.
 
 ## Native installation and artifacts
 
-- `/Applications/Grove.app` is the macOS installation target, not proof that the
+- Nero release versions follow `docs/versioning.md`; keep version mirrors consistent
+  with `node apps/desktop/scripts/version.mjs check`. Preserve the stable application
+  identifier and existing data contracts, including during 0.x development.
+- Record release source commits in `docs/release-history.md`. A dirty build must not
+  be attributed to its HEAD alone. Distribution bundles require clean source provenance;
+  keep generated binaries, signing/notary receipts and private compatibility evidence in `.work/`.
+
+- `/Applications/Nero.app` is the macOS installation target, not proof that the
   new app is installed. Development bundles stay in `.work/rust-target`.
 - Build/test instructions for the new app are in `apps/desktop/README.md`.
   Never install or launch an archived legacy app as part of rewrite validation.

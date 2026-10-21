@@ -1,12 +1,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod app_menu;
+mod downloads;
+mod export;
+mod microphone_permission;
 mod processing;
-use grove_core::{CoreHandle, Device, Meeting, Snapshot, Transcript, TranscriptVersion};
+mod recorder_policy;
+mod storage_space;
+mod summary;
+use grove_core::{
+    CoreHandle, Device, Meeting, Snapshot, SummaryView, Transcript, TranscriptVersion,
+};
 use processing::{Processing, Progress};
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Duration;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -17,6 +27,7 @@ struct DesktopState {
     quitting: Arc<AtomicBool>,
     polling: Arc<AtomicBool>,
     processing: Arc<Processing>,
+    recorder: Mutex<recorder_policy::RecorderPolicy>,
 }
 
 fn require_main(window: &WebviewWindow) -> Result<(), String> {
@@ -47,6 +58,7 @@ async fn on_core<T: Send + 'static>(
 
 fn publish(app: &tauri::AppHandle, snapshot: &Snapshot) {
     let _ = app.emit("grove://snapshot", snapshot);
+    sync_recorder(app, snapshot);
 }
 
 fn show_main(app: &tauri::AppHandle) {
@@ -55,25 +67,155 @@ fn show_main(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    request_recorder_sync(app);
+}
+
+fn request_recorder_sync(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let core = state.core.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(snapshot) = on_core(core, |core| core.snapshot()).await {
+            sync_recorder(&app, &snapshot);
+        }
+    });
+}
+
+fn snapshot_changed(previous: Option<&Snapshot>, snapshot: &Snapshot) -> bool {
+    previous.map_or(true, |value| {
+        value.meetings != snapshot.meetings || value.session != snapshot.session
+    })
 }
 
 fn show_recorder_window(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("recorder") {
-        return window
-            .show()
-            .map_err(|_| "녹음 제어창을 열지 못했습니다.".into());
+        return window.show().map_err(recorder_window_error);
     }
-    WebviewWindowBuilder::new(app, "recorder", WebviewUrl::App("recorder.html".into()))
-        .title("Grove")
-        .inner_size(236.0, 44.0)
-        .resizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .focused(false)
-        .build()
-        .map(|_| ())
-        .map_err(|_| "녹음 제어창을 열지 못했습니다.".into())
+    let mut builder =
+        WebviewWindowBuilder::new(app, "recorder", WebviewUrl::App("recorder.html".into()))
+            .title("Nero 녹음 제어")
+            .inner_size(236.0, 44.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false);
+    if let Some(monitor) = app
+        .get_webview_window("main")
+        .and_then(|main| main.current_monitor().ok().flatten())
+    {
+        let area = monitor.work_area();
+        let scale = monitor.scale_factor();
+        let x = (f64::from(area.position.x) + f64::from(area.size.width) / 2.0) / scale - 118.0;
+        let y = f64::from(area.position.y) / scale + 16.0;
+        builder = builder.position(x, y);
+    }
+    builder.build().map(|_| ()).map_err(recorder_window_error)
+}
+
+fn recorder_window_error(error: tauri::Error) -> String {
+    let detail: String = error.to_string().chars().take(512).collect();
+    format!("녹음 제어창을 열지 못했습니다. 앱 창에서 녹음을 조작해 주세요.\n{detail}")
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_events_follow_content_instead_of_read_revision() {
+        let initial = Snapshot {
+            revision: 1,
+            meetings: vec![],
+            session: None,
+        };
+        let mut next = initial.clone();
+        next.revision = 100;
+        assert!(snapshot_changed(None, &initial));
+        assert!(!snapshot_changed(Some(&initial), &next));
+        next.session = Some(serde_json::from_value(serde_json::json!({
+            "id": "capture", "meetingId": "meeting", "deviceId": "mic", "deviceName": "Microphone",
+            "state": "recording", "elapsedMs": 1000, "savedFrames": 16000,
+            "sampleRate": 16000, "channels": 1, "error": null
+        })).unwrap());
+        assert!(snapshot_changed(Some(&initial), &next));
+        let mut paused = next.clone();
+        paused.session.as_mut().unwrap().state = grove_core::SessionState::Paused;
+        assert!(snapshot_changed(Some(&next), &paused));
+        let mut elapsed = paused.clone();
+        elapsed.session.as_mut().unwrap().elapsed_ms += 1;
+        assert!(snapshot_changed(Some(&paused), &elapsed));
+        assert!(snapshot_changed(Some(&paused), &initial));
+    }
+}
+
+fn sync_recorder(app: &tauri::AppHandle, snapshot: &Snapshot) {
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let background = !main.is_visible().unwrap_or(true) || main.is_minimized().unwrap_or(false);
+    let action = app
+        .state::<DesktopState>()
+        .recorder
+        .lock()
+        .unwrap()
+        .update(active_session(snapshot), background);
+    match action {
+        Some(recorder_policy::Presentation::Show) => {
+            if let Err(message) = show_recorder_window(app) {
+                app.state::<DesktopState>()
+                    .recorder
+                    .lock()
+                    .unwrap()
+                    .show_failed();
+                let _ = app.emit_to(
+                    "main",
+                    "grove://processing-error",
+                    ProcessingError {
+                        meeting_id: snapshot
+                            .session
+                            .as_ref()
+                            .map(|session| session.meeting_id.clone()),
+                        message,
+                    },
+                );
+            }
+        }
+        Some(recorder_policy::Presentation::Hide) => {
+            if let Some(window) = app.get_webview_window("recorder") {
+                let _ = window.hide();
+            }
+        }
+        None => (),
+    }
+}
+
+#[tauri::command]
+async fn set_auto_recorder(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    enabled: bool,
+) -> Result<(), String> {
+    require_main(&window)?;
+    state.recorder.lock().unwrap().set_automatic(enabled);
+    let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
+    sync_recorder(&app, &snapshot);
+    Ok(())
+}
+
+#[tauri::command]
+fn drag_recorder(window: WebviewWindow) -> Result<(), String> {
+    if window.label() != "recorder" {
+        return Err("녹음 제어창에서 실행해 주세요.".into());
+    }
+    window
+        .start_dragging()
+        .map_err(|_| "창을 이동하지 못했습니다.".into())
 }
 
 fn active_session(snapshot: &Snapshot) -> Option<&str> {
@@ -106,6 +248,7 @@ async fn create_meeting(
     notes: String,
 ) -> Result<Meeting, String> {
     require_main(&window)?;
+    state.processing.require_meeting_models()?;
     on_core(state.core.clone(), move |core| {
         core.create_meeting(&title, &notes)
     })
@@ -128,6 +271,24 @@ async fn update_meeting(
 }
 
 #[tauri::command]
+async fn set_meeting_date(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DesktopState>,
+    id: String,
+    meeting_date: Option<String>,
+) -> Result<Meeting, String> {
+    require_main(&window)?;
+    let meeting = on_core(state.core.clone(), move |core| {
+        core.set_meeting_date(&id, meeting_date)
+    })
+    .await?;
+    let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
+    publish(&app, &snapshot);
+    Ok(meeting)
+}
+
+#[tauri::command]
 async fn list_devices(
     window: WebviewWindow,
     state: tauri::State<'_, DesktopState>,
@@ -145,23 +306,28 @@ async fn start_recording(
     device_id: Option<String>,
 ) -> Result<Snapshot, String> {
     require_main(&window)?;
-    let processing = state.processing.snapshot();
-    if processing.status == "running" && processing.kind == "import" {
-        return Err("음성 가져오기가 끝난 뒤 녹음을 시작해 주세요.".into());
-    }
-    let snapshot = on_core(state.core.clone(), move |core| {
-        let selected = match device_id {
-            Some(id) => id,
-            None => core
-                .devices()?
-                .into_iter()
-                .find(|device| device.is_default)
-                .map(|device| device.id)
-                .unwrap_or_default(),
-        };
-        core.start(&meeting_id, &selected)
+    state.processing.require_meeting_models()?;
+    microphone_permission::ensure_authorized(&app).await?;
+    let processing = state.processing.clone();
+    let core = state.core.clone();
+    let snapshot = tauri::async_runtime::spawn_blocking(move || {
+        processing.recording_start(|| {
+            let selected = match device_id {
+                Some(id) => id,
+                None => core
+                    .devices()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|device| device.is_default)
+                    .map(|device| device.id)
+                    .unwrap_or_default(),
+            };
+            core.start(&meeting_id, &selected)
+                .map_err(|e| e.to_string())
+        })
     })
-    .await?;
+    .await
+    .map_err(|_| "녹음을 시작하지 못했습니다.".to_string())??;
     publish(&app, &snapshot);
     Ok(snapshot)
 }
@@ -202,7 +368,44 @@ async fn stop_recording(
     require_local_window(&window)?;
     let snapshot = on_core(state.core.clone(), move |core| core.stop(&session_id)).await?;
     publish(&app, &snapshot);
+    let processing = state.processing.clone();
+    let core = state.core.clone();
+    let completed = snapshot.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        processing.transcribe_recording(core, &completed)
+    })
+    .await
+    {
+        Ok(Ok(Some(progress))) => {
+            let _ = app.emit_to("main", "grove://processing", progress);
+        }
+        Ok(Ok(None)) => (),
+        result => {
+            let message = match result {
+                Ok(Err(error)) => error,
+                _ => "음성 인식을 시작하지 못했습니다.".into(),
+            };
+            let _ = app.emit_to(
+                "main",
+                "grove://processing-error",
+                ProcessingError {
+                    meeting_id: snapshot
+                        .session
+                        .as_ref()
+                        .map(|session| session.meeting_id.clone()),
+                    message,
+                },
+            );
+        }
+    }
     Ok(snapshot)
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessingError {
+    meeting_id: Option<String>,
+    message: String,
 }
 
 #[tauri::command]
@@ -220,14 +423,54 @@ async fn audio_file(
 }
 
 #[tauri::command]
-fn show_recorder(app: tauri::AppHandle, window: WebviewWindow) -> Result<(), String> {
+async fn export_text(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    suggested_name: String,
+    contents: String,
+) -> Result<bool, String> {
     require_main(&window)?;
-    show_recorder_window(&app)
+    export::validate_contents(&contents)?;
+    let name = export::suggested_name(&suggested_name)?;
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        let dialog = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("내보내기");
+        let dialog = if name.ends_with(".md") {
+            dialog
+                .add_filter("Markdown", &["md"])
+                .add_filter("텍스트", &["txt"])
+        } else {
+            dialog
+                .add_filter("텍스트", &["txt"])
+                .add_filter("Markdown", &["md"])
+        };
+        dialog.set_file_name(name).blocking_save_file()
+    })
+    .await
+    .map_err(|_| "저장 창을 열지 못했습니다.")?;
+    let Some(selected) = selected else {
+        return Ok(false);
+    };
+    let path = selected
+        .into_path()
+        .map_err(|_| "파일을 저장할 위치를 선택해 주세요.")?;
+    tauri::async_runtime::spawn_blocking(move || export::write_text(&path, &contents))
+        .await
+        .map_err(|_| "파일을 저장하지 못했습니다.")??;
+    Ok(true)
 }
 
 #[tauri::command]
 fn hide_recorder(window: WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
     require_local_window(&window)?;
+    app.state::<DesktopState>()
+        .recorder
+        .lock()
+        .unwrap()
+        .dismiss();
     if let Some(recorder) = app.get_webview_window("recorder") {
         recorder
             .hide()
@@ -244,10 +487,11 @@ async fn hide_main(
 ) -> Result<(), String> {
     require_main(&window)?;
     let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
-    if active_session(&snapshot).is_some() {
-        show_recorder_window(&app)?;
-    }
-    window.hide().map_err(|_| "창을 숨기지 못했습니다.".into())
+    window
+        .hide()
+        .map_err(|_| "창을 숨기지 못했습니다.".to_string())?;
+    sync_recorder(&app, &snapshot);
+    Ok(())
 }
 
 #[derive(Clone, Serialize)]
@@ -352,12 +596,28 @@ fn prepare_model(
     state.processing.prepare_model()
 }
 #[tauri::command]
+async fn prepare_meeting_models(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    include_summary: Option<bool>,
+) -> Result<Progress, String> {
+    require_main(&window)?;
+    let snapshot = on_core(state.core.clone(), |core| core.snapshot()).await?;
+    if active_session(&snapshot).is_some() {
+        return Err("녹음을 마친 뒤 준비해 주세요.".into());
+    }
+    state
+        .processing
+        .prepare_meeting_models(include_summary.unwrap_or(false))
+}
+#[tauri::command]
 async fn import_audio(
     window: WebviewWindow,
     app: tauri::AppHandle,
     state: tauri::State<'_, DesktopState>,
 ) -> Result<Option<Progress>, String> {
     require_main(&window)?;
+    state.processing.require_meeting_models()?;
     if !state.processing.snapshot().supported {
         return Err("이 기기의 음성 가져오기가 아직 준비되지 않았습니다.".into());
     }
@@ -395,7 +655,7 @@ async fn transcribe_audio(
     let core = state.core.clone();
     tauri::async_runtime::spawn_blocking(move || processing.transcribe(core, meeting_id))
         .await
-        .map_err(|_| "전사를 시작하지 못했습니다.".to_string())?
+        .map_err(|_| "음성 인식을 시작하지 못했습니다.".to_string())?
 }
 #[tauri::command]
 fn cancel_processing(
@@ -406,6 +666,37 @@ fn cancel_processing(
     require_main(&window)?;
     state.processing.cancel(&job_id)
 }
+#[tauri::command]
+fn prepare_summary_model(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+) -> Result<Progress, String> {
+    require_main(&window)?;
+    state.processing.prepare_summary()
+}
+#[tauri::command]
+async fn summarize_meeting(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+) -> Result<Progress, String> {
+    require_main(&window)?;
+    let processing = state.processing.clone();
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || processing.summarize(core, meeting_id))
+        .await
+        .map_err(|_| "요약을 시작하지 못했습니다.".to_string())?
+}
+#[tauri::command]
+async fn read_summary(
+    window: WebviewWindow,
+    state: tauri::State<'_, DesktopState>,
+    meeting_id: String,
+) -> Result<Option<SummaryView>, String> {
+    require_main(&window)?;
+    on_core(state.core.clone(), move |core| core.summary(&meeting_id)).await
+}
+
 #[tauri::command]
 async fn read_transcript(
     window: WebviewWindow,
@@ -430,47 +721,57 @@ async fn save_transcript(
     .await
 }
 
-fn tray_icon() -> tauri::image::Image<'static> {
-    let mut pixels = vec![0u8; 20 * 20 * 4];
-    for y in 3..17 {
-        for x in 3..17 {
-            if (x - 10_i32).pow(2) + (y - 10_i32).pow(2) <= 44 {
-                let offset = (y as usize * 20 + x as usize) * 4;
-                pixels[offset..offset + 4].copy_from_slice(&[58, 113, 79, 255]);
-            }
-        }
+#[cfg(target_os = "macos")]
+fn tray_icon(_theme: tauri::Theme) -> tauri::image::Image<'static> {
+    tauri::include_image!("icons/tray-template.png")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tray_icon(theme: tauri::Theme) -> tauri::image::Image<'static> {
+    match theme {
+        tauri::Theme::Dark => tauri::include_image!("icons/tray-on-dark.png"),
+        _ => tauri::include_image!("icons/tray-on-light.png"),
     }
-    tauri::image::Image::new_owned(pixels, 20, 20)
 }
 
 fn main() {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(app_menu::default);
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             show_main(app)
         }))
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_snapshot,
             create_meeting,
             update_meeting,
+            set_meeting_date,
             list_devices,
             start_recording,
             pause_recording,
             resume_recording,
             stop_recording,
             audio_file,
-            show_recorder,
+            export_text,
             hide_recorder,
+            set_auto_recorder,
+            drag_recorder,
             hide_main,
             open_meeting,
             request_quit,
             processing_status,
             prepare_model,
+            prepare_meeting_models,
             import_audio,
             transcribe_audio,
             cancel_processing,
             read_transcript,
-            save_transcript
+            save_transcript,
+            prepare_summary_model,
+            summarize_meeting,
+            read_summary
         ])
         .setup(|app| {
             let root = app.path().app_data_dir()?;
@@ -481,42 +782,50 @@ fn main() {
                 core: core.clone(),
                 quitting: Arc::new(AtomicBool::new(false)),
                 polling: polling.clone(),
+                recorder: Mutex::new(recorder_policy::RecorderPolicy::default()),
                 processing: processing.clone(),
             });
             let menu = tauri::menu::Menu::with_items(
                 app,
                 &[
-                    &tauri::menu::MenuItem::with_id(app, "open", "Grove 열기", true, None::<&str>)?,
-                    &tauri::menu::MenuItem::with_id(
-                        app,
-                        "recorder",
-                        "녹음 제어",
-                        true,
-                        None::<&str>,
-                    )?,
+                    &tauri::menu::MenuItem::with_id(app, "open", "Nero 열기", true, None::<&str>)?,
                     &tauri::menu::PredefinedMenuItem::separator(app)?,
                     &tauri::menu::MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?,
                 ],
             )?;
             tauri::tray::TrayIconBuilder::with_id("grove")
-                .icon(tray_icon())
-                .tooltip("Grove")
+                .icon(tray_icon(
+                    app.get_webview_window("main")
+                        .and_then(|window| window.theme().ok())
+                        .unwrap_or(tauri::Theme::Light),
+                ))
+                .icon_as_template(cfg!(target_os = "macos"))
+                .tooltip("Nero")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main(app),
-                    "recorder" => {
-                        let _ = show_recorder_window(app);
-                    }
                     "quit" => ask_quit(app),
                     _ => (),
                 })
                 .build(app)?;
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                let mut previous: Option<Snapshot> = None;
+                let mut previous_progress = None;
                 while polling.load(Ordering::Acquire) {
                     if let Ok(snapshot) = core.snapshot() {
-                        publish(&handle, &snapshot);
-                        let _ = handle.emit_to("main", "grove://processing", processing.snapshot());
+                        let changed = snapshot_changed(previous.as_ref(), &snapshot);
+                        if changed {
+                            publish(&handle, &snapshot);
+                            previous = Some(snapshot);
+                        } else {
+                            sync_recorder(&handle, &snapshot);
+                        }
+                    }
+                    let progress = processing.snapshot();
+                    if previous_progress.as_ref() != Some(&progress) {
+                        let _ = handle.emit_to("main", "grove://processing", &progress);
+                        previous_progress = Some(progress);
                     }
                     std::thread::sleep(Duration::from_millis(750));
                 }
@@ -524,17 +833,40 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)
+                )
+            {
+                request_recorder_sync(window.app_handle());
+            }
+            #[cfg(target_os = "windows")]
+            if let tauri::WindowEvent::ThemeChanged(theme) = event {
+                if window.label() == "main" {
+                    if let Some(tray) = window.app_handle().tray_by_id("grove") {
+                        let _ = tray.set_icon(Some(tray_icon(*theme)));
+                    }
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if window.label() == "main" {
                     let _ = window.emit("grove://close-requested", ());
                 } else {
+                    window
+                        .app_handle()
+                        .state::<DesktopState>()
+                        .recorder
+                        .lock()
+                        .unwrap()
+                        .dismiss();
                     let _ = window.hide();
                 }
             }
         })
         .build(tauri::generate_context!())
-        .expect("Grove를 시작하지 못했습니다.");
+        .expect("Nero를 시작하지 못했습니다.");
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
             if !app.state::<DesktopState>().quitting.load(Ordering::Acquire) {

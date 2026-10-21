@@ -1,4 +1,4 @@
-use crate::store::{self, CapturePhase, Encoding, Manifest};
+use crate::store::{self, CapturePhase, CaptureQuality, Encoding, Manifest};
 use crate::{AudioArtifact, CoreError, Device, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -16,11 +16,16 @@ const FAULT_WRITER: u8 = 3;
 const FAULT_FORMAT: u8 = 4;
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_QUEUE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DEVICE_DIAGNOSTIC_CHARS: usize = 512;
 
 pub(crate) struct Signals {
     accepting: AtomicBool,
     callbacks: AtomicUsize,
     fault: AtomicU8,
+    device_diagnostic: Mutex<Option<String>>,
+    xrun_count: AtomicU64,
+    realtime_denied_count: AtomicU64,
+    route_changed_count: AtomicU64,
     saved_bytes: AtomicU64,
     phase: AtomicU8,
 }
@@ -31,6 +36,10 @@ impl Signals {
             accepting: AtomicBool::new(false),
             callbacks: AtomicUsize::new(0),
             fault: AtomicU8::new(0),
+            device_diagnostic: Mutex::new(None),
+            xrun_count: AtomicU64::new(0),
+            realtime_denied_count: AtomicU64::new(0),
+            route_changed_count: AtomicU64::new(0),
             saved_bytes: AtomicU64::new(0),
             phase: AtomicU8::new(0),
         }
@@ -43,12 +52,80 @@ impl Signals {
         self.accepting.store(false, Ordering::Release);
     }
 
+    fn fail_device(&self, error: cpal::Error) {
+        if self.fault.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        if let Ok(mut diagnostic) = self.device_diagnostic.try_lock() {
+            if self.fault.load(Ordering::Acquire) == 0 {
+                let mut detail = format!("{:?}: ", error.kind());
+                let remaining = MAX_DEVICE_DIAGNOSTIC_CHARS.saturating_sub(detail.chars().count());
+                let fallback;
+                let message = match error.message() {
+                    Some(message) => message,
+                    None => {
+                        fallback = error.to_string();
+                        &fallback
+                    }
+                };
+                detail.extend(message.chars().take(remaining).map(|character| {
+                    if character.is_control() || character.is_whitespace() {
+                        ' '
+                    } else {
+                        character
+                    }
+                }));
+                *diagnostic = Some(detail);
+                self.fail(FAULT_DEVICE);
+            }
+        } else {
+            self.fail(FAULT_DEVICE);
+        }
+    }
+
+    pub(crate) fn device_event(&self, error: cpal::Error) {
+        match error.kind() {
+            cpal::ErrorKind::Xrun => {
+                self.xrun_count.fetch_add(1, Ordering::Relaxed);
+            }
+            cpal::ErrorKind::RealtimeDenied => {
+                self.realtime_denied_count.fetch_add(1, Ordering::Relaxed);
+            }
+            cpal::ErrorKind::DeviceChanged => {
+                self.route_changed_count.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => self.fail_device(error),
+        }
+    }
+
+    fn quality(&self) -> Option<CaptureQuality> {
+        let quality = CaptureQuality {
+            xrun_count: self.xrun_count.load(Ordering::Relaxed),
+            realtime_denied_count: self.realtime_denied_count.load(Ordering::Relaxed),
+            route_changed_count: self.route_changed_count.load(Ordering::Relaxed),
+        };
+        (quality != CaptureQuality::default()).then_some(quality)
+    }
+
+    pub fn warning(&self) -> Option<String> {
+        self.quality().as_ref().and_then(CaptureQuality::warning)
+    }
+
     pub fn error(&self) -> Option<String> {
         match self.fault.load(Ordering::Acquire) {
             0 => None,
             FAULT_OVERFLOW => Some("녹음 저장이 입력을 따라가지 못해 중단했습니다.".into()),
             FAULT_DEVICE => {
-                Some("마이크 입력이 중단되었습니다. 저장된 구간은 보관했습니다.".into())
+                let message = "마이크 입력이 중단되었습니다. 저장된 구간은 보관했습니다.";
+                let diagnostic = self
+                    .device_diagnostic
+                    .lock()
+                    .ok()
+                    .and_then(|diagnostic| diagnostic.clone());
+                Some(match diagnostic {
+                    Some(diagnostic) => format!("{message}\n{diagnostic}"),
+                    None => message.into(),
+                })
             }
             FAULT_WRITER => Some("녹음 파일을 저장하지 못해 중단했습니다.".into()),
             _ => Some("마이크의 오디오 형식이 변경되어 녹음을 중단했습니다.".into()),
@@ -129,7 +206,19 @@ impl Capture {
         raw: File,
         capacity: usize,
     ) -> Result<(Self, CallbackSink)> {
-        let (producer, consumer) = RingBuffer::<u8>::new(capacity);
+        let (mut producer, mut consumer) = RingBuffer::<u8>::new(capacity);
+        if capacity != 0 {
+            // Touch queue pages before callbacks, then discard preparation bytes before the writer starts.
+            let mut prepared = producer
+                .write_chunk(capacity)
+                .map_err(|_| CoreError::Audio("녹음 입력 버퍼를 준비하지 못했습니다.".into()))?;
+            std::hint::black_box(prepared.as_mut_slices());
+            prepared.commit_all();
+            consumer
+                .read_chunk(capacity)
+                .map_err(|_| CoreError::Audio("녹음 입력 버퍼를 준비하지 못했습니다.".into()))?
+                .commit_all();
+        }
         let signals = Arc::new(Signals::new());
         let (control, commands) = mpsc::channel();
         let root = root.to_path_buf();
@@ -176,15 +265,20 @@ impl Capture {
                 config.config(),
                 config.sample_format(),
                 move |data, _| sink.write(data.bytes()),
-                move |_| signals.fail(FAULT_DEVICE),
+                move |error| signals.device_event(error),
                 Some(Duration::from_secs(5)),
             )
             .map_err(|error| CoreError::Audio(format!("마이크를 열 수 없습니다: {error}")))?;
-        stream
-            .play()
-            .map_err(|error| CoreError::Audio(format!("녹음을 시작할 수 없습니다: {error}")))?;
         self.stream = Some(stream);
         Ok(())
+    }
+
+    pub fn play(&self) -> Result<()> {
+        self.stream
+            .as_ref()
+            .ok_or_else(|| CoreError::Audio("녹음 입력이 준비되지 않았습니다.".into()))?
+            .play()
+            .map_err(|error| CoreError::Audio(format!("녹음을 시작할 수 없습니다: {error}")))
     }
 
     pub fn begin(&mut self) {
@@ -403,6 +497,8 @@ fn checkpoint(root: &Path, raw: &File, manifest: &mut Manifest, signals: &Signal
         2 => CapturePhase::Paused,
         _ => CapturePhase::Prepared,
     };
+    manifest.quality = signals.quality();
+    manifest.warning = manifest.quality.as_ref().and_then(CaptureQuality::warning);
     store::write_manifest(root, manifest)?;
     Ok(manifest.saved_frames)
 }
@@ -494,6 +590,8 @@ fn writer_loop(
         phase
     };
     manifest.error = error;
+    manifest.quality = signals.quality();
+    manifest.warning = manifest.quality.as_ref().and_then(CaptureQuality::warning);
     if manifest.phase == CapturePhase::Completed && manifest.saved_frames == 0 {
         manifest.phase = CapturePhase::Interrupted;
         manifest.error = Some("녹음된 오디오가 없습니다.".into());
@@ -571,6 +669,40 @@ mod tests {
     }
 
     #[test]
+    fn queue_preparation_keeps_pcm_empty_and_preserves_first_real_samples() {
+        let capacity = 64 * 1024;
+        let (_temporary, store, mut capture, mut sink) = setup(capacity);
+        let raw = store
+            .root
+            .join(capture.manifest.relative_dir())
+            .join("audio.pcm");
+        assert_eq!(sink.producer.slots(), capacity);
+        capture.flush().unwrap();
+        assert_eq!(capture.frames(), 0);
+        assert_eq!(fs::metadata(&raw).unwrap().len(), 0);
+        capture.begin();
+        let samples = [0.25_f32, -0.5_f32, 0.75_f32];
+        let expected: Vec<u8> = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        sink.write(&expected);
+        let outcome = capture.finish(CapturePhase::Completed, None).unwrap();
+        assert_eq!(outcome.manifest.phase, CapturePhase::Completed);
+        assert_eq!(outcome.manifest.saved_frames, samples.len() as u64);
+        assert_eq!(fs::read(raw).unwrap(), expected);
+        let audio = outcome.audio.unwrap();
+        let mut reader = hound::WavReader::open(store.root.join(audio.relative_path)).unwrap();
+        assert_eq!(
+            reader
+                .samples::<f32>()
+                .map(|sample| sample.unwrap())
+                .collect::<Vec<_>>(),
+            samples
+        );
+    }
+
+    #[test]
     fn overflow_is_interrupted_instead_of_success() {
         let (_temporary, _store, mut capture, mut sink) = setup(4);
         capture.begin();
@@ -579,6 +711,137 @@ mod tests {
         let outcome = capture.finish(CapturePhase::Completed, None).unwrap();
         assert_eq!(outcome.manifest.phase, CapturePhase::Interrupted);
         assert!(outcome.manifest.error.is_some());
+    }
+
+    #[test]
+    fn recoverable_device_events_keep_recording_and_persist_quality_at_checkpoints() {
+        let (_temporary, store, mut capture, mut sink) = setup(4096);
+        capture.begin();
+        let diagnostic_lock = capture.signals.device_diagnostic.lock().unwrap();
+        for kind in [
+            cpal::ErrorKind::Xrun,
+            cpal::ErrorKind::Xrun,
+            cpal::ErrorKind::RealtimeDenied,
+            cpal::ErrorKind::DeviceChanged,
+        ] {
+            capture.signals.device_event(kind.into());
+        }
+        assert!(capture.signals.error().is_none());
+        sink.write(&[0.25_f32.to_le_bytes(); 10].concat());
+        drop(diagnostic_lock);
+        capture.pause().unwrap();
+        let path = store
+            .root
+            .join(capture.manifest.relative_dir())
+            .join("manifest.json");
+        let checkpoint: Manifest = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(checkpoint.phase, CapturePhase::Paused);
+        assert_eq!(checkpoint.saved_frames, 10);
+        assert_eq!(checkpoint.quality.as_ref().unwrap().xrun_count, 2);
+        assert_eq!(
+            checkpoint.quality.as_ref().unwrap().realtime_denied_count,
+            1
+        );
+        assert_eq!(checkpoint.quality.as_ref().unwrap().route_changed_count, 1);
+        assert!(checkpoint.error.is_none());
+        assert!(checkpoint
+            .warning
+            .as_ref()
+            .unwrap()
+            .contains("누락되었을 수"));
+        capture.resume().unwrap();
+        capture.signals.device_event(cpal::ErrorKind::Xrun.into());
+        sink.write(&[0.5_f32.to_le_bytes(); 10].concat());
+        let outcome = capture.finish(CapturePhase::Completed, None).unwrap();
+        assert_eq!(outcome.manifest.phase, CapturePhase::Completed);
+        assert!(outcome.manifest.error.is_none());
+        assert_eq!(outcome.manifest.quality.as_ref().unwrap().xrun_count, 3);
+        assert_eq!(outcome.manifest.saved_frames, 20);
+        let finished: Manifest = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(finished.quality, outcome.manifest.quality);
+        assert_eq!(finished.warning, outcome.manifest.warning);
+        assert_eq!(outcome.audio.unwrap().frames, 20);
+    }
+
+    #[test]
+    fn terminal_device_failure_still_interrupts_after_a_quality_warning() {
+        let (_temporary, _store, mut capture, mut sink) = setup(4096);
+        capture.begin();
+        sink.write(&[0.25_f32.to_le_bytes(); 10].concat());
+        capture.flush().unwrap();
+        capture.signals.device_event(cpal::ErrorKind::Xrun.into());
+        capture.signals.device_event(cpal::Error::with_message(
+            cpal::ErrorKind::DeviceNotAvailable,
+            "Device disconnected",
+        ));
+        sink.write(&[0.5_f32.to_le_bytes(); 10].concat());
+        let outcome = capture.finish(CapturePhase::Completed, None).unwrap();
+        assert_eq!(outcome.manifest.phase, CapturePhase::Interrupted);
+        assert_eq!(outcome.manifest.saved_frames, 10);
+        assert!(outcome
+            .manifest
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("DeviceNotAvailable"));
+        assert!(outcome.manifest.warning.is_some());
+        assert_eq!(outcome.manifest.quality.as_ref().unwrap().xrun_count, 1);
+    }
+
+    #[test]
+    fn first_device_failure_is_preserved_in_manifest_with_original_audio() {
+        let (_temporary, store, mut capture, mut sink) = setup(4096);
+        capture.begin();
+        let original = [0.25_f32.to_le_bytes(); 16].concat();
+        sink.write(&original);
+        capture.flush().unwrap();
+        capture.signals.fail_device(cpal::Error::with_message(
+            cpal::ErrorKind::StreamInvalidated,
+            "Device sample rate changed (OSStatus -50)",
+        ));
+        capture.signals.fail_device(cpal::Error::with_message(
+            cpal::ErrorKind::DeviceNotAvailable,
+            "later error must not replace the first",
+        ));
+        sink.write(&[0.5_f32.to_le_bytes(); 16].concat());
+        let outcome = capture.finish(CapturePhase::Completed, None).unwrap();
+        assert_eq!(outcome.manifest.phase, CapturePhase::Interrupted);
+        let path = store.root.join(outcome.manifest.relative_dir());
+        assert_eq!(fs::read(path.join("audio.pcm")).unwrap(), original);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(path.join("manifest.json")).unwrap()).unwrap();
+        let error = manifest["error"].as_str().unwrap();
+        assert!(error.contains("StreamInvalidated: Device sample rate changed (OSStatus -50)"));
+        assert!(!error.contains("later error"));
+    }
+
+    #[test]
+    fn device_diagnostic_is_one_bounded_unicode_line() {
+        let signals = Signals::new();
+        signals.fail_device(cpal::Error::with_message(
+            cpal::ErrorKind::BackendError,
+            format!("first\nsecond\r\n{}", "오류".repeat(512)),
+        ));
+        let error = signals.error().unwrap();
+        let lines = error.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].starts_with("BackendError: first second  "));
+        assert_eq!(lines[1].chars().count(), MAX_DEVICE_DIAGNOSTIC_CHARS);
+    }
+
+    #[test]
+    fn later_device_event_does_not_replace_writer_failure() {
+        let signals = Signals::new();
+        signals.fail(FAULT_WRITER);
+        signals.device_event(cpal::Error::with_message(
+            cpal::ErrorKind::Xrun,
+            "processor overload",
+        ));
+        assert_eq!(
+            signals.error().as_deref(),
+            Some("녹음 파일을 저장하지 못해 중단했습니다.")
+        );
+        assert!(signals.device_diagnostic.lock().unwrap().is_none());
     }
 
     #[test]

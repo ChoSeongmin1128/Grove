@@ -11,11 +11,13 @@ on:
     paths:
       - '.github/workflows/desktop.yml'
       - '.cargo/config.toml'
+      - '.gitattributes'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/grove-core/**'
       - 'apps/desktop/**'
       - 'design-system/**'
+      - 'scripts/native-summary/**'
 
 permissions:
   contents: read
@@ -63,6 +65,15 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
+      - name: Check product version manifests
+        working-directory: apps/desktop
+        run: npm run version:check
+      - name: Check shared design system and native consumers
+        run: |
+          node design-system/checks/check-design-contracts.cjs
+          node --test design-system/checks/check-components.cjs
+          node design-system/checks/check-windows-bridge.cjs
+          node design-system/catalog/check-tokens.cjs
       - name: Check frontend behavior
         working-directory: apps/desktop
         run: npm test
@@ -71,6 +82,15 @@ jobs:
         run: npm run build
       - name: Test recording core with synthetic input
         run: cargo test -p grove-core --locked -- --test-threads=1
+      - name: Bundle pinned summary runtime
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            python scripts/native-summary/prepare.py --target windows-x64
+          else
+            python3 scripts/native-summary/prepare.py --target macos-arm64
+          fi
+      - name: Test native processing
+        run: cargo test -p grove-desktop --locked -- --test-threads=1
       - name: Check native desktop host
         run: cargo check -p grove-desktop --locked
       - name: Build Windows installer

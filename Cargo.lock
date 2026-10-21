@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "grove-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "cpal",
  "fs2",
@@ -1556,9 +1556,13 @@ dependencies = [
 
 [[package]]
 name = "grove-desktop"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
+ "block2",
+ "fs2",
  "grove-core",
+ "objc2",
+ "objc2-foundation",
  "reqwest",
  "serde",
  "serde_json",

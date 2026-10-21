@@ -22,17 +22,19 @@ function render() {
   const active = ['recording', 'paused', 'finalizing'].includes(session?.state);
   const phase = active ? session.state : meeting?.status || 'idle';
   const error = localError || session?.error || meeting?.error || '';
-  const status = error ? '녹음 확인 필요' : recordingStatus(phase);
+  const warning = session?.warning || meeting?.warning || '';
+  const status = error ? '녹음 확인 필요' : warning ? '음질 확인 필요' : recordingStatus(phase);
   const opener = byId('open-meeting');
   opener.disabled = !meeting || busy;
-  opener.title = [meeting?.title || '녹음 대기', status, session?.deviceName, error].filter(Boolean).join('\n');
-  opener.setAttribute('aria-label', `${meeting?.title || '회의'} 열기, ${status}${error ? ', 오류 확인' : ''}`);
+  opener.title = [meeting?.title || '녹음 대기', status, session?.deviceName, error || warning].filter(Boolean).join('\n');
+  opener.setAttribute('aria-label', `${meeting?.title || '회의'} 열기, ${status}${error ? ', 오류 확인' : warning ? ', 음질 경고 확인' : ''}`);
   const stateMark = byId('recorder-status');
-  stateMark.className = `desktop-overlay-state is-${error ? 'error' : phase}`;
+  stateMark.className = `desktop-overlay-state is-${error || warning ? 'error' : phase}`;
   stateMark.setAttribute('aria-label', status);
-  stateMark.innerHTML = error ? icon('triangle-alert') : '<span class="desktop-state-dot" aria-hidden="true"></span>';
+  const mark = error || warning ? icon('triangle-alert') : '<span class="desktop-state-dot" aria-hidden="true"></span>';
+  if (stateMark.innerHTML !== mark) stateMark.innerHTML = mark;
   byId('recorder-time').textContent = error ? '오류 확인' : active ? duration(session.elapsedMs) : meeting?.audio?.sampleRate ? duration(meeting.audio.frames / meeting.audio.sampleRate * 1000) : '녹음 대기';
-  byId('recorder-error').textContent = error;
+  byId('recorder-error').textContent = error || warning;
   const key = `${session?.id}:${phase}:${busy}:${Boolean(meeting)}`;
   if (key !== controlsKey) {
     controlsKey = key;
@@ -73,6 +75,7 @@ async function run(action) {
   }
 }
 
+byId('recorder-drag').addEventListener('mousedown', event => { if (event.button === 0) { event.preventDefault(); void bridge.dragRecorder().catch(showError); } });
 byId('open-meeting').addEventListener('click', () => run(openMeeting));
 byId('hide-recorder').addEventListener('click', () => run(() => bridge.hideRecorder()));
 byId('recorder-controls').addEventListener('click', (event) => {

@@ -1,7 +1,8 @@
 /* Appearance never reads, writes or renders meeting state. Loaded before paint. */
 (() => {
   const windowsDesign = new URLSearchParams(location.search).get("platform") === "windows" && new URLSearchParams(location.search).get("session") === "windows-design";
-  const key = windowsDesign ? "grove-prototype-v3-windows-design-appearance" : "grove-design-system-v1-appearance";
+  const nativeKey = document.documentElement.dataset.appearanceStorage;
+  const key = nativeKey || (windowsDesign ? "grove-prototype-v3-windows-design-appearance" : "grove-design-system-v1-appearance");
   const colors = new Set(["green", "blue", "purple", "mono", "amber", "rose"]);
   const modes = new Set(["light", "dark", "system"]);
   const legacy = {
@@ -18,7 +19,7 @@
       if (colors.has(value?.color) && modes.has(value?.mode))
         return { color: value.color, mode: value.mode };
     } catch {}
-    return { color: "green", mode: "light" };
+    return { color: "green", mode: nativeKey ? "system" : "light" };
   }
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   let preference = decode(null);
@@ -55,6 +56,7 @@
     void root.offsetWidth;
     root.removeAttribute("data-appearance-changing");
   }
+  window.GroveAppearance = { apply };
   apply();
   media.addEventListener("change", () => {
     if (preference.mode === "system") apply();

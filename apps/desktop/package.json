@@ -1,15 +1,17 @@
 {
   "name": "grove-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.1",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
+    "version:check": "node scripts/version.mjs check",
+    "prepare:icons": "node scripts/prepare-icons.mjs",
     "prepare:shared": "node scripts/prepare-shared.mjs",
     "dev": "npm run prepare:shared && vite --host 127.0.0.1 --port 1420 --strictPort",
-    "build": "npm run prepare:shared && vite build",
+    "build": "npm run version:check && npm run prepare:shared && vite build",
     "tauri": "tauri",
     "test": "node --test tests/*.test.mjs"
   },

@@ -8,19 +8,74 @@ the private installation and evaluation receipts.
 
 ## Native rewrite source
 
+- Nero release numbering starts at 0.0.1 with an independent macOS build number.
+  `docs/versioning.md` owns data/version compatibility rules and
+  `docs/release-history.md` records exact source commits and distribution status.
+  The version helper checks all app/Rust/lockfile mirrors before builds. Distribution
+  resources preserve the source commit/tree and dirty state; release signing requires
+  a clean matching source. macOS packaging can produce separately signed/notarized
+  ZIP and DMG artifacts, with distinct receipts and read-only embedded-app verification.
+
+- Settings contains Screen / Recording / Models. Shared appearance behavior is packaged
+  for both windows, with six colors and independent Light / Dark / System brightness.
+  The native app uses its own saved preference instead of forcing green on every launch.
+  Meeting title/notes autosave without a permanent Saved label or manual Save button;
+  pending feedback and failed-save recovery remain available.
+
+- Initial setup gates creation, recording start and import on speech recognition
+  readiness. Meeting summary is optional, unchecked initially and downloadable later.
+  Preparation is explicit/cancellable; selected models download sequentially. Available
+  disk space is checked before and during transfer, with partial files retained. Normal
+  controls omit model sizes. Existing meeting access and active pause/resume/stop stay
+  available. Unsupported runtimes cannot appear ready by downloading files alone.
+- User-facing results are "음성 기록" and "회의록". Before recording, the detail view
+  exposes recording and notes; empty result sections appear only when their inputs
+  exist. Initial preparation has its own screen; a missing optional summary model can
+  also be downloaded from the meeting summary section.
+
+- Playback uses Korean app controls rather than native webview media controls. Text
+  and summary can be copied or exported as UTF-8 TXT/Markdown through a native save
+  dialog, after pending edits finish saving. A stale summary carries a source-change
+  notice in exported output. Selected files are replaced only after a complete temp
+  write. Optional summary-model downloads show percentage and do not block new meetings.
+  The macOS app declares Korean localization and translates its existing standard menu;
+  Windows retains its previous menu configuration.
+
+- The approved Nero mark is 23-B r7 A, with source in `apps/desktop/brand/mark.svg`.
+  Desktop app icons compose it with the approved light `brand/app-background.svg`;
+  macOS menu-bar uses a transparent monochrome template and
+  Windows tray selects monochrome assets from the reported window theme. Icon
+  source/build integration does not establish Windows shell appearance or installation.
+
 - `apps/desktop` is the new Grove Tauri app, with identity
   `io.github.choseongmin1128.grove.desktop`. It uses only its own application data
   directory. Legacy app/data archival receipts remain private.
 - `crates/grove-core` owns meetings and recording on a dedicated command thread.
   A bounded callback queue and separate file writer retain native PCM; finalization
   creates a distinct float32 WAV. Original audio survives conversion failures.
-- Current UI supports meeting creation/search, title/notes editing, microphone choice,
-  pause/resume/stop, finalized playback and a 236 x 44 compact control window.
+- Current UI supports meeting creation/search, title/notes editing, microphone choice
+  in Settings / Recording (persisted app-local preference),
+  pause/resume/stop, finalized playback and a 236 x 44 draggable transparent control window.
+  Hiding/minimizing the main window first shows the control window. It then stays on top
+  for the active recording despite main-window restoration, until stop, explicit dismissal
+  or an opt-out in Recording settings. Default names receive free numeric
+  suffixes; meeting date is separate from real microphone recording time.
+  Sidebar timestamps include local 24-hour time and sort by the displayed recording
+  or creation timestamp. Their tooltip identifies its meaning and the separate meeting day;
+  importing a file does not invent an original recording timestamp.
   Shared controls, fonts, icons and appearance come from `design-system` at build time.
 - An empty input-device list disables new recording and explains how to refresh after
   connecting a microphone. It does not disable pause/stop for an existing session.
 - Notes are flushed before switching, hiding or quitting. Delayed saves cannot discard
-  newer input. A native atomic shutdown operation checks the active session and fences
+  newer input. Normal recording completion starts recognition once for its finalized audio session;
+  cancellation preserves audio and does not schedule another automatic attempt.
+  macOS microphone authorization settles before CPAL opens an input device.
+  Capture storage is activated before the stream starts. Recoverable overload,
+  scheduling and route notices retain recording with persisted quality warnings;
+  terminal device/storage/queue failures still interrupt. Exact missing-frame counts
+  cannot be inferred from those notices. Compact-window creation failures are reported
+  once per state transition and allow a deliberate retry after restoration/settings.
+  A native atomic shutdown operation checks the active session and fences
   new recording starts before the app exits.
 - Apple silicon/macOS 26 can import audio with the native picker when the audio and
   MOSS workers are packaged. Original bytes/hash, normalized PCM and playback remain
@@ -34,7 +89,7 @@ the private installation and evaluation receipts.
   UI transitions and quit flush pending edits, including composition completion.
 - Processing is cancellable. Normal quit cancels/joins workers before shutting down the
   core. Failure or cancellation keeps audio and prior transcripts. Interrupted model
-  downloads are retained; partial-byte resume is not implemented.
+  downloads are retained; validated partial-byte resume and full-file checks are implemented.
 - Model hash verification checks cancellation between read blocks. The development
   profile optimizes SHA256, and PCM import uses buffered reads/writes with an explicit
   flush and sync before finalization.
@@ -42,8 +97,21 @@ the private installation and evaluation receipts.
   recovery, transcript version conflicts, cancellation and delayed UI saves. These tests
   do not establish actual microphone capture, power-loss durability, long-duration
   performance or Windows behavior.
-- Summaries, independent diarization, identity matching, Calendar and Notion remain
-  unconnected. Windows transcription is not implemented. No weights are downloaded
+- The current product name is Nero; its existing identifier/data location remains stable.
+  The repository was renamed separately; retaining internal grove crate/event names is
+  intentional compatibility, not a second installed product. The approved mark is 23-B r7 A.
+- Packaged llama.cpp b11734 supports explicit preparation of pinned Gemma 4 E4B Q4_0 and
+  on-demand local summaries. GPU startup is preferred, with a bundled CPU startup fallback.
+  Per-process loopback authentication, serial processing, cancellation/quit/recording-start
+  worker teardown, pressure checks and bounded token budgets are connected.
+- Summary records retain source revisions, model/prompt provenance and receipts. Changed
+  sources or competing results cannot replace current summaries. The UI reads/copies them
+  and links valid references to transcript playback, with stale-source links disabled.
+  Long input uses whole-utterance partitioning and a bounded merge; truncation/unfinished
+  output fails rather than replacing prior content. This does not establish summary quality.
+- Model preparation now resumes validated Range responses and verifies full-file SHA256.
+  Existing partial/invalid files are preserved; no automatic preparation or private uploads.
+- Independent diarization, identity matching, Calendar and Notion remain unconnected. Windows transcription is not implemented. No weights are downloaded
   automatically. No notch panel or platform-specific nonactivating floating-window
   contract is implemented yet.
 - A macOS development bundle builds. Windows-native CI is prepared separately;

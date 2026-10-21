@@ -1,12 +1,30 @@
 import * as bridge from './bridge.js';
-import { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance } from './ui.js';
+import { icon, escape, button, duration, recordingStatus, statusMarkup, sessionControls, applySystemAppearance, documentExport } from './ui.js';
 
 applySystemAppearance();
 const byId = (id) => document.getElementById(id);
-const state = { snapshot: { meetings: [], session: null }, selectedId: null, devices: [], deviceId: null, connected: false, busy: false, composing: false, transcriptComposing: false, editLocks: 0, draft: null, saveTimer: null, saveQueue: Promise.resolve(), listKey: '', controlsKey: '', audioKey: '', processing: { status: 'idle', supported: false, modelReady: false }, transcriptDraft: null, transcriptKey: '', transcriptLoadId: 0, transcriptSaveQueue: Promise.resolve() };
+const settingsPanels = ['appearance', 'recording', 'models'];
+const microphonePreferenceKey = 'nero.recording.microphone.v1';
+const recorderPreferenceKey = 'nero.recording.autoRecorder.v1';
+function readAutoRecorder() { try { return globalThis.localStorage?.getItem(recorderPreferenceKey) !== 'false'; } catch { return true; } }
+function readMicrophonePreference() {
+  try {
+    const value = JSON.parse(globalThis.localStorage?.getItem(microphonePreferenceKey) || 'null');
+    return value && (value.id === null || typeof value.id === 'string') ? { id: value.id, name: typeof value.name === 'string' ? value.name : '' } : { id: null, name: '' };
+  } catch { return { id: null, name: '' }; }
+}
+const microphonePreference = readMicrophonePreference();
+const state = { snapshot: { meetings: [], session: null }, selectedId: null, devices: [], devicesLoaded: false, deviceId: microphonePreference.id, deviceName: microphonePreference.name, settingsPanel: 'appearance', settingsKey: '', settingsError: '', settingsReturnId: 'settings', setupFromSettings: false, autoRecorder: readAutoRecorder(), recorderSettingBusy: false, snapshotKey: '', processingKey: '', audioRequest: 0, dateSaving: null, dateKey: '', dateError: null, lastError: null, errorIsSave: false, connected: false, busy: false, composing: false, transcriptComposing: false, editLocks: 0, draft: null, saveTimer: null, saveQueue: Promise.resolve(), listKey: '', controlsKey: '', audioKey: '', processing: { status: 'idle', supported: false, modelReady: false }, transcriptDraft: null, transcriptKey: '', transcriptLoadId: 0, transcriptSaveQueue: Promise.resolve(), summary: null, summaryKey: '', summaryLoadId: 0, setupRequested: false };
 const fullDate = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const shortDate = new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric' });
+const calendarDay = value => { const date = new Date(value); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; };
+const meetingDay = meeting => meeting.meetingDate || calendarDay(meeting.recordedAt ?? meeting.createdAt);
+const listDate = new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric' });
+const listTime = new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const meetingTimestamp = meeting => meeting.recordedAt ?? meeting.createdAt;
 let pendingQuitSessionId = null;
+let selectionRequest = 0;
+function setHTML(id, html) { const node = byId(id); if (node.innerHTML !== html) node.innerHTML = html; }
+function setText(id, text) { const node = byId(id); if (node.textContent !== text) node.textContent = text; }
 const currentMeeting = () => state.snapshot.meetings.find((meeting) => meeting.id === state.selectedId);
 const activeSession = () => ['recording', 'paused', 'finalizing'].includes(state.snapshot.session?.state) ? state.snapshot.session : null;
 const stateFor = (meeting) => activeSession()?.meetingId === meeting.id ? activeSession().state : meeting.status;
@@ -17,68 +35,74 @@ document.querySelector('.welcome-icon').innerHTML = icon('notebook-pen');
 byId('recording-icon').innerHTML = icon('mic');
 
 function showError(error, save = false) {
+  state.lastError = error;
+  state.errorIsSave = save;
   byId('error-message').textContent = error instanceof Error ? error.message : String(error);
   byId('error').hidden = false;
   byId('retry-save').hidden = !save;
 }
 
-function clearError() { byId('error').hidden = true; }
+function clearError(saveOnly = false) { if (saveOnly && !state.errorIsSave) return; byId('error').hidden = true; state.errorIsSave = false; state.lastError = null; }
 
 function renderList() {
   const query = byId('search').value.trim().toLocaleLowerCase();
-  const meetings = [...state.snapshot.meetings].sort((a, b) => b.createdAt - a.createdAt).filter((meeting) => `${meeting.title}\n${meeting.notes}`.toLocaleLowerCase().includes(query));
+  const meetings = [...state.snapshot.meetings].sort((a, b) => meetingTimestamp(b) - meetingTimestamp(a) || b.createdAt - a.createdAt).filter((meeting) => `${meeting.title}\n${meeting.notes}`.toLocaleLowerCase().includes(query));
   byId('meeting-count').textContent = String(state.snapshot.meetings.length);
-  const key = JSON.stringify([query, state.selectedId, meetings.map((meeting) => [meeting.id, meeting.title, meeting.createdAt, stateFor(meeting)])]);
+  const key = JSON.stringify([query, state.selectedId, meetings.map((meeting) => [meeting.id, meeting.title, meeting.createdAt, meeting.recordedAt, meetingDay(meeting), stateFor(meeting)])]);
   if (key === state.listKey) return;
   state.listKey = key;
   const focused = document.activeElement?.dataset.meetingId;
   const scroll = byId('meeting-list').scrollTop;
   byId('meeting-list').innerHTML = meetings.map((meeting) => {
     const phase = stateFor(meeting);
-    return globalThis.GroveUI.button({ className: 'meeting-item', attrs: { 'data-meeting-id': meeting.id, 'aria-current': String(meeting.id === state.selectedId), title: meeting.title }, html: `${icon(['recording', 'paused'].includes(phase) ? 'mic' : meeting.audio ? 'audio-lines' : 'file-text')}<span class="meeting-item-content"><strong>${escape(meeting.title || '제목 없는 회의')}</strong><span class="meeting-item-meta"><span>${escape(shortDate.format(meeting.createdAt))}</span><span class="${['recording', 'paused'].includes(phase) ? 'recording' : ''}">${escape(recordingStatus(phase))}</span></span></span>` });
+    const timestamp = meetingTimestamp(meeting);
+    const timestampLabel = `${listDate.format(timestamp)} ${listTime.format(timestamp)}`;
+    const timestampDescription = `${meeting.recordedAt != null ? '녹음 시작' : '생성'} ${fullDate.format(timestamp)}\n회의 날짜 ${meetingDay(meeting)}`;
+    return globalThis.GroveUI.button({ className: 'meeting-item', attrs: { 'data-meeting-id': meeting.id, 'aria-current': String(meeting.id === state.selectedId), title: meeting.title }, html: `${icon(['recording', 'paused'].includes(phase) ? 'mic' : meeting.audio ? 'audio-lines' : 'file-text')}<span class="meeting-item-content"><strong>${escape(meeting.title || '제목 없는 회의')}</strong><span class="meeting-item-meta"><span class="meeting-item-time" title="${escape(timestampDescription)}" aria-label="${escape(timestampDescription)}">${escape(timestampLabel)}</span><span class="meeting-item-state ${['recording', 'paused'].includes(phase) ? 'recording' : ''}">${escape(recordingStatus(phase))}</span></span></span>` });
   }).join('') || `<p class="list-empty">${query ? '검색 결과가 없습니다.' : '저장한 회의가 없습니다.'}</p>`;
   byId('meeting-list').scrollTop = scroll;
   if (focused) [...byId('meeting-list').querySelectorAll('button')].find((element) => element.dataset.meetingId === focused)?.focus({ preventScroll: true });
 }
 
 function renderSaveState() {
-  const dirty = state.draft?.dirty;
-  byId('save').disabled = !dirty || state.busy;
-  byId('save-status').textContent = state.draft?.saving ? '저장 중' : dirty ? '저장되지 않은 변경' : '저장됨';
+  const saving = Boolean(state.draft?.saving);
+  byId('save-status').textContent = saving ? '저장 중' : '';
+  byId('save-status').hidden = !saving;
 }
 
 function renderRecording(meeting) {
   const session = activeSession();
-  const hasMicrophone = state.devices.length > 0;
+  const hasMicrophone = state.devicesLoaded && !microphoneIssue();
   const importing = state.processing.status === 'running' && state.processing.kind === 'import';
   const ownSession = session?.meetingId === meeting.id ? session : null;
   const phase = stateFor(meeting);
-  byId('meeting-status').innerHTML = statusMarkup(phase);
+  setHTML('meeting-status', statusMarkup(phase));
   byId('recording-time').hidden = !ownSession;
-  byId('recording-time').textContent = duration(ownSession?.elapsedMs);
-  byId('show-recorder').hidden = !session;
-  const key = JSON.stringify([meeting.id, Boolean(meeting.audio), session?.id, session?.state, session?.meetingId, state.devices, state.busy, state.deviceId, importing]);
+  setText('recording-time', duration(ownSession?.elapsedMs));
+  const key = JSON.stringify([meeting.id, Boolean(meeting.audio), session?.id, session?.state, session?.meetingId, state.devicesLoaded, hasMicrophone, importing, Boolean(modelsReady())]);
   if (key !== state.controlsKey) {
     state.controlsKey = key;
     const controls = byId('recording-controls');
-    const microphoneFocused = document.activeElement?.dataset.field === 'microphone';
-    if (ownSession) controls.innerHTML = sessionControls(ownSession, state.busy);
-    else if (session) controls.innerHTML = button('녹음 중인 회의 열기', 'open-active', 'mic', '', state.busy);
+    if (ownSession) controls.innerHTML = sessionControls(ownSession, false);
+    else if (session) controls.innerHTML = button('녹음 중인 회의 열기', 'open-active', 'mic', '', false);
     else if (meeting.audio) controls.innerHTML = '';
-    else controls.innerHTML = `<label class="microphone-field"><span class="sr-only">녹음할 마이크</span><select id="microphone" data-field="microphone" aria-label="녹음할 마이크" ${state.busy || !hasMicrophone ? 'disabled' : ''}><option value="">${hasMicrophone ? '시스템 기본 마이크' : '연결된 마이크 없음'}</option>${state.devices.map((device) => `<option value="${escape(device.id)}" ${device.id === state.deviceId ? 'selected' : ''}>${escape(device.name)}${device.isDefault ? ' (기본)' : ''}</option>`).join('')}</select></label>${globalThis.GroveUI.button({ html: icon('refresh-cw'), action: 'refresh-devices', className: 'icon', disabled: state.busy, attrs: { 'aria-label': '마이크 목록 새로고침', title: '마이크 목록 새로고침' } })}${button('녹음 시작', 'start', 'mic', 'primary', state.busy || !hasMicrophone || importing)}`;
+    else if (!modelsReady()) controls.innerHTML = button('모델 준비', 'setup', null, 'primary', false);
+    else controls.innerHTML = button('녹음 시작', 'start', 'mic', 'primary', !hasMicrophone || importing) + (state.devicesLoaded && !hasMicrophone ? button('녹음 설정', 'recording-settings', 'settings-2', 'quiet small', false) : '');
     controls.hidden = !controls.innerHTML;
-    globalThis.GroveControls.enhanceAll(controls);
-    if (microphoneFocused && !state.busy) controls.querySelector('.grove-select-trigger')?.focus({ preventScroll: true });
+    controls.querySelectorAll('button').forEach(node => { node.dataset.unavailable = String(node.disabled); });
   }
-  const message = ownSession?.error || meeting.error || (phase === 'interrupted' ? '녹음이 중단되었습니다. 저장된 음성을 확인하세요.' : session && !ownSession ? '다른 회의에서 녹음하고 있습니다.' : !meeting.audio && !ownSession ? hasMicrophone ? '선택한 마이크의 소리를 녹음합니다.' : '연결된 마이크가 없습니다. 마이크를 연결한 뒤 목록을 새로고침하세요.' : '');
+  byId('recording-controls').querySelectorAll('button').forEach(node => { node.disabled = state.busy || node.dataset.unavailable === 'true'; });
+  const message = ownSession?.error || meeting.error || ownSession?.warning || meeting.warning || (phase === 'interrupted' ? '녹음이 중단되었습니다. 저장된 음성을 확인하세요.' : session && !ownSession ? '다른 회의에서 녹음하고 있습니다.' : !meeting.audio && !ownSession && modelsReady() && state.devicesLoaded ? microphoneIssue() : '');
   byId('recording-message').textContent = message;
   byId('recording-message').hidden = !message;
   prepareAudio(meeting, Boolean(ownSession));
 }
 
-async function prepareAudio(meeting, recording) {
+async function prepareAudio(meeting, recording, force = false) {
   const key = recording || !meeting.audio ? '' : `${meeting.id}:${meeting.audio.relativePath}:${meeting.audio.frames}`;
-  if (state.audioKey === key) return;
+  if (state.audioKey === key && !force) return;
+  const request = ++state.audioRequest;
+  byId('retry-audio').hidden = true;
   state.audioKey = key;
   const player = byId('audio-player');
   player.pause();
@@ -89,28 +113,71 @@ async function prepareAudio(meeting, recording) {
   byId('audio-message').textContent = '녹음 파일을 여는 중입니다.';
   try {
     const url = await bridge.audioUrl(meeting.id);
-    if (state.audioKey !== key) return;
+    if (state.audioKey !== key || state.audioRequest !== request) return;
     player.src = url;
     const milliseconds = meeting.audio.sampleRate ? meeting.audio.frames / meeting.audio.sampleRate * 1000 : 0;
     byId('audio-message').textContent = `녹음 길이 ${duration(milliseconds)}`;
   } catch (error) {
-    if (state.audioKey === key) {
-      byId('audio-message').textContent = '녹음 파일을 열 수 없습니다. 새로고침해서 다시 시도하세요.';
+    if (state.audioKey === key && state.audioRequest === request) {
+      byId('audio-message').textContent = '녹음 파일을 열 수 없습니다.';
+      byId('retry-audio').hidden = false;
       showError(error);
     }
   }
 }
 
+const modelsReady = () => state.processing.supported && state.processing.modelReady;
+function renderSetup() {
+  const job = state.processing, ready = modelsReady();
+  const running = processingActive() && ['setup','model','summary-model'].includes(job.kind);
+  const visible = state.connected && !activeSession() && (state.setupRequested || (!state.selectedId && (!ready || (running && job.kind === 'setup'))));
+  byId('setup-screen').hidden = !visible;
+  byId('setup-title').textContent = state.setupFromSettings ? '모델' : '초기 설정';
+  document.querySelector('.workspace').dataset.onboarding = String(visible && state.snapshot.meetings.length === 0);
+  byId('setup-speech-state').textContent = !state.connected ? '확인 중' : job.modelReady ? '준비됨' : !job.supported ? '지원되지 않음' : running && job.modelStage === 'speech' ? '준비 중' : '';
+  byId('setup-summary-state').textContent = job.summaryReady ? '준비됨' : !job.summarySupported && state.connected ? '지원되지 않음' : running && job.modelStage === 'summary' ? '준비 중' : '';
+  byId('setup-summary-choice').hidden = ready || job.summaryReady || !job.summarySupported || !job.supported;
+  byId('setup-summary-option').disabled = !state.connected || state.busy || processingActive();
+  byId('setup-download-summary').hidden = !ready || job.summaryReady || !job.summarySupported || running;
+  byId('setup-download-summary').disabled = state.busy || processingActive();
+  byId('setup-progress-region').hidden = !running;
+  byId('setup-progress').max = job.totalBytes || 1;
+  byId('setup-progress').value = job.bytes || 0;
+  byId('setup-progress-stage').textContent = job.message || '준비 중';
+  byId('setup-progress-bytes').textContent = job.totalBytes ? `${Math.min(100,Math.floor((job.bytes || 0) / job.totalBytes * 100))}%` : '';
+  const unsupported = state.connected && !job.supported;
+  const failed = ['setup','model','summary-model'].includes(job.kind) && ['failed','cancelled'].includes(job.status);
+  byId('setup-message').textContent = !state.connected ? '준비 상태 확인 중' : unsupported ? '현재 음성 인식은 Apple Silicon Mac과 macOS 26 이상에서 사용할 수 있습니다.' : running ? '' : failed ? job.message : '';
+  byId('setup-message').hidden = !byId('setup-message').textContent;
+  byId('setup-message').dataset.state = failed ? job.status : '';
+  byId('setup-download').hidden = ready || unsupported || running;
+  byId('setup-download').disabled = !state.connected || state.busy || processingActive();
+  byId('setup-download').textContent = failed ? '다시 다운로드' : '다운로드';
+  byId('setup-cancel').hidden = !running;
+  byId('setup-cancel').disabled = state.busy;
+  byId('setup-start').hidden = !ready || running || state.setupFromSettings;
+  byId('setup-start').disabled = state.busy || processingActive();
+  byId('setup-back').hidden = !state.selectedId && !state.setupFromSettings;
+  byId('setup-back').textContent = state.setupFromSettings ? '설정으로 돌아가기' : '회의로 돌아가기';
+  return visible;
+}
+async function openSetup(fromSettings = false) {
+  if (activeSession()) { showError('녹음을 마친 뒤 준비해 주세요.'); return; }
+  await finishEditing(() => { state.setupRequested = true; state.setupFromSettings = fromSettings; render(); byId('setup-title').focus?.({ preventScroll: true }); });
+}
+
 function render() {
-  byId('create-meeting').disabled = !state.connected || state.busy;
+  byId('create-meeting').disabled = !state.connected || state.busy || (processingActive() && ['setup','model'].includes(state.processing.kind));
   byId('welcome-create').disabled = !state.connected || state.busy;
   renderList();
+  renderSettings();
   renderProcessing();
+  const setupVisible = renderSetup();
   const meeting = currentMeeting();
-  byId('welcome').hidden = Boolean(meeting);
-  byId('meeting-detail').hidden = !meeting;
+  byId('welcome').hidden = setupVisible || Boolean(meeting);
+  byId('meeting-detail').hidden = setupVisible || !meeting;
   if (!meeting) return;
-  byId('meeting-date').textContent = fullDate.format(meeting.createdAt);
+  renderMeetingDates(meeting);
   if (!state.draft?.dirty && !state.draft?.saving && document.activeElement !== byId('meeting-title') && document.activeElement !== byId('meeting-notes')) {
     byId('meeting-title').value = meeting.title;
     byId('meeting-notes').value = meeting.notes || '';
@@ -118,13 +185,55 @@ function render() {
   renderSaveState();
   renderRecording(meeting);
   renderTranscript(meeting);
+  renderSummary(meeting);
+}
+
+function renderMeetingDates(meeting) {
+  byId('recorded-at').hidden = !meeting.recordedAt;
+  setText('recorded-at', meeting.recordedAt ? `녹음 ${fullDate.format(meeting.recordedAt)}` : '');
+  const issue = state.dateError?.id === meeting.id ? state.dateError.message : '';
+  setText('meeting-date-message', issue);
+  byId('meeting-date-message').hidden = !issue;
+  const input = byId('meeting-day');
+  const key = JSON.stringify([meeting.id, meetingDay(meeting), state.dateSaving]);
+  if (state.dateKey === key) return;
+  state.dateKey = key;
+  if (state.dateSaving !== meeting.id) input.value = meetingDay(meeting);
+  input.disabled = Boolean(state.dateSaving);
+  globalThis.GroveControls.enhanceAll();
+  globalThis.GroveControls.refresh?.();
+}
+
+async function changeMeetingDate() {
+  const meeting = currentMeeting();
+  if (!meeting || state.dateSaving) return;
+  const date = byId('meeting-day').value || null;
+  state.dateSaving = meeting.id;
+  state.dateError = null;
+  renderMeetingDates(meeting);
+  try {
+    await finishEditing(async () => { await bridge.setMeetingDate(meeting.id, date); acceptSnapshot(await bridge.readSnapshot()); });
+  } catch {
+    state.dateError = { id: meeting.id, message: '회의 날짜를 저장하지 못했습니다. 다시 선택해 주세요.' };
+  } finally { state.dateSaving = null; state.dateKey = ''; if (currentMeeting()) renderMeetingDates(currentMeeting()); }
 }
 
 function acceptSnapshot(snapshot) {
   if (snapshot.revision != null && state.snapshot.revision != null && snapshot.revision < state.snapshot.revision) return;
+  const key = JSON.stringify([snapshot.meetings, snapshot.session]);
+  const changed = !state.connected || state.snapshotKey !== key;
+  const stableSession = session => session ? { ...session, elapsedMs: 0, savedFrames: 0 } : null;
+  const timerOnly = state.connected && JSON.stringify(state.snapshot.meetings) === JSON.stringify(snapshot.meetings) && JSON.stringify(stableSession(state.snapshot.session)) === JSON.stringify(stableSession(snapshot.session));
   state.snapshot = snapshot;
+  state.snapshotKey = key;
   state.connected = true;
-  if (!state.selectedId && snapshot.meetings.length) selectMeeting(snapshot.meetings[0].id);
+  if (!state.selectedId && modelsReady() && snapshot.meetings.length) { void selectMeeting(snapshot.meetings[0].id); return; }
+  if (!changed) return;
+  if (timerOnly) {
+    const ownSession = activeSession()?.meetingId === state.selectedId ? activeSession() : null;
+    setText('recording-time', duration(ownSession?.elapsedMs));
+    return;
+  }
   render();
 }
 
@@ -143,20 +252,26 @@ function saveDraft() {
     if (draft.version === version) draft.dirty = false;
   });
   state.saveQueue = task.catch(() => {});
-  return task.then(() => { clearError(); }).catch((error) => { showError(error, true); throw error; }).finally(() => {
+  return task.then(() => { clearError(true); }).catch((error) => { showError(error, true); throw error; }).finally(() => {
     if (draft.version === version) draft.saving = false;
     renderSaveState();
   });
 }
 
 async function selectMeeting(id) {
+  const request = ++selectionRequest;
   if (state.selectedId === id) return;
   try {
     await finishEditing(() => {
+      if (request !== selectionRequest) return;
       const meeting = state.snapshot.meetings.find((item) => item.id === id);
       if (!meeting) return;
+      state.setupRequested = false;
+      state.setupFromSettings = false;
       state.selectedId = id;
       state.transcriptDraft = null; state.transcriptKey = '';
+      state.summary = null; state.summaryKey = '';
+      void loadSummary(id);
       void loadTranscript(id);
       state.draft = { id, title: meeting.title, notes: meeting.notes || '', dirty: false, saving: false, version: 0 };
       byId('meeting-title').value = meeting.title;
@@ -168,9 +283,80 @@ async function selectMeeting(id) {
   } catch { return; }
 }
 
+function microphoneIssue() {
+  if (!state.devices.length) return '연결된 마이크가 없습니다.';
+  if (state.deviceId && !state.devices.some(device => device.id === state.deviceId)) return '선택한 마이크가 연결되어 있지 않습니다.';
+  if (!state.deviceId && !state.devices.some(device => device.isDefault)) return '시스템 기본 마이크를 찾지 못했습니다.';
+  return '';
+}
+
+function renderSettings() {
+  const dialog = byId('settings-dialog');
+  const recording = state.settingsPanel === 'recording';
+  for (const name of settingsPanels) {
+    const selected = state.settingsPanel === name;
+    byId(`settings-${name}-tab`).setAttribute('aria-selected', String(selected));
+    byId(`settings-${name}-tab`).tabIndex = selected ? 0 : -1;
+    byId(`settings-${name}-panel`).hidden = !selected;
+  }
+  const select = byId('settings-microphone');
+  const disabled = !state.connected || state.busy || Boolean(activeSession()) || !state.devices.length;
+  const refresh = state.settingsKey !== JSON.stringify([state.devices, state.deviceId, state.deviceName]) || select.disabled !== disabled;
+  const key = JSON.stringify([state.devices, state.deviceId, state.deviceName]);
+  if (key !== state.settingsKey) {
+    state.settingsKey = key;
+    const missing = state.deviceId && !state.devices.some(device => device.id === state.deviceId);
+    select.innerHTML = `<option value="">시스템 기본 마이크</option>${missing ? `<option value="${escape(state.deviceId)}" disabled>${escape(state.deviceName || '선택한 마이크')} (연결 안 됨)</option>` : ''}${state.devices.map(device => `<option value="${escape(device.id)}">${escape(device.name)}${device.isDefault ? ' (기본)' : ''}</option>`).join('')}`;
+    select.value = state.deviceId || '';
+  }
+  select.disabled = disabled;
+  byId('auto-recorder').checked = state.autoRecorder;
+  byId('auto-recorder').disabled = state.recorderSettingBusy;
+  byId('settings-refresh-devices').disabled = state.busy;
+  byId('models').disabled = !state.connected || state.busy || Boolean(activeSession());
+  const job = state.processing;
+  byId('settings-speech-state').textContent = !state.connected ? '확인 중' : !job.supported ? '지원되지 않음' : job.modelReady ? '준비됨' : '다운로드 필요';
+  byId('settings-summary-state').textContent = !state.connected ? '확인 중' : !job.summarySupported ? '지원되지 않음' : job.summaryReady ? '준비됨' : '다운로드 필요';
+  const message = recording ? state.settingsError || (activeSession() ? '녹음을 마친 뒤 변경할 수 있습니다.' : recording && state.devicesLoaded ? microphoneIssue() : '') : '';
+  byId('settings-message').textContent = message;
+  byId('settings-message').hidden = !message;
+  if (dialog.open) {
+    globalThis.GroveControls.enhanceAll(dialog);
+    if (refresh) globalThis.GroveControls.refresh?.();
+  }
+}
+
+async function openSettings(panel = 'appearance', returnId = 'settings') {
+  await finishEditing(() => {
+    state.settingsPanel = panel;
+    state.settingsReturnId = returnId;
+    state.settingsError = '';
+    const dialog = byId('settings-dialog');
+    if (!dialog.open) dialog.showModal();
+    renderSettings();
+    globalThis.GroveControls.refresh?.();
+    byId(`settings-${panel}-tab`).focus({ preventScroll: true });
+  });
+  try { await refreshDevices(); } catch { state.settingsError = '마이크 목록을 불러오지 못했습니다. 다시 시도해 주세요.'; renderSettings(); }
+}
+
+function changeMicrophone() {
+  if (activeSession()) { state.settingsKey = ''; return renderSettings(); }
+  const id = byId('settings-microphone').value || null;
+  const device = state.devices.find(item => item.id === id);
+  if (id && !device) { state.settingsKey = ''; return renderSettings(); }
+  const preference = { id, name: device?.name || '' };
+  try {
+    if (!globalThis.localStorage) throw new Error('Storage unavailable');
+    globalThis.localStorage.setItem(microphonePreferenceKey, JSON.stringify(preference));
+    state.deviceId = preference.id; state.deviceName = preference.name; state.settingsError = '';
+  } catch { state.settingsError = '마이크 설정을 저장하지 못했습니다. 다시 시도해 주세요.'; state.settingsKey = ''; }
+  render();
+}
+
 async function refreshDevices() {
   state.devices = await bridge.listDevices();
-  if (state.deviceId && !state.devices.some((device) => device.id === state.deviceId)) state.deviceId = null;
+  state.devicesLoaded = true;
   render();
 }
 
@@ -181,7 +367,7 @@ async function run(action) {
   const focusedField = document.activeElement?.dataset.field;
   state.busy = true;
   render();
-  try { await action(); } catch (error) { showError(error); } finally {
+  try { await action(); } catch (error) { if (state.lastError !== error) showError(error); } finally {
     state.busy = false;
     render();
     if (document.activeElement === document.body) {
@@ -193,12 +379,15 @@ async function run(action) {
 }
 
 async function createMeeting() {
-  await saveDraft();
-  const meeting = await bridge.createMeeting('새 회의', '');
-  acceptSnapshot(await bridge.readSnapshot());
-  await selectMeeting(meeting.id);
-  byId('meeting-title').focus();
-  byId('meeting-title').select();
+  if (!modelsReady() || (processingActive() && ['setup','model'].includes(state.processing.kind))) return openSetup();
+  await finishEditing(async () => {
+    state.setupRequested = false;
+    const meeting = await bridge.createMeeting('새 회의', '');
+    acceptSnapshot(await bridge.readSnapshot());
+    await selectMeeting(meeting.id);
+    byId('meeting-title').focus();
+    byId('meeting-title').select();
+  });
 }
 
 function onEdit() {
@@ -221,21 +410,41 @@ byId('search').addEventListener('input', () => { byId('meeting-list').scrollTop 
 byId('meeting-list').addEventListener('click', (event) => { const id = event.target.closest('[data-meeting-id]')?.dataset.meetingId; if (id) void selectMeeting(id); });
 byId('create-meeting').addEventListener('click', () => run(createMeeting));
 byId('welcome-create').addEventListener('click', () => run(createMeeting));
-byId('save').addEventListener('click', () => saveDraft().catch(() => {}));
+byId('setup-start').addEventListener('click', () => run(createMeeting));
+byId('settings').addEventListener('click', () => openSettings().catch(showError));
+byId('settings-close').addEventListener('click', () => { globalThis.GroveControls.close?.(); byId('settings-dialog').close(); });
+byId('settings-dialog').addEventListener('close', () => { globalThis.GroveControls.close?.(); (byId(state.settingsReturnId) || byId('settings')).focus({ preventScroll: true }); });
+for (const name of settingsPanels) byId(`settings-${name}-tab`).addEventListener('click', () => { globalThis.GroveControls.close?.(); state.settingsPanel = name; renderSettings(); });
+byId('settings-dialog').addEventListener('keydown', event => {
+  const index = settingsPanels.findIndex(name => `settings-${name}-tab` === event.target.id);
+  if (index < 0 || !['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const step = ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1;
+  state.settingsPanel = settingsPanels[event.key === 'Home' ? 0 : event.key === 'End' ? settingsPanels.length - 1 : (index + step + settingsPanels.length) % settingsPanels.length];
+  renderSettings(); byId(`settings-${state.settingsPanel}-tab`).focus();
+});
+byId('settings-microphone').addEventListener('change', changeMicrophone);
+byId('settings-refresh-devices').addEventListener('click', async () => { state.settingsError = ''; try { await refreshDevices(); } catch { state.settingsError = '마이크 목록을 불러오지 못했습니다. 다시 시도해 주세요.'; renderSettings(); } });
+byId('models').addEventListener('click', () => run(async () => { globalThis.GroveControls.close?.(); byId('settings-dialog').close(); await openSetup(true); }));
+byId('setup-back').addEventListener('click', () => { const settings = state.setupFromSettings; state.setupRequested = false; state.setupFromSettings = false; render(); if (settings) void openSettings('models'); else byId('settings').focus({ preventScroll: true }); });
+byId('setup-download').addEventListener('click', () => run(async () => { state.setupRequested = true; await acceptProcessing(await bridge.prepareMeetingModels(Boolean(byId('setup-summary-option').checked) && !state.processing.summaryReady)); }));
+byId('setup-download-summary').addEventListener('click', () => run(async () => { state.setupRequested = true; await acceptProcessing(await bridge.prepareSummaryModel()); }));
+byId('setup-cancel').addEventListener('click', () => run(() => bridge.cancelProcessing(state.processing.id)));
 byId('retry-save').addEventListener('click', () => saveDraft().catch(() => {}));
-byId('dismiss-error').addEventListener('click', clearError);
-byId('refresh').addEventListener('click', () => run(async () => { await saveDraft(); state.audioKey = ''; acceptSnapshot(await bridge.readSnapshot()); await refreshDevices(); }));
-byId('show-recorder').addEventListener('click', () => run(() => bridge.showRecorder()));
-byId('recording-controls').addEventListener('change', (event) => { if (event.target.id === 'microphone') state.deviceId = event.target.value || null; });
+byId('dismiss-error').addEventListener('click', () => clearError());
 byId('recording-controls').addEventListener('click', (event) => {
   const action = event.target.closest('[data-action]')?.dataset.action;
   const session = activeSession();
   if (!action) return;
   run(async () => {
-    if (action === 'refresh-devices') return refreshDevices();
+    if (action === 'recording-settings') return openSettings('recording', 'settings');
     if (action === 'open-active' && session) return selectMeeting(session.meetingId);
+    if (action === 'setup') return openSetup();
     if (action === 'start') {
+      if (!modelsReady()) return openSetup();
       await saveDraft();
+      await refreshDevices();
+      if (microphoneIssue()) return;
       acceptSnapshot(await bridge.startRecording(state.selectedId, state.deviceId));
     }
     if (action === 'pause' && session) acceptSnapshot(await bridge.pauseRecording(session.id));
@@ -243,6 +452,23 @@ byId('recording-controls').addEventListener('click', (event) => {
     if (action === 'stop' && session) acceptSnapshot(await bridge.stopRecording(session.id));
   });
 });
+byId('meeting-day').addEventListener('change', () => { void changeMeetingDate(); });
+byId('auto-recorder').addEventListener('change', async () => {
+  const previous = state.autoRecorder;
+  const next = byId('auto-recorder').checked;
+  state.recorderSettingBusy = true;
+  state.autoRecorder = next;
+  renderSettings();
+  try {
+    await bridge.setAutoRecorder(next);
+    try { globalThis.localStorage.setItem(recorderPreferenceKey, String(next)); }
+    catch (error) { await bridge.setAutoRecorder(previous); throw error; }
+    state.autoRecorder = next;
+    state.settingsError = '';
+  } catch { state.autoRecorder = previous; state.settingsError = '녹음 제어창 설정을 저장하지 못했습니다.'; }
+  finally { state.recorderSettingBusy = false; renderSettings(); }
+});
+byId('retry-audio').addEventListener('click', () => { const meeting = currentMeeting(); if (meeting) void prepareAudio(meeting, Boolean(activeSession()?.meetingId === meeting.id), true); });
 byId('audio-player').addEventListener('error', () => { if (byId('audio-player').getAttribute('src')) byId('audio-message').textContent = '음성을 재생할 수 없습니다. 녹음 파일을 다시 열어 주세요.'; });
 document.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void finishEditing(() => {}).catch(() => {}); }
@@ -279,9 +505,11 @@ const processingActive = () => state.processing.status === 'running';
 
 function renderProcessing() {
   const progress = state.processing;
-  byId('import-audio').disabled = !state.connected || state.busy || processingActive() || Boolean(activeSession()) || !progress.supported;
-  byId('processing').hidden = !progress.id;
-  byId('processing-message').textContent = progress.message || '';
+  byId('import-audio').disabled = !state.connected || state.busy || processingActive() || Boolean(activeSession());
+  byId('processing').hidden = !progress.id || progress.kind === 'setup' || progress.status === 'completed';
+  const owner = state.snapshot.meetings.find(meeting => meeting.id === progress.meetingId);
+  const percent = processingActive() && progress.totalBytes ? ` ${Math.min(100, Math.floor((progress.bytes || 0) / progress.totalBytes * 100))}%` : '';
+  byId('processing-message').textContent = `${owner && owner.id !== state.selectedId ? owner.title + ': ' : ''}${progress.message || ''}${percent}`;
   byId('cancel-processing').hidden = !processingActive();
   byId('processing-progress').hidden = !processingActive() || !progress.totalBytes;
   byId('processing-progress').max = progress.totalBytes || 1;
@@ -292,17 +520,20 @@ function renderTranscript(meeting) {
   const job = state.processing;
   const ownJob = processingActive() && job.meetingId === meeting.id;
   const draft = state.transcriptDraft;
-  byId('prepare-model').textContent = `전사 모델 준비${job.modelBytes ? ` (${(job.modelBytes / 1e9).toFixed(1)} GB)` : ''}`;
-  byId('prepare-model').hidden = job.modelReady || !job.supported;
-  byId('prepare-model').disabled = processingActive() || state.busy;
-  byId('transcribe').disabled = !meeting.audio || !job.modelReady || processingActive() || state.busy;
-  byId('transcribe').textContent = draft?.doc ? '다시 전사' : '전사 시작';
+  byId('transcribe').hidden = ownJob;
+  byId('transcribe').disabled = !meeting.audio || !job.supported || !job.modelReady || processingActive() || state.busy;
+  byId('transcribe').textContent = draft?.doc ? '다시 변환' : ['failed', 'cancelled'].includes(job.status) && job.kind === 'transcribe' && job.meetingId === meeting.id ? '다시 시도' : '텍스트로 변환';
+  byId('transcript-section').hidden = !meeting.audio && !draft?.doc && !ownJob;
   byId('save-transcript').disabled = !draft?.dirty || draft.saving || ownJob;
-  byId('transcript-message').textContent = ownJob ? job.message : draft?.dirty ? '저장되지 않은 수정이 있습니다.' : draft?.doc ? '수정본과 모델 원문은 따로 보관됩니다.' : !meeting.audio ? '음성을 가져오거나 녹음을 마친 뒤 전사할 수 있습니다.' : !job.supported ? '이 기기의 전사 기능은 아직 준비되지 않았습니다.' : !job.modelReady ? '전사 모델을 준비하면 기기에서 음성을 처리할 수 있습니다.' : '전사를 시작할 수 있습니다.';
+  byId('copy-transcript').hidden = !draft?.doc?.segments?.length;
+  byId('copy-transcript').disabled = state.busy || ownJob;
+  byId('transcript-export-menu').hidden = !draft?.doc?.segments?.length;
+  byId('transcript-message').textContent = ownJob ? job.message : draft?.dirty ? '저장되지 않은 수정이 있습니다.' : !job.supported ? '이 환경에서는 음성 기록을 변환할 수 없습니다.' : !job.modelReady ? '음성 인식 모델을 먼저 준비해 주세요.' : '';
+
   const key = JSON.stringify([meeting.id, draft?.doc?.version, state.transcriptLoadId]);
   if (key !== state.transcriptKey) {
     state.transcriptKey = key;
-    byId('transcript-rows').innerHTML = (draft?.doc?.segments || []).map((segment,index) => `<div class="transcript-row">${globalThis.GroveUI.button({ text: duration(segment.start * 1000), className: 'quiet small', attrs: { 'data-seek': segment.start, 'aria-label': duration(segment.start * 1000) + ' 발언 재생' } })}<div><textarea data-segment="${index}" aria-label="${index + 1}번 발언 수정">${escape(segment.text)}</textarea><details><summary>모델 원문</summary><p>${escape(segment.originalText)}</p></details></div></div>`).join('');
+    byId('transcript-rows').innerHTML = (draft?.doc?.segments || []).map((segment,index) => `<div class="transcript-row">${globalThis.GroveUI.button({ text: duration(segment.start * 1000), className: 'quiet small', attrs: { 'data-seek': segment.start, 'aria-label': duration(segment.start * 1000) + ' 발언 재생' } })}<div><textarea class="text-input" data-segment="${index}" aria-label="${index + 1}번 발언 수정">${escape(segment.text)}</textarea><details><summary>모델 원문</summary><p>${escape(segment.originalText)}</p></details></div></div>`).join('');
   }
   byId('transcript-rows').querySelectorAll('textarea').forEach((input) => { input.readOnly = ownJob || state.editLocks > 0; });
 }
@@ -345,20 +576,101 @@ function saveTranscript() {
 async function acceptProcessing(progress) {
   if (progress.revision != null && state.processing.revision != null && progress.revision < state.processing.revision) return;
   const previous = state.processing;
+  const key = JSON.stringify(progress);
+  if (state.processingKey === key) return;
+  state.processingKey = key;
   state.processing = progress;
   render();
   if (progress.status === 'completed' && (previous.id !== progress.id || previous.status !== 'completed') && progress.meetingId) {
     acceptSnapshot(await bridge.readSnapshot());
     if (progress.kind === 'import') await selectMeeting(progress.meetingId);
-    if (progress.meetingId === state.selectedId) await loadTranscript(progress.meetingId);
+    if (progress.meetingId === state.selectedId) { await loadTranscript(progress.meetingId); await loadSummary(progress.meetingId); }
   }
 }
 
+function renderSummary(meeting) {
+  const progress = state.processing;
+  const doc = state.summary?.document;
+  const hasTranscript = Boolean(state.transcriptDraft?.doc?.segments?.length);
+  const stale = state.summary?.stale || state.transcriptDraft?.dirty || (doc && (doc.sourceVersion.id !== state.transcriptDraft?.doc?.version.id || doc.sourceVersion.revision !== state.transcriptDraft?.doc?.version.revision));
+  const ownJob = processingActive() && progress.kind === 'summary' && progress.meetingId === meeting.id;
+  byId('summary-section').hidden = !hasTranscript && !doc;
+  byId('prepare-summary').hidden = progress.summaryReady || !progress.summarySupported;
+  byId('prepare-summary').disabled = processingActive() || state.busy || Boolean(activeSession());
+  byId('summarize').hidden = !progress.summaryReady || !progress.summarySupported;
+  byId('copy-summary').hidden = !doc;
+  byId('summarize').disabled = !hasTranscript || !progress.summaryReady || !progress.summarySupported || processingActive() || state.busy || Boolean(activeSession());
+  byId('summarize').textContent = doc ? '다시 요약' : '요약하기';
+  byId('copy-summary').disabled = !doc;
+  byId('summary-export-menu').hidden = !doc;
+  byId('summary-message').textContent = ownJob ? progress.message : doc && stale ? '음성 기록이 수정되었습니다. 다시 요약해 주세요.' : !progress.summarySupported ? '이 기기에서는 요약을 사용할 수 없습니다.' : '';
+  const key = JSON.stringify([meeting.id, doc?.id, state.transcriptDraft?.doc?.version, Boolean(stale)]);
+  if (key !== state.summaryKey) {
+    state.summaryKey = key;
+    byId('summary-content').innerHTML = escape(doc?.text || '').replace(/\[(\d+)\]/g, (match, number) => {
+      const segment = state.transcriptDraft?.doc?.segments?.[Number(number) - 1];
+      return segment && !stale ? `<button type="button" class="quiet source-reference" data-summary-seek="${Number(number)-1}" title="${escape(segment.text)}" aria-label="${number}번 발언 확인">${match}</button>` : match;
+    });
+  }
+}
+async function loadSummary(id) {
+  const request = ++state.summaryLoadId;
+  try {
+    const summary = await bridge.readSummary(id);
+    if (request !== state.summaryLoadId || id !== state.selectedId) return;
+    state.summary = summary; state.summaryKey = '';
+    if (currentMeeting()) renderSummary(currentMeeting());
+  } catch (error) { if (request === state.summaryLoadId && id === state.selectedId) showError(error); }
+}
+byId('prepare-summary').addEventListener('click', () => run(() => openSetup(true)));
+byId('summarize').addEventListener('click', () => run(() => finishEditing(async () => acceptProcessing(await bridge.summarizeMeeting(state.selectedId)))));
+async function exportDocument(kind, format, copy = false) {
+  await finishEditing(async () => {
+    const meeting = currentMeeting();
+    if (!meeting) return;
+    const summary = state.summary && { ...state.summary, stale: state.summary.stale || Boolean(state.transcriptDraft?.dirty) || (state.summary.document?.sourceVersion.revision !== state.transcriptDraft?.doc?.version.revision) || (state.summary.document?.sourceVersion.id !== state.transcriptDraft?.doc?.version.id) };
+    const result = documentExport(meeting, state.transcriptDraft?.doc, summary, kind, format);
+    if (copy) {
+      await navigator.clipboard.writeText(result.text);
+      const feedback = byId(`copy-${kind}`);
+      feedback.textContent = '복사됨';
+      setTimeout(() => { feedback.textContent = '복사'; }, 1500);
+    } else await bridge.exportText(result.name, result.text);
+  });
+}
+for (const kind of ['transcript', 'summary']) {
+  byId(`copy-${kind}`).addEventListener('click', () => run(() => exportDocument(kind, 'txt', true)));
+  const menu = byId(`${kind}-export-menu`);
+  menu.addEventListener('click', event => {
+    const format = event.target.closest('[data-export-format]')?.dataset.exportFormat;
+    if (!format) return;
+    menu.open = false;
+    void run(() => exportDocument(kind, format)).then(() => menu.querySelector('summary')?.focus({ preventScroll: true }));
+  });
+}
+document.addEventListener('click', event => {
+  for (const kind of ['transcript', 'summary']) { const menu = byId(`${kind}-export-menu`); if (!menu.contains(event.target)) menu.open = false; }
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  for (const kind of ['transcript', 'summary']) { const menu = byId(`${kind}-export-menu`); if (menu.open) { menu.open = false; menu.querySelector('summary')?.focus({ preventScroll: true }); event.preventDefault(); } }
+});
+byId('summary-content').addEventListener('click', (event) => {
+  const reference = event.target.closest('[data-summary-seek]');
+  if (!reference) return;
+  const index = Number(reference.dataset.summarySeek), segment = state.transcriptDraft?.doc?.segments?.[index];
+  if (!segment || state.summary?.stale || state.transcriptDraft?.dirty) return;
+  const row = byId('transcript-rows').querySelector(`[data-segment="${index}"]`);
+  row?.scrollIntoView({ block: 'center', behavior: 'smooth' }); row?.focus({ preventScroll: true });
+  const player = byId('audio-player');
+  if (player.getAttribute('src')) { player.currentTime = segment.start; player.play().catch(showError); }
+});
+
 byId('import-audio').addEventListener('click', () => run(() => finishEditing(async () => {
+  if (!modelsReady()) return openSetup();
   const progress = await bridge.importAudio();
   if (progress) await acceptProcessing(progress);
 })));
-byId('prepare-model').addEventListener('click', () => run(async () => acceptProcessing(await bridge.prepareModel())));
 byId('cancel-processing').addEventListener('click', () => run(() => bridge.cancelProcessing(state.processing.id)));
 byId('transcribe').addEventListener('click', () => run(() => finishEditing(async () => acceptProcessing(await bridge.transcribeAudio(state.selectedId)))));
 byId('save-transcript').addEventListener('click', () => finishEditing(() => {}).catch(() => {}));
@@ -369,6 +681,7 @@ function onTranscriptEdit(event) {
   draft.doc.segments[Number(index)].text = event.target.value;
   draft.version += 1; draft.dirty = true;
   renderTranscript(currentMeeting());
+  renderSummary(currentMeeting());
 }
 byId('transcript-rows').addEventListener('input', onTranscriptEdit);
 byId('transcript-rows').addEventListener('compositionstart', () => { state.transcriptComposing = true; });
@@ -405,8 +718,10 @@ byId('quit-dialog').addEventListener('close', () => { pendingQuitSessionId = nul
 
 try {
   await bridge.subscribeSnapshots(acceptSnapshot);
+  await bridge.subscribeProcessingError(({ message }) => showError(message));
   await bridge.subscribeProcessing((progress) => { void acceptProcessing(progress).catch(showError); });
-  state.processing = await bridge.processingStatus();
+  await bridge.setAutoRecorder(state.autoRecorder);
+  await acceptProcessing(await bridge.processingStatus());
   await bridge.subscribeOpenMeeting(async (meetingId, error) => { await selectMeeting(meetingId); if (error) showError(error); });
   await bridge.subscribeQuitRequest(onQuitRequest);
   await bridge.subscribeCloseRequest(() => run(() => finishEditing(() => bridge.hideMain())));

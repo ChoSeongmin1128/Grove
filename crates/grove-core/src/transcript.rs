@@ -383,9 +383,9 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    fn setup() -> (tempfile::TempDir, Engine, String, PathBuf) {
+    pub(crate) fn setup() -> (tempfile::TempDir, Engine, String, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let wav_path = root.join("input.wav");
@@ -409,7 +409,7 @@ mod tests {
             .unwrap();
         (temp, engine, meeting.id, wav_path)
     }
-    fn output() -> Vec<u8> {
+    pub(crate) fn output() -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({"model":"OpenMOSS-Team/MOSS-Transcribe-Diarize","segments":[{"start":0.0,"end":1.0,"text":"[S1] 원문","speaker_id":"S1"}],"hitTokenLimit":false,"hasUnparsedText":false,"processedAudioFrames":16000,"inputAudioFrames":16000,"audioDurationSeconds":1.0})).unwrap()
     }
     #[test]

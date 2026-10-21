@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" class="recorder-document" data-appearance-storage="nero.appearance.v1">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Grove 녹음</title>
+    <title>Nero 녹음</title>
+    <script src="/shared/appearance.js"></script>
     <link rel="stylesheet" href="/shared/appearance.css">
     <link rel="stylesheet" href="/shared/typography.css">
     <link rel="stylesheet" href="/shared/components.css">
@@ -15,7 +16,8 @@
   <body class="recorder-page desktop-preview desktop-stage">
     <main class="recorder desktop-recorder" aria-label="녹음 제어">
       <div class="desktop-overlay-row">
-        <button id="open-meeting" class="desktop-overlay-grip desktop-button" type="button" title="회의 열기"><span id="recorder-status" class="desktop-overlay-state" role="status"><span class="desktop-state-dot" aria-hidden="true"></span></span><span id="recorder-time" class="desktop-timer">녹음 대기</span></button>
+        <div id="recorder-drag" class="desktop-overlay-grip recorder-drag" title="녹음 제어창 이동" aria-label="녹음 제어창 이동"><svg viewBox="0 0 16 24" aria-hidden="true"><path d="M5 7h.01M11 7h.01M5 12h.01M11 12h.01M5 17h.01M11 17h.01"/></svg></div>
+        <button id="open-meeting" class="recorder-open desktop-button" type="button" title="회의 열기"><span id="recorder-status" class="desktop-overlay-state" role="status"><span class="desktop-state-dot" aria-hidden="true"></span></span><span id="recorder-time" class="desktop-timer">녹음 대기</span></button>
         <div class="desktop-overlay-controls"><div id="recorder-controls" class="desktop-overlay-primary"></div><button id="hide-recorder" class="desktop-button" type="button" title="녹음 제어창 숨기기" aria-label="녹음 제어창 숨기기"></button></div>
       </div>
       <p id="recorder-error" class="sr-only" role="alert"></p>

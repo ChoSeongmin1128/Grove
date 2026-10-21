@@ -1,7 +1,7 @@
 import { invoke, convertFileSrc, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-const unavailable = 'Grove 앱에서 열어 주세요.';
+const unavailable = 'Nero 앱에서 열어 주세요.';
 let latestSnapshot = null;
 
 function call(command, args = {}) {
@@ -19,17 +19,20 @@ function accept(snapshot) {
 export const readSnapshot = () => call('read_snapshot').then(accept);
 export const createMeeting = (title, notes = '') => call('create_meeting', { title, notes });
 export const updateMeeting = (id, title, notes) => call('update_meeting', { id, title, notes });
+export const setMeetingDate = (id, meetingDate) => call('set_meeting_date', { id, meetingDate });
 export const listDevices = () => call('list_devices');
 export const startRecording = (meetingId, deviceId = null) => call('start_recording', { meetingId, deviceId }).then(accept);
 export const pauseRecording = (sessionId) => call('pause_recording', { sessionId }).then(accept);
 export const resumeRecording = (sessionId) => call('resume_recording', { sessionId }).then(accept);
 export const stopRecording = (sessionId) => call('stop_recording', { sessionId }).then(accept);
-export const showRecorder = () => call('show_recorder');
+export const setAutoRecorder = (enabled) => call('set_auto_recorder', { enabled });
+export const dragRecorder = () => call('drag_recorder');
 export const hideRecorder = () => call('hide_recorder');
 export const hideMain = () => call('hide_main');
 export const openMeeting = (meetingId, error = null) => call('open_meeting', { meetingId, error });
 export const requestQuit = (sessionId = null) => call('request_quit', { sessionId });
 export const audioUrl = async (meetingId) => convertFileSrc(await call('audio_file', { meetingId }));
+export const exportText = (suggestedName, contents) => call('export_text', { suggestedName, contents });
 
 export async function subscribeSnapshots(callback) {
   if (!isTauri()) return () => {};
@@ -57,6 +60,7 @@ export async function subscribeCloseRequest(callback) {
 
 export const processingStatus = () => call('processing_status');
 export const prepareModel = () => call('prepare_model');
+export const prepareMeetingModels = (includeSummary = false) => call('prepare_meeting_models', { includeSummary });
 export const importAudio = () => call('import_audio');
 export const transcribeAudio = (meetingId) => call('transcribe_audio', { meetingId });
 export const cancelProcessing = (jobId) => call('cancel_processing', { jobId });
@@ -65,4 +69,13 @@ export const saveTranscript = (meetingId, expected, texts) => call('save_transcr
 export async function subscribeProcessing(callback) {
   if (!isTauri()) return () => {};
   return listen('grove://processing', (event) => callback(event.payload));
+}
+
+export const prepareSummaryModel = () => call('prepare_summary_model');
+export const summarizeMeeting = (meetingId) => call('summarize_meeting', { meetingId });
+export const readSummary = (meetingId) => call('read_summary', { meetingId });
+
+export async function subscribeProcessingError(callback) {
+  if (!isTauri()) return () => {};
+  return listen('grove://processing-error', event => callback(event.payload));
 }

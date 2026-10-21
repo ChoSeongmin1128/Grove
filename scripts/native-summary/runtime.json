@@ -1,0 +1,30 @@
+{
+  "version": "b11734",
+  "commit": "f3fb2fcdb",
+  "repository": "ggml-org/llama.cpp",
+  "assets": {
+    "macos-arm64": [
+      {
+        "backend": "gpu",
+        "name": "llama-b11734-bin-macos-arm64.tar.gz",
+        "bytes": 12292927,
+        "sha256": "c823aad1d1c40728e8f1565663078fa2b3b7fd06bf484fa43e9e48b8b1b2509c"
+      }
+    ],
+    "windows-x64": [
+      {
+        "backend": "gpu",
+        "name": "llama-b11734-bin-win-vulkan-x64.zip",
+        "bytes": 32317401,
+        "sha256": "b6e3f7aec77d0634f094bf0468b723509d440e17b0b2f25880b011b791e5d831"
+      },
+      {
+        "backend": "cpu",
+        "name": "llama-b11734-bin-win-cpu-x64.zip",
+        "bytes": 19667015,
+        "sha256": "bd6a8a8cb9d6ba115de3519d401f91dd5295b333243db44b6b8a3ce5e53ff8da"
+      }
+    ]
+  },
+  "minimum_macos": "13.3"
+}

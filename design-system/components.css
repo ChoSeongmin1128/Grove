@@ -115,6 +115,68 @@ textarea {
   line-height: var(--leading-reading);
 }
 
+.text-input {
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-control);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+textarea.text-input {
+  padding: 12px;
+  background: var(--surface-secondary);
+  line-height: var(--leading-reading);
+}
+
+.text-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.text-input--compact {
+  min-height: 34px;
+  padding: 6px 9px;
+}
+
+.text-input--title {
+  padding: 4px 8px;
+  border-color: transparent;
+  border-bottom-color: var(--border-control);
+  border-radius: 4px;
+  background: transparent;
+  font-size: var(--text-title-size);
+  font-weight: var(--weight-heading);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-title);
+}
+
+.text-input:hover:not(:disabled):not([readonly]):not(:focus) {
+  border-color: var(--text-secondary);
+}
+
+.text-input:focus {
+  border-color: var(--focus);
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.text-input--title:focus {
+  background: var(--surface);
+}
+
+.text-input:disabled {
+  border-color: var(--border-control);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+@media (max-width: 540px) {
+  .text-input--title { font-size: var(--text-heading-size); }
+}
+
 input[type="checkbox"] {
   accent-color: var(--accent);
   width: 17px;

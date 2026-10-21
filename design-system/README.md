@@ -1,6 +1,6 @@
-# Grove 디자인 시스템
+# Nero 디자인 시스템
 
-재작성 UI의 공통 글자 규칙, 컨트롤, 반복 뷰와 브라우저 예제를 관리한다. 이 디렉터리가 정본이며 legacy Swift 앱과 사용자 라이브러리는 사용하지 않는다. 새 Tauri 앱은 이 공통 소스를 빌드에 연결한다. 브라우저 예제는 네이티브 기능 검증을 대신하지 않는다.
+재작성 UI의 공통 글자 규칙, 컨트롤, 반복 뷰와 브라우저 예제를 관리한다. 이 디렉터리가 정본이며 legacy Swift 앱과 사용자 라이브러리는 사용하지 않는다. Tauri 앱은 `apps/desktop/scripts/prepare-shared.mjs`로 공통 소스를 `.generated/shared`에 복사해 빌드한다. 생성본은 수정하지 않는다. 브라우저 예제는 네이티브 기능 검증을 대신하지 않는다.
 
 ## 책임
 
@@ -11,7 +11,8 @@
 | `components.css` | 버튼, 입력, 필드, 배지, 선택, 오류, 모달, 설정 선택의 기본 스타일 |
 | `components.js` | 버튼/상태/회의 행/사람 행/참석자 항목/전사 발언/회의록 읽기/모달 내용 생성 |
 | `controls.css`, `controls.js` | 선택 메뉴와 날짜/시간의 열기/닫기/선택/초점/키보드 동작 |
-| `style.css`, `prototype/` | 제품 화면 배치, 기능별 구성과 상태/이벤트/보존 정책 |
+| `style.css`, `prototype/` | 브라우저 제품 예제의 배치와 기능 상태 |
+| `../apps/desktop/src/style.css` | 네이티브 앱 배치와 기능별 크기. 입력 테두리/배경/안쪽 여백은 공통 스타일 사용 |
 | `desktop-preview-*`, `windows-preview/` | 각 플랫폼의 창/알림/녹음 표시와 공통 상태 연결 |
 | `catalog/` | 같은 공통 컴포넌트의 역할/상태/상호작용 예제와 생성 토큰 |
 | `checks/` | 공통 뷰와 소비처, 토큰, Windows 연결의 회귀 검사 |
@@ -43,6 +44,8 @@ UI 글꼴은 OS의 `system-ui`와 한글 대체 글꼴을 같은 계약으로 �
 
 카탈로그와 제품은 `meetingRow/personRow/personOption/utterance/minutes/dialogContent`를 함께 사용한다. 기능별 시간/수정/참석자 선택의 기존 `data-action/data-field/id`를 유지한다. 선택 메뉴와 달력도 같은 `GroveControls`를 사용한다.
 
+일반 입력은 `.text-input`, 검색은 `.text-input--compact`, 제목은 `.text-input--title`을 사용한다. 기본/호버/포커스/읽기 전용/비활성 경계와 안쪽 여백은 `components.css`가 소유한다. `.editor`처럼 외부 프레임이 입력 영역을 소유하는 문서 편집 변형에는 중복 적용하지 않는다.
+
 스타일을 바꿀 때는 소유 파일을 수정한다. 카탈로그에만 별도 제품 스타일을 덧붙이지 않는다. 간격/반경/높이의 모든 숫자를 하나의 scale로 만들지 않으며, 공통 컴포넌트의 반복 기준과 각 플랫폼 구조의 차이를 구분한다.
 
 ## 사용과 검사
@@ -61,7 +64,7 @@ python3 -m http.server 8792 --bind 127.0.0.1 --directory .work/design-system-pre
 
 `/catalog/`, `/prototype/`, `/windows-preview/`에서 검토한다. 소스 변경 후 생성 토큰을 검토하고 다시 만든다. `tokens.json`을 직접 편집하지 않는다. 생성기는 원본 아래 출력, 심볼릭 링크, 소유 표식 없는 기존 출력과 무관한 파일이 있는 출력을 거부한다.
 
-저장은 `grove-design-system-v1-*` 전용 namespace다. 원래 v3 시안의 데이터를 자동으로 가져오지 않는다. 카탈로그는 페이지 메모리, Windows는 분리된 시연 세션을 사용한다. 실제 마이크/외부 계정/OS 알림은 사용하지 않는다.
+브라우저 예제 저장은 `grove-design-system-v1-*` 전용 namespace다. 실제 앱은 `nero.appearance.v1`의 독립 색상/밝기를 같은 `appearance.js`로 초기 적용하며 메인/작은 창이 공유한다. 원래 v3 시안의 데이터를 자동으로 가져오지 않는다. 카탈로그는 페이지 메모리, Windows는 분리된 시연 세션을 사용한다. 실제 마이크/외부 계정/OS 알림은 사용하지 않는다.
 
 ## 제품 범위
 
@@ -69,6 +72,6 @@ python3 -m http.server 8792 --bind 127.0.0.1 --directory .work/design-system-pre
 
 ## 검증 경계
 
-코드 검사는 공통 소유권, 이벤트 속성/문자열 처리, 토큰 참조/변경 일치, 테마와 Windows 명령의 출처/녹음 소유 ID를 확인한다. 브라우저의 입력/포커스/선택/읽기 밀도와 열린 메뉴/달력 검사는 별도다.
+코드 검사는 네이티브 앱의 공유 CSS 패키징/로딩과 제목/메모 입력의 외형 덮어쓰기 방지, 공통 소유권, 이벤트 속성/문자열 처리, 토큰 참조/변경 일치, 테마와 Windows 명령의 출처/녹음 소유 ID를 확인한다. 브라우저의 입력/포커스/선택/읽기 밀도와 열린 메뉴/달력 검사는 별도다.
 
-실제 Windows 글꼴 선택, 125/150/200% 디스플레이 배율, 고대비/Narrator와 macOS VoiceOver/OS 권한/패널/다중 모니터는 아직 네이티브 검증되지 않았다. 웹의 계산된 `font-family` 문자열은 각 글자에 실제 선택된 폰트의 증거가 아니다. 로고, 설정의 최종 항목과 모델은 미확정이다. 새 앱의 첫 native slice는 Tauri/Rust로 구현 중이다.
+실제 Windows 글꼴 선택, 125/150/200% 디스플레이 배율, 고대비/Narrator와 macOS VoiceOver/OS 권한/패널/다중 모니터는 아직 네이티브 검증되지 않았다. 웹의 계산된 `font-family` 문자열은 각 글자에 실제 선택된 폰트의 증거가 아니다. Nero 로고와 초기 설정은 앱에 반영되어 있다. 브라우저 시안에는 후속 기능 예제가 포함되어 있으므로 현재 앱의 기능 범위는 `../apps/desktop/README.md`를 따른다.

@@ -37,6 +37,14 @@ impl Engine {
             .values()
             .map(|stored| stored.meeting.clone())
             .collect();
+        if let Some(capture) = &self.capture {
+            if let Some(meeting) = meetings
+                .iter_mut()
+                .find(|meeting| meeting.id == capture.manifest.meeting_id)
+            {
+                meeting.warning = capture.signals.warning();
+            }
+        }
         meetings.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
@@ -49,6 +57,19 @@ impl Engine {
         if self.quitting {
             return Err(CoreError::Unavailable);
         }
+        let title = if title == "새 회의" {
+            let titles: std::collections::BTreeSet<_> = self
+                .meetings
+                .values()
+                .map(|stored| stored.meeting.title.as_str())
+                .collect();
+            std::iter::once(title.clone())
+                .chain((1..).map(|index: u64| format!("새 회의 ({index})")))
+                .find(|candidate| !titles.contains(candidate.as_str()))
+                .unwrap()
+        } else {
+            title
+        };
         let stored = self.store.create(title, notes)?;
         let meeting = stored.meeting.clone();
         self.meetings.insert(meeting.id.clone(), stored);
@@ -68,6 +89,30 @@ impl Engine {
             .clone();
         stored.meeting.title = title;
         stored.meeting.notes = notes;
+        stored.meeting.updated_at = store::now();
+        self.store.save(&stored)?;
+        let meeting = stored.meeting.clone();
+        self.meetings.insert(id.into(), stored);
+        Ok(meeting)
+    }
+
+    pub fn set_meeting_date(&mut self, id: &str, meeting_date: Option<String>) -> Result<Meeting> {
+        if self.quitting {
+            return Err(CoreError::Unavailable);
+        }
+        store::validate_id(id)?;
+        if let Some(date) = &meeting_date {
+            store::validate_meeting_date(date)?;
+        }
+        let mut stored = self
+            .meetings
+            .get(id)
+            .ok_or(CoreError::MeetingNotFound)?
+            .clone();
+        if stored.meeting.meeting_date == meeting_date {
+            return Ok(stored.meeting);
+        }
+        stored.meeting.meeting_date = meeting_date;
         stored.meeting.updated_at = store::now();
         self.store.save(&stored)?;
         let meeting = stored.meeting.clone();
@@ -126,7 +171,27 @@ impl Engine {
             return Err(CoreError::Audio(error));
         }
         self.activate(capture)?;
+        self.play_capture()?;
         Ok(self.snapshot())
+    }
+
+    fn play_capture(&mut self) -> Result<()> {
+        let result = self
+            .capture
+            .as_ref()
+            .ok_or(CoreError::Unavailable)?
+            .play()
+            .and_then(|_| {
+                self.capture
+                    .as_ref()
+                    .and_then(|capture| capture.signals.error())
+                    .map_or(Ok(()), |error| Err(CoreError::Audio(error)))
+            });
+        if let Err(error) = result {
+            let _ = self.finish(CapturePhase::Interrupted, Some(error.to_string()));
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn activate(&mut self, mut capture: Capture) -> Result<()> {
@@ -137,8 +202,10 @@ impl Engine {
             .ok_or(CoreError::MeetingNotFound)?
             .clone();
         stored.capture_id = Some(capture.manifest.session_id.clone());
+        stored.meeting.recorded_at = Some(capture.manifest.started_at);
         stored.meeting.status = MeetingStatus::Recording;
         stored.meeting.error = None;
+        stored.meeting.warning = capture.signals.warning();
         stored.meeting.updated_at = store::now();
         self.store.save(&stored)?;
         capture.begin();
@@ -202,6 +269,10 @@ impl Engine {
             .ok_or(CoreError::MeetingNotFound)?
             .clone();
         stored.meeting.status = status;
+        stored.meeting.warning = self
+            .capture
+            .as_ref()
+            .and_then(|capture| capture.signals.warning());
         stored.meeting.updated_at = store::now();
         self.store.save(&stored)?;
         self.meetings.insert(id.into(), stored);
@@ -216,7 +287,7 @@ impl Engine {
 
     fn finish(&mut self, phase: CapturePhase, error: Option<String>) -> Result<()> {
         let capture = self.capture.take().ok_or(CoreError::StaleSession)?;
-        let previous = session_snapshot(&capture.manifest, capture.frames());
+        let previous = capture_snapshot(&capture);
         let outcome = match capture.finish(phase, error) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -227,6 +298,7 @@ impl Engine {
                 if let Some(stored) = self.meetings.get_mut(&last.meeting_id) {
                     stored.meeting.status = MeetingStatus::Interrupted;
                     stored.meeting.error = Some(message);
+                    stored.meeting.warning = last.warning.clone();
                     stored.meeting.updated_at = store::now();
                     let _ = self.store.save(stored);
                 }
@@ -246,6 +318,7 @@ impl Engine {
         };
         stored.meeting.audio = outcome.audio;
         stored.meeting.error = outcome.manifest.error.clone();
+        stored.meeting.warning = outcome.manifest.warning.clone();
         stored.meeting.updated_at = store::now();
         let mut last = session_snapshot(&outcome.manifest, outcome.manifest.saved_frames);
         let saved = self.store.save(&stored);
@@ -280,7 +353,7 @@ impl Engine {
             session: self
                 .capture
                 .as_ref()
-                .map(|capture| session_snapshot(&capture.manifest, capture.frames()))
+                .map(capture_snapshot)
                 .or_else(|| self.last_session.clone()),
         }
     }
@@ -332,6 +405,12 @@ impl Drop for Engine {
     }
 }
 
+fn capture_snapshot(capture: &Capture) -> SessionSnapshot {
+    let mut snapshot = session_snapshot(&capture.manifest, capture.frames());
+    snapshot.warning = capture.signals.warning();
+    snapshot
+}
+
 fn session_snapshot(manifest: &Manifest, frames: u64) -> SessionSnapshot {
     SessionSnapshot {
         id: manifest.session_id.clone(),
@@ -349,6 +428,7 @@ fn session_snapshot(manifest: &Manifest, frames: u64) -> SessionSnapshot {
         sample_rate: manifest.sample_rate,
         channels: manifest.channels,
         error: manifest.error.clone(),
+        warning: manifest.warning.clone(),
     }
 }
 
@@ -400,6 +480,426 @@ mod tests {
         drop(clone);
         let reopened = CoreHandle::open(&root).unwrap();
         assert_eq!(reopened.list_meetings().unwrap(), vec![changed]);
+    }
+
+    #[test]
+    fn quality_warning_is_live_and_survives_stop_and_reopen() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine.create_meeting("회의".into(), "메모".into()).unwrap();
+        let (session_id, mut sink) = synthetic(&mut engine, &meeting.id);
+        engine
+            .capture
+            .as_ref()
+            .unwrap()
+            .signals
+            .device_event(cpal::ErrorKind::Xrun.into());
+        engine.poll_capture();
+        assert!(engine.capture.is_some());
+        let snapshot = engine.snapshot();
+        let warning = snapshot.session.as_ref().unwrap().warning.clone();
+        assert!(warning.is_some());
+        assert_eq!(snapshot.session.unwrap().state, SessionState::Recording);
+        assert_eq!(snapshot.meetings[0].warning, warning);
+        sink.write(&[0.25_f32.to_le_bytes(); 10].concat());
+        engine.pause(&session_id).unwrap();
+        let saved: StoredMeeting = serde_json::from_slice(
+            &fs::read(
+                engine
+                    .store
+                    .root
+                    .join("meetings")
+                    .join(&meeting.id)
+                    .join("meeting.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved.meeting.warning, warning);
+        engine.resume(&session_id).unwrap();
+        sink.write(&[0.5_f32.to_le_bytes(); 10].concat());
+        let snapshot = engine.stop(&session_id).unwrap();
+        assert_eq!(
+            snapshot.session.as_ref().unwrap().state,
+            SessionState::Completed
+        );
+        assert_eq!(snapshot.session.unwrap().warning, warning);
+        let finished = &snapshot.meetings[0];
+        assert_eq!(finished.status, MeetingStatus::Completed);
+        assert!(finished.error.is_none());
+        assert_eq!(finished.warning, warning);
+        assert_eq!(finished.audio.as_ref().unwrap().frames, 20);
+        let root = engine.store.root.clone();
+        drop(sink);
+        drop(engine);
+        let reopened = Engine::open(root).unwrap();
+        assert_eq!(reopened.meetings[&meeting.id].meeting, *finished);
+    }
+
+    #[test]
+    fn play_failure_preserves_the_saved_session_notes_and_first_callback() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine
+            .create_meeting("회의".into(), "원래 메모".into())
+            .unwrap();
+        engine
+            .set_meeting_date(&meeting.id, Some("2026-10-20".into()))
+            .unwrap();
+        let (session_id, mut sink) = synthetic(&mut engine, &meeting.id);
+        let path = engine
+            .store
+            .root
+            .join("meetings")
+            .join(&meeting.id)
+            .join("meeting.json");
+        let saved: StoredMeeting = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.capture_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(saved.meeting.status, MeetingStatus::Recording);
+        let first_callback = [0.25_f32.to_le_bytes(); 10].concat();
+        sink.write(&first_callback);
+        engine.capture.as_ref().unwrap().flush().unwrap();
+        let session_path = engine
+            .store
+            .root
+            .join(engine.capture.as_ref().unwrap().manifest.relative_dir());
+        assert!(matches!(engine.play_capture(), Err(CoreError::Audio(_))));
+        assert!(engine.capture.is_none());
+        assert_eq!(
+            fs::read(session_path.join("audio.pcm")).unwrap(),
+            first_callback
+        );
+        let saved: StoredMeeting = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.capture_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(saved.meeting.notes, "원래 메모");
+        assert_eq!(saved.meeting.meeting_date.as_deref(), Some("2026-10-20"));
+        assert_eq!(saved.meeting.status, MeetingStatus::Interrupted);
+        assert!(saved.meeting.error.is_some());
+        assert_eq!(saved.meeting.audio.as_ref().unwrap().frames, 10);
+        let manifest: Manifest =
+            serde_json::from_slice(&fs::read(session_path.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest.phase, CapturePhase::Interrupted);
+        assert!(manifest.error.is_some());
+        let root = engine.store.root.clone();
+        drop(sink);
+        drop(engine);
+        let reopened = Engine::open(root).unwrap();
+        assert_eq!(reopened.meetings[&meeting.id].meeting, saved.meeting);
+    }
+
+    #[test]
+    fn recovery_keeps_checkpoint_quality_and_reconciles_completed_meeting_warning() {
+        let (_temporary, mut engine) = engine();
+        let quality = store::CaptureQuality {
+            xrun_count: 2,
+            realtime_denied_count: 0,
+            route_changed_count: 1,
+        };
+        let warning = quality.warning();
+        let mut session_paths = Vec::new();
+        let mut ids = Vec::new();
+        for phase in [CapturePhase::Recording, CapturePhase::Completed] {
+            let meeting = engine.create_meeting("회의".into(), "메모".into()).unwrap();
+            let mut manifest = Manifest::new(
+                &meeting.id,
+                "synthetic",
+                "시험 입력",
+                1000,
+                1,
+                Encoding::F32,
+            );
+            let mut raw = engine.store.prepare_capture(&manifest).unwrap();
+            raw.write_all(&[0.25_f32.to_le_bytes(); 10].concat())
+                .unwrap();
+            raw.sync_all().unwrap();
+            drop(raw);
+            manifest.phase = phase;
+            manifest.quality = Some(quality.clone());
+            manifest.warning = warning.clone();
+            let audio = if phase == CapturePhase::Completed {
+                store::finalize_audio(&engine.store.root, &mut manifest).unwrap()
+            } else {
+                store::write_manifest(&engine.store.root, &manifest).unwrap();
+                None
+            };
+            let stored = engine.meetings.get_mut(&meeting.id).unwrap();
+            stored.capture_id = Some(manifest.session_id.clone());
+            stored.meeting.status = if phase == CapturePhase::Completed {
+                MeetingStatus::Completed
+            } else {
+                MeetingStatus::Recording
+            };
+            stored.meeting.audio = audio;
+            engine.store.save(stored).unwrap();
+            session_paths.push(engine.store.root.join(manifest.relative_dir()));
+            ids.push(meeting.id);
+        }
+        let root = engine.store.root.clone();
+        drop(engine);
+        let reopened = Engine::open(root.clone()).unwrap();
+        for (index, id) in ids.iter().enumerate() {
+            let meeting = &reopened.meetings[id].meeting;
+            assert_eq!(meeting.warning, warning);
+            assert_eq!(
+                meeting.status,
+                if index == 0 {
+                    MeetingStatus::Interrupted
+                } else {
+                    MeetingStatus::Completed
+                }
+            );
+            assert_eq!(meeting.audio.as_ref().unwrap().frames, 10);
+            let manifest: Manifest = serde_json::from_slice(
+                &fs::read(session_paths[index].join("manifest.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest.quality.as_ref(), Some(&quality));
+            assert_eq!(manifest.warning, warning);
+        }
+        drop(reopened);
+        let reopened = Engine::open(root).unwrap();
+        for id in ids {
+            assert_eq!(reopened.meetings[&id].meeting.warning, warning);
+        }
+    }
+
+    #[test]
+    fn old_meeting_json_opens_without_inventing_recording_or_meeting_dates() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine
+            .create_meeting("기존 회의".into(), "메모".into())
+            .unwrap();
+        let path = engine
+            .store
+            .root
+            .join("meetings")
+            .join(&meeting.id)
+            .join("meeting.json");
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        stored["meeting"]
+            .as_object_mut()
+            .unwrap()
+            .remove("meetingDate");
+        stored["meeting"]
+            .as_object_mut()
+            .unwrap()
+            .remove("recordedAt");
+        let original = serde_json::to_vec(&stored).unwrap();
+        fs::write(&path, &original).unwrap();
+        let root = engine.store.root.clone();
+        drop(engine);
+        let restored = Engine::open(root).unwrap();
+        let restored = &restored.meetings[&meeting.id].meeting;
+        assert_eq!(restored, &meeting);
+        assert_eq!(restored.meeting_date, None);
+        assert_eq!(restored.recorded_at, None);
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn meeting_date_persists_and_clears_without_changing_recording_origin() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine.create_meeting("회의".into(), "메모".into()).unwrap();
+        engine
+            .set_meeting_date(&meeting.id, Some("2024-02-29".into()))
+            .unwrap();
+        let mut manifest = Manifest::new(
+            &meeting.id,
+            "synthetic",
+            "시험 입력",
+            1000,
+            1,
+            Encoding::F32,
+        );
+        manifest.started_at = 1_700_000_000_123;
+        let raw = engine.store.prepare_capture(&manifest).unwrap();
+        let (capture, mut sink) =
+            Capture::prepare(&engine.store.root, manifest.clone(), raw).unwrap();
+        engine.activate(capture).unwrap();
+        sink.write(&[0.25_f32.to_le_bytes(); 10].concat());
+        engine.stop(&manifest.session_id).unwrap();
+        let updated = engine
+            .update_meeting(&meeting.id, "수정한 제목".into(), "수정한 메모".into())
+            .unwrap();
+        assert_eq!(updated.created_at, meeting.created_at);
+        assert_eq!(updated.recorded_at, Some(manifest.started_at));
+        assert_eq!(updated.meeting_date.as_deref(), Some("2024-02-29"));
+        let root = engine.store.root.clone();
+        drop(sink);
+        drop(engine);
+        let handle = CoreHandle::open(&root).unwrap();
+        assert_eq!(handle.list_meetings().unwrap(), vec![updated]);
+        let cleared = handle.set_meeting_date(&meeting.id, None).unwrap();
+        assert_eq!(cleared.meeting_date, None);
+        assert_eq!(cleared.recorded_at, Some(manifest.started_at));
+        assert_eq!(cleared.created_at, meeting.created_at);
+        drop(handle);
+        assert_eq!(
+            CoreHandle::open(root).unwrap().list_meetings().unwrap(),
+            vec![cleared]
+        );
+    }
+
+    #[test]
+    fn invalid_meeting_dates_leave_saved_metadata_unchanged() {
+        let (_temporary, mut engine) = engine();
+        let meeting = engine.create_meeting("회의".into(), "메모".into()).unwrap();
+        let path = engine
+            .store
+            .root
+            .join("meetings")
+            .join(&meeting.id)
+            .join("meeting.json");
+        let before = fs::read(&path).unwrap();
+        for date in [
+            "",
+            "2026-1-01",
+            "2026-01-1",
+            "0000-01-01",
+            "10000-01-01",
+            "2026-00-01",
+            "2026-13-01",
+            "2026-01-00",
+            "2026-04-31",
+            "2026-02-29",
+            "1900-02-29",
+            "2024-02-30",
+            "2026/01/01",
+            "２０２６-01-01",
+            "2026-01-01 ",
+        ] {
+            assert!(
+                matches!(
+                    engine.set_meeting_date(&meeting.id, Some(date.into())),
+                    Err(CoreError::InvalidInput(_))
+                ),
+                "{date}"
+            );
+            assert_eq!(engine.meetings[&meeting.id].meeting, meeting);
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+        for date in ["0001-01-01", "2000-02-29", "2024-02-29", "9999-12-31"] {
+            assert!(
+                engine
+                    .set_meeting_date(&meeting.id, Some(date.into()))
+                    .is_ok(),
+                "{date}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_uses_microphone_manifest_date_but_keeps_import_origin_unknown() {
+        let (_temporary, mut engine) = engine();
+        let mut microphone = None;
+        let mut imported = None;
+        for device in ["synthetic", "import"] {
+            let meeting = engine
+                .create_meeting("기존 녹음".into(), "메모".into())
+                .unwrap();
+            let mut manifest =
+                Manifest::new(&meeting.id, device, "시험 입력", 1000, 1, Encoding::F32);
+            manifest.started_at = 1_600_000_000_123;
+            let mut raw = engine.store.prepare_capture(&manifest).unwrap();
+            raw.write_all(&[0.125_f32.to_le_bytes(); 10].concat())
+                .unwrap();
+            raw.sync_all().unwrap();
+            drop(raw);
+            manifest.phase = CapturePhase::Completed;
+            let audio = store::finalize_audio(&engine.store.root, &mut manifest).unwrap();
+            let stored = engine.meetings.get_mut(&meeting.id).unwrap();
+            stored.capture_id = Some(manifest.session_id.clone());
+            stored.meeting.status = MeetingStatus::Completed;
+            stored.meeting.audio = audio;
+            engine.store.save(stored).unwrap();
+            if device == "import" {
+                imported = Some(meeting);
+            } else {
+                microphone = Some(meeting);
+            }
+        }
+        let root = engine.store.root.clone();
+        drop(engine);
+        let restored = Engine::open(root.clone()).unwrap();
+        let microphone = microphone.unwrap();
+        let imported = imported.unwrap();
+        let recorded = &restored.meetings[&microphone.id].meeting;
+        assert_eq!(recorded.recorded_at, Some(1_600_000_000_123));
+        assert_eq!(recorded.created_at, microphone.created_at);
+        assert_eq!(recorded.updated_at, microphone.updated_at);
+        let unknown = &restored.meetings[&imported.id].meeting;
+        assert_eq!(unknown.recorded_at, None);
+        assert_eq!(unknown.created_at, imported.created_at);
+        drop(restored);
+        let reopened = Engine::open(root).unwrap();
+        assert_eq!(
+            reopened.meetings[&microphone.id].meeting.recorded_at,
+            Some(1_600_000_000_123)
+        );
+        assert_eq!(reopened.meetings[&imported.id].meeting.recorded_at, None);
+    }
+
+    #[test]
+    fn default_titles_fill_available_suffixes_and_survive_reopen() {
+        let (_temporary, mut engine) = engine();
+        let first = engine.create_meeting("새 회의".into(), "".into()).unwrap();
+        let second = engine.create_meeting("새 회의".into(), "".into()).unwrap();
+        let third = engine.create_meeting("새 회의".into(), "".into()).unwrap();
+        assert_eq!(first.title, "새 회의");
+        assert_eq!(second.title, "새 회의 (1)");
+        assert_eq!(third.title, "새 회의 (2)");
+        engine
+            .update_meeting(&second.id, "주간 회의".into(), "".into())
+            .unwrap();
+        assert_eq!(
+            engine
+                .create_meeting("새 회의".into(), "".into())
+                .unwrap()
+                .title,
+            "새 회의 (1)"
+        );
+        let custom = engine
+            .create_meeting("주간 회의".into(), "".into())
+            .unwrap();
+        assert_eq!(custom.title, "주간 회의");
+        let root = engine.store.root.clone();
+        drop(engine);
+        let mut restored = Engine::open(root).unwrap();
+        assert_eq!(
+            restored
+                .create_meeting("새 회의".into(), "".into())
+                .unwrap()
+                .title,
+            "새 회의 (3)"
+        );
+        assert_eq!(
+            restored
+                .create_meeting("새 회의 (2)".into(), "".into())
+                .unwrap()
+                .title,
+            "새 회의 (2)"
+        );
+    }
+
+    #[test]
+    fn concurrent_default_meeting_creation_reserves_titles_in_core() {
+        let temporary = tempfile::tempdir().unwrap();
+        let handle =
+            CoreHandle::open(temporary.path().canonicalize().unwrap().join("dev")).unwrap();
+        let callers: Vec<_> = (0..8)
+            .map(|_| {
+                let handle = handle.clone();
+                std::thread::spawn(move || handle.create_meeting("새 회의", "").unwrap().title)
+            })
+            .collect();
+        let titles: std::collections::BTreeSet<_> = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect();
+        assert_eq!(titles.len(), 8);
+        assert!(titles.contains("새 회의"));
+        for index in 1..8 {
+            assert!(titles.contains(&format!("새 회의 ({index})")));
+        }
     }
 
     #[test]
