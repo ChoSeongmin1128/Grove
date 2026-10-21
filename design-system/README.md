@@ -44,6 +44,10 @@ UI 글꼴은 OS의 `system-ui`와 한글 대체 글꼴을 같은 계약으로 �
 
 카탈로그와 제품은 `meetingRow/personRow/personOption/utterance/minutes/dialogContent`를 함께 사용한다. 기능별 시간/수정/참석자 선택의 기존 `data-action/data-field/id`를 유지한다. 선택 메뉴와 달력도 같은 `GroveControls`를 사용한다.
 
+휴지통 이동과 삭제는 `.danger-text` 또는 `button.danger`를 사용한다. `--danger-text`와
+`--danger-surface`가 테마와 밝기에 맞는 위험 동작 색상을 소유하며, 일반 버튼/헤더 색상이
+덮어쓰지 않는다. 휴지통 보기로 이동하는 탐색 메뉴와 복원 동작에는 위험 색상을 적용하지 않는다.
+
 일반 입력은 `.text-input`, 검색은 `.text-input--compact`, 제목은 `.text-input--title`을 사용한다. 기본/호버/포커스/읽기 전용/비활성 경계와 안쪽 여백은 `components.css`가 소유한다. `.editor`처럼 외부 프레임이 입력 영역을 소유하는 문서 편집 변형에는 중복 적용하지 않는다.
 
 내용 탐색은 `.content-tabs`와 `tablist/tab/tabpanel`을 사용한다. 선택은 `aria-selected`,

@@ -27,6 +27,8 @@
   --warning-surface: #fff7e9;
   --recording-text: #a04430;
   --recording-surface: #fbebe5;
+  --danger-text: #a04430;
+  --danger-surface: #fbebe5;
   --ready-text: #58652f;
   --ready-surface: #edf0df;
   --avatar-one-surface: #e8eee9;
@@ -69,6 +71,8 @@
   --warning-surface: #393024;
   --recording-text: #e5a18d;
   --recording-surface: #3b2b27;
+  --danger-text: #e5a18d;
+  --danger-surface: #3b2b27;
   --ready-text: #c0ca95;
   --ready-surface: #303626;
   --avatar-one-surface: #2f3e33;

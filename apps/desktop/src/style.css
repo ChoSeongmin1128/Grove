@@ -252,8 +252,9 @@ html.recorder-document { background: transparent; }
 #library-search-status { padding: 0 0 12px; }
 .detail-library-actions { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 12px; margin-bottom: 8px; }
 .detail-library-actions > .row { display: flex; flex: none; align-items: center; gap: 4px; }
-.detail-library-actions button { min-height: 28px; padding: 4px 6px; color: var(--text-secondary); font-size: var(--text-caption-size); }
-.detail-library-actions button:hover:not(:disabled) { color: var(--text); }
+.detail-library-actions button { min-height: 28px; padding: 4px 6px; font-size: var(--text-caption-size); }
+.detail-library-actions button:not(.danger):not(.danger-text) { color: var(--text-secondary); }
+.detail-library-actions button:not(.danger):not(.danger-text):hover:not(:disabled) { color: var(--text); }
 .detail-return { display: flex; flex: 1; align-items: center; min-width: 0; gap: 6px; }
 .detail-return > button { flex: none; }
 .detail-path-divider { flex: none; color: var(--text-secondary); font-size: var(--text-caption-size); }

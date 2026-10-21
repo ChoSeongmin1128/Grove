@@ -864,7 +864,8 @@ html[data-appearance-changing] button {
 .library-dialog label { display: block; margin: 18px 0 8px; }
 .library-dialog input[type="text"] { width: 100%; }
 .library-dialog .dialog-actions, .library-dialog .modal-footer, .speaker-dialog-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-.library-dialog button.danger, .danger-text { color: var(--recording-text); }
+button.danger, .danger-text { color: var(--danger-text); }
+button.danger:hover:not(:disabled), button.danger-text:hover:not(:disabled) { color: var(--danger-text); background: var(--danger-surface); }
 .speaker-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
 .speaker-name-list { display: grid; gap: 8px; max-height: 180px; overflow-y: auto; padding: 4px; margin: 4px -4px 0; }
 .speaker-name-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; }
@@ -906,7 +907,6 @@ html[data-appearance-changing] button {
 .library-folder-menu summary::-webkit-details-marker { display: none; }
 .library-folder-menu .action-menu { position: absolute; top: 100%; left: 0; z-index: 10; min-width: 135px; padding: 4px; border: 1px solid var(--border-control); border-radius: var(--radius); background: var(--surface); box-shadow: 0 8px 24px var(--shadow-modal); }
 .library-folder-menu .action-menu button { width: 100%; text-align: left; border-color: transparent; }
-.library-folder-menu .action-menu .danger { color: var(--recording-text); }
 .library-form .dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .library-folder-choices { display: grid; gap: 6px; margin-top: 16px; }
 .library-dialog .library-folder-choice { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin: 0; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
